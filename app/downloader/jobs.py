@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from pathlib import Path
@@ -8,6 +9,14 @@ from app.config import Settings
 from app.db import Database
 from app.downloader.aria2 import Aria2, Aria2Error
 from app.downloader.xunlei import Xunlei, XunleiError
+from app.scrape import (
+    ScrapeError,
+    find_code_videos,
+    has_incomplete_files,
+    list_ready_sources,
+    newest_mtime,
+    scrape_job,
+)
 from app.textutil import format_size
 from app.trackers import magnet_for
 
@@ -15,6 +24,9 @@ BackendError = (Aria2Error, XunleiError)
 
 ACTIVE = {"active", "waiting", "paused", "downloading", "queued"}
 DONE = {"complete", "error", "removed", "cancelled"}
+SCRAPE_DONE = {"archived", "skipped"}
+SCRAPE_RETRY_AFTER = 300
+WATCH_EVERY = 15
 
 
 def _new_id() -> str:
@@ -62,11 +74,22 @@ def cleanup_dir(dest: str) -> None:
 
 
 class JobManager:
-    def __init__(self, settings: Settings, db: Database, aria2: Aria2, xunlei: Xunlei | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: Database,
+        aria2: Aria2,
+        xunlei: Xunlei | None = None,
+        library=None,
+    ):
         self.settings = settings
         self.db = db
         self.aria2 = aria2
         self.xunlei = xunlei or Xunlei(settings)
+        self.library = library
+        self._last_watch = 0.0
+        self._watch_fail: dict[str, float] = {}
+        self._scrape_lock = asyncio.Lock()
 
     def _use_xunlei(self) -> bool:
         return (self.settings.downloader or "aria2").strip().lower() == "xunlei"
@@ -140,12 +163,169 @@ class JobManager:
     async def sync_all(self) -> None:
         jobs = await self.db.list_jobs()
         for job in jobs:
-            if job["status"] in ("complete", "cancelled") and job.get("cleaned"):
-                continue
             try:
-                await self.sync_one(job)
+                if job.get("status") == "cancelled":
+                    continue
+                needs_tell = not (job.get("status") == "complete" and job.get("cleaned"))
+                if needs_tell:
+                    job = await self.sync_one(job)
+                scrape_st = job.get("scrape_status") or ""
+                if (
+                    job.get("status") == "complete"
+                    and job.get("cleaned")
+                    and scrape_st not in SCRAPE_DONE
+                ):
+                    await self.maybe_scrape(job)
             except Exception:
                 continue
+        now = time.time()
+        if now - self._last_watch >= WATCH_EVERY:
+            self._last_watch = now
+            try:
+                await self.watch_downloads()
+            except Exception:
+                pass
+
+    async def _mark_waiting(self, job: dict) -> dict:
+        if job.get("scrape_status") != "waiting":
+            await self.db.update_job(job["id"], scrape_status="waiting", scrape_error=None)
+            job["scrape_status"] = "waiting"
+            job["scrape_error"] = None
+        return job
+
+    async def _mark_archived(self, job: dict, path: str) -> dict:
+        await self.db.update_job(
+            job["id"],
+            scrape_status="archived",
+            archive_path=path,
+            scrape_error=None,
+        )
+        job["scrape_status"] = "archived"
+        job["archive_path"] = path
+        job["scrape_error"] = None
+        return job
+
+    async def maybe_scrape(self, job: dict) -> dict:
+        status = job.get("scrape_status") or ""
+        if status in SCRAPE_DONE:
+            return job
+        if not self.settings.scrape_enabled:
+            if status != "skipped":
+                await self.db.update_job(job["id"], scrape_status="skipped", scrape_error=None)
+                job["scrape_status"] = "skipped"
+                job["scrape_error"] = None
+            return job
+        if status == "error":
+            updated = float(job.get("updated_at") or 0)
+            if time.time() - updated < SCRAPE_RETRY_AFTER:
+                return job
+
+        dest = Path(job.get("dest") or "")
+        settle = max(0, int(self.settings.scrape_settle_seconds))
+        min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
+        hit = None
+        if self.library:
+            hit = await self.library.get(job.get("code") or "")
+
+        try:
+            src, _videos = find_code_videos(
+                job.get("code") or "",
+                dest,
+                self.settings.download_dir,
+                min_bytes,
+            )
+        except ScrapeError:
+            if hit and hit.get("has_video"):
+                return await self._mark_archived(job, hit.get("path") or "")
+            await self.db.update_job(
+                job["id"],
+                scrape_status="error",
+                scrape_error="没有可归档的视频",
+            )
+            job["scrape_status"] = "error"
+            job["scrape_error"] = "没有可归档的视频"
+            return job
+
+        if has_incomplete_files(src):
+            return await self._mark_waiting(job)
+        mtime = newest_mtime(src)
+        if mtime and time.time() - mtime < settle:
+            return await self._mark_waiting(job)
+
+        try:
+            async with self._scrape_lock:
+                result = await scrape_job(self.settings, self.db, job)
+        except ScrapeError as e:
+            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
+            job["scrape_status"] = "error"
+            job["scrape_error"] = str(e)
+            return job
+        except Exception as e:
+            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
+            job["scrape_status"] = "error"
+            job["scrape_error"] = str(e)
+            return job
+
+        if self.library:
+            await self.library.upsert(result)
+        return await self._mark_archived(job, result["path"])
+
+    async def _busy_codes(self) -> set[str]:
+        busy: set[str] = set()
+        for job in await self.db.list_jobs():
+            code = (job.get("code") or "").strip().upper()
+            if not code:
+                continue
+            status = job.get("status")
+            if status in ("cancelled", "error"):
+                continue
+            if status != "complete":
+                busy.add(code)
+                continue
+            scrape_st = job.get("scrape_status") or ""
+            if scrape_st in ("waiting", "scraping"):
+                busy.add(code)
+        return busy
+
+    async def watch_downloads(self) -> None:
+        if not self.settings.scrape_enabled:
+            return
+        min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
+        settle = max(0, int(self.settings.scrape_settle_seconds))
+        now = time.time()
+        ready = await asyncio.to_thread(
+            list_ready_sources,
+            self.settings.download_dir,
+            min_bytes,
+            settle,
+            now,
+        )
+        if not ready:
+            return
+        busy = await self._busy_codes()
+        for code, src in ready:
+            if code in busy:
+                continue
+            key = str(src)
+            if self._watch_fail.get(key, 0) > now:
+                continue
+            try:
+                async with self._scrape_lock:
+                    result = await scrape_job(
+                        self.settings,
+                        self.db,
+                        {"code": code, "dest": str(src)},
+                    )
+            except ScrapeError:
+                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                continue
+            except Exception:
+                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                continue
+            self._watch_fail.pop(key, None)
+            if self.library:
+                await self.library.upsert(result)
+            return
 
     async def public(self, job: dict) -> dict:
         live = job.get("_live")
@@ -176,6 +356,9 @@ class JobManager:
             "connections": int(live.get("connections") or 0),
             "seeders": int(live.get("numSeeders") or 0),
             "created_at": job.get("created_at"),
+            "scrape_status": job.get("scrape_status") or "",
+            "scrape_error": job.get("scrape_error"),
+            "archive_path": job.get("archive_path") or "",
         }
 
     async def list_public(self) -> list[dict]:

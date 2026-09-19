@@ -1,6 +1,7 @@
 # Runtime
 data/
 downloads/
+media/
 *.db
 .env
 

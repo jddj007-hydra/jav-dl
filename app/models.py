@@ -48,3 +48,5 @@ class SettingsUpdate(BaseModel):
     xunlei_username: str | None = None
     xunlei_password: str | None = None
     xunlei_device_name: str | None = None
+    scrape_enabled: bool | None = None
+    media_dir: str | None = None

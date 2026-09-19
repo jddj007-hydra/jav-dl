@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=7" />
+  <link rel="stylesheet" href="/static/style.css?v=9" />
 </head>
 <body>
   <header class="top">
@@ -91,6 +91,14 @@
           </label>
           <p class="hint">面板要已登录迅雷账号，并且手动下过一次，才能识别下载目录。已在跑的任务不会换后端。</p>
         </div>
+        <label class="check">
+          <input type="checkbox" name="scrape_enabled" />
+          下载完成后刮削并归档（网页点的和迅雷目录里下完的都会刮）
+        </label>
+        <label>归档目录
+          <input name="media_dir" placeholder="./media" />
+        </label>
+        <p class="hint">监控下载目录，文件静置完成后按番号写 NFO / poster.jpg / fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
         <p class="hint" id="download-dir"></p>
         <button type="submit">保存</button>
         <p id="settings-status" class="status" hidden></p>
@@ -101,6 +109,6 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>

@@ -200,8 +200,32 @@ button:disabled { opacity: 0.5; cursor: wait; }
   text-align: left;
   color: inherit;
   cursor: pointer;
+  position: relative;
 }
 .work-card:hover { border-color: var(--accent); }
+.work-card.in-library { border-color: #3a5a34; }
+.lib-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--good);
+  color: #10210c;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+  z-index: 1;
+}
+.lib-flag {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #1c2a22;
+  color: #a6d4b4;
+  font-size: 13px;
+  font-weight: 650;
+}
 .work-card img {
   width: 100%;
   aspect-ratio: 2 / 3;
@@ -302,7 +326,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 
 .settings { display: grid; gap: 12px; max-width: 560px; }
-.settings label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.settings label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; scroll-margin-top: 72px; }
 .settings select,
 .settings input[type="text"], .settings input:not([type="checkbox"]) {
   background: var(--panel);

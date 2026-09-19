@@ -27,6 +27,8 @@ services:
       - TZ=Asia/Shanghai
       - DATA_DIR=/data
       - DOWNLOAD_DIR=/downloads
+      - MEDIA_DIR=/media
+      - SCRAPE_ENABLED=${SCRAPE_ENABLED:-true}
       - ARIA2_RPC=http://aria2:6800/jsonrpc
       - ARIA2_SECRET=${ARIA2_SECRET:-jav-dl-rpc}
       - PROXY_ENABLED=${PROXY_ENABLED:-false}
@@ -41,7 +43,9 @@ services:
     volumes:
       - jav-data:/data
       - jav-downloads:/downloads
+      - jav-media:/media
 
 volumes:
   jav-data:
   jav-downloads:
+  jav-media:

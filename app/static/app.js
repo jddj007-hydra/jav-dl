@@ -8,6 +8,7 @@ const views = {
 let lastResources = [];
 let lastWorks = [];
 let lastWorksQuery = "";
+let lastLibrary = null;
 let fromWorks = false;
 let pollTimer = null;
 
@@ -67,10 +68,22 @@ function dlRow(label, value) {
   return `<dt>${label}</dt><dd>${value}</dd>`;
 }
 
+function libraryFlag(lib) {
+  if (!lib || !lib.present) return "";
+  const path = lib.path ? ` · ${escapeHtml(lib.path)}` : "";
+  return `<p class="lib-flag">库里已有${path}</p>`;
+}
+
 function renderMeta(payload) {
   const card = $("meta-card");
   const meta = payload.metadata;
+  lastLibrary = payload.library || null;
   if (!meta) {
+    if (lastLibrary && lastLibrary.present) {
+      card.hidden = false;
+      card.innerHTML = libraryFlag(lastLibrary);
+      return;
+    }
     card.hidden = true;
     return;
   }
@@ -94,6 +107,7 @@ function renderMeta(payload) {
     <div class="meta-main">
       <img class="cover" src="${coverSrc(meta.cover)}" data-full="${escapeHtml(meta.cover || "")}" alt="" />
       <div>
+        ${libraryFlag(lastLibrary)}
         <h1><span class="code">${payload.code}</span> ${escapeHtml(meta.title || "")}</h1>
         <dl>
           ${dlRow("发售", escapeHtml(meta.release_date || ""))}
@@ -127,7 +141,8 @@ function renderWorks(items) {
   }
   wrap.hidden = false;
   list.innerHTML = items.map((it) => `
-    <button type="button" class="work-card" data-code="${escapeHtml(it.code)}">
+    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-code="${escapeHtml(it.code)}">
+      ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
       <img src="${coverSrc(it.cover)}" alt="" />
       <span class="code">${escapeHtml(it.code)}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
@@ -158,7 +173,7 @@ function renderResources(items) {
         </div>
       </div>
       <div class="res-actions">
-        <button type="button" data-dl="${it.info_hash}">下载</button>
+        <button type="button" data-dl="${it.info_hash}">${lastLibrary && lastLibrary.present ? "下载（库里已有）" : "下载"}</button>
         <button type="button" class="ghost" data-copy="${it.info_hash}">复制</button>
       </div>
     </article>`).join("");
@@ -184,6 +199,7 @@ function clearDetail() {
   $("resources-wrap").hidden = true;
   $("resource-list").innerHTML = "";
   lastResources = [];
+  lastLibrary = null;
 }
 
 function clearWorksView() {
@@ -364,6 +380,19 @@ $("resource-list").addEventListener("click", async (e) => {
   }
 });
 
+function scrapeLine(j) {
+  if (j.scrape_status === "archived" && j.archive_path) {
+    return `<p class="status good">已归档 ${escapeHtml(j.archive_path)}</p>`;
+  }
+  if (j.scrape_status === "waiting") {
+    return `<p class="status">等待刮削</p>`;
+  }
+  if (j.scrape_status === "error" && j.scrape_error) {
+    return `<p class="status bad">刮削失败：${escapeHtml(j.scrape_error)}</p>`;
+  }
+  return "";
+}
+
 function renderQueue(items) {
   const list = $("queue-list");
   const empty = $("queue-empty");
@@ -388,6 +417,7 @@ function renderQueue(items) {
         <span>${j.seeders ? j.seeders + " 种子" : ""}</span>
       </div>
       ${j.error ? `<p class="status bad">${escapeHtml(j.error)}</p>` : ""}
+      ${scrapeLine(j)}
       <div class="row-actions">
         ${j.status === "paused" ? `<button data-act="resume" data-id="${j.id}">继续</button>` : `<button class="ghost" data-act="pause" data-id="${j.id}">暂停</button>`}
         <button class="ghost" data-act="cancel" data-id="${j.id}">取消</button>
@@ -437,6 +467,8 @@ async function loadSettings() {
   form.xunlei_password.value = "";
   form.xunlei_password.placeholder = s.xunlei_password_set ? "已保存，留空不改" : "";
   form.xunlei_device_name.value = s.xunlei_device_name || "";
+  form.scrape_enabled.checked = s.scrape_enabled !== false;
+  form.media_dir.value = s.media_dir || "";
   toggleXunleiFields();
   $("download-dir").textContent = "下载目录（只读，由运行环境决定）：" + (s.download_dir || "");
   try {
@@ -473,6 +505,8 @@ $("settings-form").addEventListener("submit", async (e) => {
     xunlei_url: form.xunlei_url.value.trim(),
     xunlei_username: form.xunlei_username.value.trim(),
     xunlei_device_name: form.xunlei_device_name.value.trim(),
+    scrape_enabled: form.scrape_enabled.checked,
+    media_dir: form.media_dir.value.trim(),
   };
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;

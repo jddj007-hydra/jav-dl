@@ -15,6 +15,7 @@ from app.db import Database
 from app.downloader.aria2 import Aria2
 from app.downloader.jobs import JobManager
 from app.downloader.xunlei import Xunlei
+from app.library import Library
 from app.routers import downloads, health, images, resources, search, settings as settings_router
 
 STATIC = Path(__file__).parent / "static"
@@ -55,11 +56,14 @@ async def lifespan(app: FastAPI):
     await db.init()
     aria2 = Aria2(settings)
     xunlei = Xunlei(settings)
-    jobs = JobManager(settings, db, aria2, xunlei)
+    library = Library(settings, db)
+    await library.refresh()
+    jobs = JobManager(settings, db, aria2, xunlei, library)
     app.state.settings = settings
     app.state.db = db
     app.state.aria2 = aria2
     app.state.xunlei = xunlei
+    app.state.library = library
     app.state.jobs = jobs
 
     stop = asyncio.Event()

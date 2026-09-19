@@ -42,7 +42,7 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 ./run.sh
 ```
 
-默认下载目录是项目下的 `./downloads/{番号}/`。
+默认下载目录是项目下的 `./downloads/{番号}/`。刮削归档默认写到 `./media/YYYYMM/{番号}/`。
 
 ## 使用
 
@@ -50,6 +50,8 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 2. 番号：封面、片名、女优、预览图；关键词：先出作品列表，点一张进详情
 3. 下面是磁力猫结果，已按 **无码破解 > 无码 > 中文 > 热度 > 体积** 排好，第一行高亮但不会自动下
 4. 点下载，到「队列」看进度；合集 / 超过约 15GB 的条目会排到后面
+5. 下载完成后自动刮削：写 NFO / `poster.jpg` / `fanart.jpg`，视频改名为番号，归档到 `media/YYYYMM/番号/`
+6. 搜索番号或关键词时，库里已有的作品会标「已有」，不会禁止再下
 
 ## 它怎么工作
 
@@ -77,6 +79,8 @@ FastAPI :8787
 | `app/sources/clm.py` | 磁力猫搜索（atob 包装页、base32 id → info_hash） |
 | `app/ranking.py` | 磁链排序和 UC/U/C/合集标签 |
 | `app/downloader/jobs.py` | 任务状态机，对接 aria2 / 迅雷 |
+| `app/scrape.py` | 下载完成后写 NFO/封面，归档到 `YYYYMM/番号/` |
+| `app/library.py` | 扫描归档目录，搜索时标「库里已有」 |
 | `app/downloader/aria2.py` | aria2 JSON-RPC |
 | `app/downloader/xunlei.py` | 群晖套件迅雷面板（环境变量切换） |
 | `app/static/` | 单页：搜索、队列、设置 |
@@ -93,6 +97,8 @@ FastAPI :8787
 | `PORT` | `8787` | Web 端口（本机 `run.sh`） |
 | `DATA_DIR` | `./data` | SQLite、封面缓存、用户配置 |
 | `DOWNLOAD_DIR` | `./downloads` | 本机下载根目录 |
+| `MEDIA_DIR` | `./media` | 刮削归档根目录（`YYYYMM/番号/`） |
+| `SCRAPE_ENABLED` | `true` | 下载完成后是否刮削归档 |
 | `ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | Docker 里是 `http://aria2:6800/jsonrpc` |
 | `ARIA2_SECRET` | `jav-dl-rpc` | 与 aria2 RPC 密钥一致 |
 | `PROXY_ENABLED` | `false` | 查站代理 |
@@ -104,6 +110,8 @@ FastAPI :8787
 | `XUNLEI_DEVICE_NAME` | `群晖-xunlei` | 用来匹配在线设备 |
 
 下载器可以在设置页切换。切到迅雷前需要面板已登录，并且手动下过一次以便识别下载目录。进行中的任务不会跟着换后端。
+
+刮削在设置页开关。归档目录可改成 jav-search 的 media，两边共用一个 Emby 库；那样请关掉 jav-search 对 jav-dl 下载目录的监控，避免抢文件。月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。
 
 ## 和 1.x skill 的差别
 

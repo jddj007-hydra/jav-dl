@@ -16,6 +16,8 @@ USER_KEYS = (
     "xunlei_username",
     "xunlei_password",
     "xunlei_device_name",
+    "scrape_enabled",
+    "media_dir",
 )
 
 DOWNLOADERS = ("aria2", "xunlei")
@@ -32,6 +34,10 @@ class Settings(BaseSettings):
     port: int = 8787
     data_dir: Path = Path("./data")
     download_dir: Path = Path("./downloads")
+    media_dir: Path = Path("./media")
+    scrape_enabled: bool = True
+    scrape_settle_seconds: int = 60
+    scrape_min_mb: int = 50
     aria2_rpc: str = "http://127.0.0.1:6800/jsonrpc"
     aria2_secret: str = "jav-dl-rpc"
     downloader: str = "aria2"
@@ -54,6 +60,10 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "img_cache").mkdir(parents=True, exist_ok=True)
+        try:
+            self.media_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
     @property
     def db_path(self) -> Path:
@@ -77,6 +87,10 @@ class Settings(BaseSettings):
             "xunlei_username": self.xunlei_username,
             "xunlei_password_set": bool(self.xunlei_password),
             "xunlei_device_name": self.xunlei_device_name,
+            "scrape_enabled": bool(self.scrape_enabled),
+            "media_dir": str(self.media_dir),
+            "scrape_settle_seconds": int(self.scrape_settle_seconds),
+            "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
         }
 
@@ -94,6 +108,12 @@ def _overlay(settings: Settings) -> Settings:
         return settings
     if "downloader" in allowed:
         allowed["downloader"] = normalize_downloader(str(allowed["downloader"]))
+    if "media_dir" in allowed:
+        raw = str(allowed["media_dir"]).strip()
+        if not raw:
+            allowed.pop("media_dir")
+        else:
+            allowed["media_dir"] = Path(raw)
     return settings.model_copy(update=allowed)
 
 
@@ -109,9 +129,18 @@ def save_user_config(settings: Settings, updates: dict) -> Settings:
     allowed = {k: updates[k] for k in USER_KEYS if k in updates}
     if "downloader" in allowed:
         allowed["downloader"] = normalize_downloader(str(allowed["downloader"]))
+    if "media_dir" in allowed:
+        raw = str(allowed["media_dir"]).strip()
+        if not raw:
+            allowed.pop("media_dir")
+        else:
+            allowed["media_dir"] = Path(raw)
     merged = settings.model_copy(update=allowed)
     merged.data_dir.mkdir(parents=True, exist_ok=True)
-    payload = {k: getattr(merged, k) for k in USER_KEYS}
+    payload = {}
+    for k in USER_KEYS:
+        v = getattr(merged, k)
+        payload[k] = str(v) if isinstance(v, Path) else v
     merged.user_config_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
