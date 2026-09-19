@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>jav-dl</title>
+  <link rel="stylesheet" href="/static/style.css?v=7" />
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/">jav-dl</a>
+    <nav>
+      <a href="#/" data-nav="search">搜索</a>
+      <a href="#/queue" data-nav="queue">队列</a>
+      <a href="#/settings" data-nav="settings">设置</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-search" class="view">
+      <form id="search-form" class="search-bar">
+        <input id="code-input" name="code" autocomplete="off" spellcheck="false"
+               placeholder="番号或关键词，例如 SSIS-001 / 葵つかさ" />
+        <button type="submit">查询</button>
+      </form>
+      <p id="search-status" class="status" hidden></p>
+      <p id="search-back" class="search-back" hidden>
+        <button type="button" class="ghost" id="back-to-works">← 返回列表</button>
+      </p>
+      <div id="works-wrap" hidden>
+        <div class="table-head">
+          <h2>作品</h2>
+          <p class="hint">来源：JavBus · 点一张进番号详情和磁链</p>
+        </div>
+        <div id="works-list" class="works-grid"></div>
+      </div>
+      <article id="meta-card" class="card meta" hidden></article>
+      <div id="resources-wrap" hidden>
+        <div class="table-head">
+          <h2>磁链</h2>
+          <p class="hint">来源：磁力猫 · 已按无码 / 中文 / 热度排序，不会自动下载</p>
+        </div>
+        <div id="resource-list" class="res-list"></div>
+      </div>
+    </section>
+
+    <section id="view-queue" class="view" hidden>
+      <h2>下载队列</h2>
+      <p class="hint">关掉浏览器不影响任务。磁链走 DHT，刚开始可能要等一会儿。</p>
+      <div id="queue-empty" class="empty" hidden>还没有任务</div>
+      <ul id="queue-list" class="queue"></ul>
+    </section>
+
+    <section id="view-settings" class="view" hidden>
+      <h2>设置</h2>
+      <form id="settings-form" class="settings">
+        <label class="check">
+          <input type="checkbox" name="proxy_enabled" />
+          启用 HTTP 代理（只用于查站，BT 不走代理）
+        </label>
+        <label>代理地址
+          <input name="proxy_url" placeholder="http://127.0.0.1:7890" />
+        </label>
+        <label>JavBus
+          <input name="javbus_base" />
+        </label>
+        <label>磁力猫首页
+          <input name="clm_home" />
+        </label>
+        <label>磁力猫搜索域
+          <input name="clm_search" />
+        </label>
+        <label>下载器
+          <select name="downloader" id="downloader-select">
+            <option value="aria2">aria2</option>
+            <option value="xunlei">群晖迅雷</option>
+          </select>
+        </label>
+        <div id="xunlei-fields" class="xunlei-fields" hidden>
+          <label>迅雷面板
+            <input name="xunlei_url" placeholder="http://127.0.0.1:2345" />
+          </label>
+          <label>面板用户
+            <input name="xunlei_username" autocomplete="username" />
+          </label>
+          <label>面板密码
+            <input name="xunlei_password" type="password" autocomplete="current-password" />
+          </label>
+          <label>设备名
+            <input name="xunlei_device_name" placeholder="群晖-xunlei" />
+          </label>
+          <p class="hint">面板要已登录迅雷账号，并且手动下过一次，才能识别下载目录。已在跑的任务不会换后端。</p>
+        </div>
+        <p class="hint" id="download-dir"></p>
+        <button type="submit">保存</button>
+        <p id="settings-status" class="status" hidden></p>
+      </form>
+      <div id="health-box" class="health"></div>
+    </section>
+  </main>
+  <div id="lightbox" class="lightbox" hidden>
+    <img alt="" />
+  </div>
+  <script src="/static/app.js?v=7"></script>
+</body>
+</html>

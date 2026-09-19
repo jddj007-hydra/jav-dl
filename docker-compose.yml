@@ -1,0 +1,47 @@
+services:
+  aria2:
+    build:
+      context: ./aria2
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - ARIA2_SECRET=${ARIA2_SECRET:-jav-dl-rpc}
+      - TZ=Asia/Shanghai
+    volumes:
+      - jav-data:/data
+      - jav-downloads:/downloads
+    ports:
+      - "6881:6881"
+      - "6881:6881/udp"
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - aria2
+    ports:
+      - "8787:8787"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - TZ=Asia/Shanghai
+      - DATA_DIR=/data
+      - DOWNLOAD_DIR=/downloads
+      - ARIA2_RPC=http://aria2:6800/jsonrpc
+      - ARIA2_SECRET=${ARIA2_SECRET:-jav-dl-rpc}
+      - PROXY_ENABLED=${PROXY_ENABLED:-false}
+      - PROXY_URL=${PROXY_URL:-http://host.docker.internal:7890}
+      - AUTH_USER=${AUTH_USER:-}
+      - AUTH_PASS=${AUTH_PASS:-}
+      - DOWNLOADER=${DOWNLOADER:-aria2}
+      - XUNLEI_URL=${XUNLEI_URL:-http://host.docker.internal:2345}
+      - XUNLEI_USERNAME=${XUNLEI_USERNAME:-}
+      - XUNLEI_PASSWORD=${XUNLEI_PASSWORD:-}
+      - XUNLEI_DEVICE_NAME=${XUNLEI_DEVICE_NAME:-群晖-xunlei}
+    volumes:
+      - jav-data:/data
+      - jav-downloads:/downloads
+
+volumes:
+  jav-data:
+  jav-downloads:

@@ -1,11 +1,18 @@
-# Downloads (created at runtime)
+# Runtime
+data/
 downloads/
-$HOME/Downloads/av/
+*.db
+.env
 
-# OS files
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# OS / IDE
 .DS_Store
 Thumbs.db
-
-# IDE
 .idea/
 .vscode/
