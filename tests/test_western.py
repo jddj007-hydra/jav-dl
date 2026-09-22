@@ -11,7 +11,7 @@ from app.ranking import sort_by_heat
 from app.routers.images import _allowed
 from app.scrape import list_ready_sources
 from app.slug import western_slug
-from app.western_magnets import rank_western_magnets, western_search_terms
+from app.western_magnets import parse_release_date, rank_western_magnets, western_search_terms
 from app.sources.javbus import latest_page_url
 from app.sources.tpdb import duration_minutes, map_item
 
@@ -81,13 +81,58 @@ def test_token_hidden_and_blank_keeps_old(tmp_path):
     assert merged.tpdb_api_key == "secret-token"
 
 
-def test_western_search_terms_drop_punctuation():
+def test_parse_release_date_from_scene_name():
+    assert parse_release_date(
+        "BrazzersExxtra.22.09.20.Ella.Reese.School.Of.Cock.XXX.1080p.MP4-WRB"
+    ) == "2022-09-20"
+    assert parse_release_date("clip.2160p.mp4") is None
+
+
+def test_western_search_terms_use_filename_date():
     terms = western_search_terms(
-        "Evil Angel",
-        "Rocco's Teens Unleashed #06",
-        ["Baby Doll X"],
+        "Brazzers Exxtra",
+        "School of Cock",
+        ["Ella Reese"],
+        "2022-09-20",
     )
-    assert terms == ["Evil Angel", "EvilAngel"]
+    assert terms[0] == "BrazzersExxtra 22.09.20"
+    assert "BrazzersExxtra 2022.09.20" in terms
+    assert terms[-1] == "BrazzersExxtra"
+
+
+def test_rank_keeps_same_release_day_and_prefers_the_scene():
+    items = [
+        {
+            "title": "BrazzersExxtra.22.09.20.Phoenix.Marie.BrideZZilla.Part.2.XXX.1080p",
+            "heat": 500,
+            "size": "2 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "BrazzersExxtra.22.09.20.Ella.Reese.School.Of.Cock.XXX.1080p",
+            "heat": 20,
+            "size": "2 GB",
+            "info_hash": "b" * 40,
+        },
+        {
+            "title": "BRAZZERS - Brazzers Exxtra - Veruca James",
+            "heat": 9000,
+            "size": "1 GB",
+            "date": "2017-08-23",
+            "info_hash": "c" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Brazzers Exxtra",
+        "School of Cock",
+        ["Ella Reese"],
+        "2022-09-20",
+    )
+    assert match == "date"
+    assert ranked[0]["info_hash"].startswith("b")
+    assert ranked[0]["release_date"] == "2022-09-20"
+    assert all(not item["info_hash"].startswith("c") for item in ranked)
 
 
 def test_rank_western_prefers_title_overlap():

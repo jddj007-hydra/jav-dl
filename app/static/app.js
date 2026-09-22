@@ -721,7 +721,8 @@ function renderWesternResources(items) {
         <div class="res-meta">
           <span>${escapeHtml(it.size || "?")}</span>
           <span>热度 ${it.heat ?? 0}</span>
-          <span>${escapeHtml(it.date || "")}</span>
+          <span>${it.release_date ? "发行 " + escapeHtml(it.release_date) : "发行日未知"}</span>
+          <span>${it.date ? "收录 " + escapeHtml(it.date) : ""}</span>
         </div>
       </div>
       <div class="res-actions">
@@ -788,6 +789,7 @@ async function openWestern(id, kind) {
   const magnetParams = new URLSearchParams();
   if (listed && listed.site) magnetParams.set("site", listed.site);
   if (listed && listed.title) magnetParams.set("title", listed.title);
+  if (listed && listed.date) magnetParams.set("date", listed.date);
   if (listed && listed.performers && listed.performers.length) {
     magnetParams.set("performers", listed.performers.slice(0, 3).join(","));
   }
@@ -820,9 +822,10 @@ async function openWestern(id, kind) {
     } else if (!msg) {
       const matched = magnets.value.matched;
       const studio = (westernCurrent && westernCurrent.site) || "";
-      msg = matched === "title"
-        ? `按片商${studio ? " " + studio : ""} 找到 ${items.length} 条，片名相近的在前面`
-        : `按片商${studio ? " " + studio : ""} 找到 ${items.length} 条`;
+      const when = (listed && listed.date) || "";
+      msg = matched === "date"
+        ? `按片商和发行日${when ? " " + when : ""} 找到 ${items.length} 条`
+        : `这个发行日没有对上的磁链，下面是片商的 ${items.length} 条`;
       tone = "good";
     }
   } else {
