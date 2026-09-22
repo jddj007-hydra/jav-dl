@@ -11,6 +11,7 @@ from app.ranking import sort_by_heat
 from app.routers.images import _allowed
 from app.scrape import list_ready_sources
 from app.slug import western_slug
+from app.western_magnets import rank_western_magnets, western_search_terms
 from app.sources.javbus import latest_page_url
 from app.sources.tpdb import duration_minutes, map_item
 
@@ -78,6 +79,51 @@ def test_token_hidden_and_blank_keeps_old(tmp_path):
     current = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
     merged = save_user_config(current, updates)
     assert merged.tpdb_api_key == "secret-token"
+
+
+def test_western_search_terms_drop_punctuation():
+    terms = western_search_terms(
+        "Evil Angel",
+        "Rocco's Teens Unleashed #06",
+        ["Baby Doll X"],
+    )
+    assert "Roccos Teens Unleashed" in terms
+    assert "Evil Angel Rocco's Teens Unleashed #06" not in terms
+    assert "Evil Angel" not in terms
+    assert any(term.startswith("Baby Doll") for term in terms)
+
+
+def test_rank_western_prefers_title_overlap():
+    items = [
+        {"title": "Ella Reese interview", "heat": 900, "size": "1 GB", "info_hash": "a" * 40},
+        {"title": "ZeroTolerance.Ella.Reese.Hot.Wife.Creampie.Scene.4", "heat": 20, "size": "2 GB", "info_hash": "b" * 40},
+        {"title": "Huge pack Hot Wife Creampie 1-50", "heat": 9999, "size": "40 GB", "info_hash": "c" * 40},
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Zero Tolerance",
+        "Hot Wife Creampie 6 - Scene 4",
+        ["Ella Reese"],
+    )
+    assert match == "title"
+    assert [item["info_hash"][0] for item in ranked] == ["b"]
+
+
+def test_site_name_alone_does_not_count_as_the_scene():
+    items = [{
+        "title": "County Line Rocco Siffredi",
+        "heat": 100,
+        "size": "1 GB",
+        "info_hash": "a" * 40,
+    }]
+    ranked, match = rank_western_magnets(
+        items,
+        "Rocco Siffredi",
+        "Rocco And Kelly's Prague Adventure",
+        ["Andrew A"],
+    )
+    assert ranked == []
+    assert match == "none"
 
 
 def test_western_slug_is_not_a_code():

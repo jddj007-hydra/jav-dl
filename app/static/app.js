@@ -785,10 +785,16 @@ async function openWestern(id, kind) {
   renderWesternMeta(listed);
   renderWesternResources([]);
   setStatus($("western-status"), "查询详情和磁链…");
-  const query = [listed && listed.site, listed && listed.title].filter(Boolean).join(" ");
+  const magnetParams = new URLSearchParams();
+  if (listed && listed.site) magnetParams.set("site", listed.site);
+  if (listed && listed.title) magnetParams.set("title", listed.title);
+  if (listed && listed.performers && listed.performers.length) {
+    magnetParams.set("performers", listed.performers.slice(0, 3).join(","));
+  }
+  const magnetPath = magnetParams.toString();
   const [detail, magnets] = await Promise.allSettled([
     api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
-    query ? api("/api/resources?q=" + encodeURIComponent(query)) : Promise.resolve({ items: [] }),
+    magnetPath ? api("/api/resources?" + magnetPath) : Promise.resolve({ items: [] }),
   ]);
   let msg = "";
   let tone = "";
@@ -812,8 +818,13 @@ async function openWestern(id, kind) {
       msg = (msg ? msg + "；" : "") + "没有搜到磁链";
       tone = "bad";
     } else if (!msg) {
-      msg = `找到 ${items.length} 条磁链`;
-      tone = "good";
+      const matched = magnets.value.matched;
+      msg = matched === "performer"
+        ? `片名对不上，下面是演员相关的 ${items.length} 条`
+        : matched === "site"
+          ? `片名对不上，下面是片商相关的 ${items.length} 条`
+          : `找到 ${items.length} 条磁链`;
+      tone = matched === "title" || !matched ? "good" : "";
     }
   } else {
     msg = (msg ? msg + "；" : "") + "磁链搜索失败：" + magnets.reason.message;
