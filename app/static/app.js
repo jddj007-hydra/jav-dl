@@ -819,12 +819,11 @@ async function openWestern(id, kind) {
       tone = "bad";
     } else if (!msg) {
       const matched = magnets.value.matched;
-      msg = matched === "performer"
-        ? `片名对不上，下面是演员相关的 ${items.length} 条`
-        : matched === "site"
-          ? `片名对不上，下面是片商相关的 ${items.length} 条`
-          : `找到 ${items.length} 条磁链`;
-      tone = matched === "title" || !matched ? "good" : "";
+      const studio = (westernCurrent && westernCurrent.site) || "";
+      msg = matched === "title"
+        ? `按片商${studio ? " " + studio : ""} 找到 ${items.length} 条，片名相近的在前面`
+        : `按片商${studio ? " " + studio : ""} 找到 ${items.length} 条`;
+      tone = "good";
     }
   } else {
     msg = (msg ? msg + "；" : "") + "磁链搜索失败：" + magnets.reason.message;

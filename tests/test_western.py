@@ -87,10 +87,7 @@ def test_western_search_terms_drop_punctuation():
         "Rocco's Teens Unleashed #06",
         ["Baby Doll X"],
     )
-    assert "Roccos Teens Unleashed" in terms
-    assert "Evil Angel Rocco's Teens Unleashed #06" not in terms
-    assert "Evil Angel" not in terms
-    assert any(term.startswith("Baby Doll") for term in terms)
+    assert terms == ["Evil Angel", "EvilAngel"]
 
 
 def test_rank_western_prefers_title_overlap():
@@ -98,6 +95,7 @@ def test_rank_western_prefers_title_overlap():
         {"title": "Ella Reese interview", "heat": 900, "size": "1 GB", "info_hash": "a" * 40},
         {"title": "ZeroTolerance.Ella.Reese.Hot.Wife.Creampie.Scene.4", "heat": 20, "size": "2 GB", "info_hash": "b" * 40},
         {"title": "Huge pack Hot Wife Creampie 1-50", "heat": 9999, "size": "40 GB", "info_hash": "c" * 40},
+        {"title": "Zero Tolerance.Some.Other.Scene", "heat": 9000, "size": "1 GB", "info_hash": "d" * 40},
     ]
     ranked, match = rank_western_magnets(
         items,
@@ -106,7 +104,9 @@ def test_rank_western_prefers_title_overlap():
         ["Ella Reese"],
     )
     assert match == "title"
-    assert [item["info_hash"][0] for item in ranked] == ["b"]
+    assert ranked[0]["info_hash"].startswith("b")
+    assert any(item["info_hash"].startswith("d") for item in ranked)
+    assert all(not item["info_hash"].startswith("a") for item in ranked)
 
 
 def test_site_name_alone_does_not_count_as_the_scene():
@@ -122,8 +122,8 @@ def test_site_name_alone_does_not_count_as_the_scene():
         "Rocco And Kelly's Prague Adventure",
         ["Andrew A"],
     )
-    assert ranked == []
-    assert match == "none"
+    assert [item["info_hash"] for item in ranked] == ["a" * 40]
+    assert match == "site"
 
 
 def test_western_archive_uses_existing_studio_folder(tmp_path):
