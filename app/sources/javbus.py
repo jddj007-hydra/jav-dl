@@ -181,6 +181,36 @@ def parse_search(html: str, base: str) -> list[dict]:
     return items
 
 
+def latest_page_url(base: str, kind: str, page: int) -> str:
+    root = base.rstrip("/")
+    page = max(1, int(page))
+    if kind == "uncensored":
+        if page == 1:
+            return f"{root}/uncensored"
+        return f"{root}/uncensored/page/{page}"
+    if kind != "censored":
+        raise MetadataError("列表类型无效")
+    if page == 1:
+        return f"{root}/"
+    return f"{root}/page/{page}"
+
+
+async def fetch_latest(settings: Settings, kind: str, page: int = 1) -> list[dict]:
+    url = latest_page_url(settings.javbus_base, kind, page)
+    base = settings.javbus_base.rstrip("/")
+    headers = {"Cookie": AGE_COOKIE, "Referer": base + "/"}
+    async with site_client(settings) as client:
+        try:
+            response = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+    if response.status_code == 404:
+        return []
+    if response.status_code >= 400:
+        raise MetadataError(f"JavBus HTTP {response.status_code}", response.status_code)
+    return parse_search(response.text, base)
+
+
 async def search_works(settings: Settings, query: str, pages: int = 2) -> list[dict]:
     base = settings.javbus_base.rstrip("/")
     encoded = quote(query.strip())

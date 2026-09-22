@@ -47,7 +47,7 @@ button, input { font: inherit; }
   font-size: 18px;
 }
 .brand::before { content: "● "; color: var(--accent); }
-nav { display: flex; gap: 18px; }
+nav { display: flex; gap: 18px; flex-wrap: wrap; }
 nav a { color: var(--muted); }
 nav a.active, nav a:hover { color: var(--text); }
 
@@ -69,6 +69,50 @@ h2 { font-size: 16px; font-weight: 650; margin: 0 0 8px; }
   border-radius: 8px;
   letter-spacing: 0.04em;
 }
+.feed-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  flex-wrap: wrap;
+}
+.seg { display: flex; }
+.seg button {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 6px 12px;
+}
+.seg button:first-child { border-radius: 8px 0 0 8px; }
+.seg button:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.seg button.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: #2a211c;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pager button { padding: 6px 10px; }
+.work-people {
+  font-size: 11px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.summary {
+  margin: 12px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
 .search-back { margin: 0 0 14px; }
 .search-back button { padding: 6px 12px; }
 

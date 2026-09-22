@@ -33,6 +33,8 @@ async def put_settings(request: Request, body: SettingsUpdate):
     updates = body.model_dump(exclude_none=True)
     if updates.get("xunlei_password") == "":
         updates.pop("xunlei_password")
+    if updates.get("tpdb_api_key") == "":
+        updates.pop("tpdb_api_key")
     settings = save_user_config(request.app.state.settings, updates)
     bind_runtime(request.app, settings)
     library = getattr(request.app.state, "library", None)

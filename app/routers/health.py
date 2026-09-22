@@ -34,5 +34,6 @@ async def health(request: Request):
         "xunlei": {"ok": bool(xunlei_ver), "version": xunlei_ver},
         "javbus": {"ok": javbus_ok, "base": settings.javbus_base},
         "clm": {"ok": clm_ok, "base": settings.clm_search},
+        "tpdb": {"ok": bool(settings.tpdb_api_key), "configured": bool(settings.tpdb_api_key)},
         "proxy_enabled": settings.proxy_enabled,
     }

@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.codes import normalize_code
 from app.downloader.jobs import BackendError
 from app.models import DownloadRequest
+from app.slug import western_slug
 
 router = APIRouter()
 
@@ -17,14 +18,27 @@ async def list_downloads(request: Request):
 
 @router.post("/api/downloads")
 async def create_download(request: Request, body: DownloadRequest):
-    code = normalize_code(body.code)
-    if not code:
-        raise HTTPException(400, "番号格式无效")
     info_hash = (body.info_hash or "").strip().lower()
     if len(info_hash) != 40:
         raise HTTPException(400, "info_hash 无效")
+    kind = (body.kind or "").strip().lower()
     try:
-        job = await request.app.state.jobs.enqueue(code, info_hash, body.title)
+        if kind == "western":
+            work = (body.work_title or body.title or "").strip()
+            if not work:
+                raise HTTPException(400, "缺少作品标题")
+            slug = western_slug(body.site, body.date, work, body.tpdb_id)
+            job = await request.app.state.jobs.enqueue(
+                slug,
+                info_hash,
+                body.title or work,
+                dest_rel=f"western/{slug}",
+            )
+        else:
+            code = normalize_code(body.code)
+            if not code:
+                raise HTTPException(400, "番号格式无效")
+            job = await request.app.state.jobs.enqueue(code, info_hash, body.title)
     except BackendError as e:
         raise HTTPException(503, str(e)) from e
     return job

@@ -4,13 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=9" />
+  <link rel="stylesheet" href="/static/style.css?v=10" />
 </head>
 <body>
   <header class="top">
     <a class="brand" href="#/">jav-dl</a>
     <nav>
-      <a href="#/" data-nav="search">搜索</a>
+      <a href="#/" data-nav="search">JAV</a>
+      <a href="#/western" data-nav="western">欧美</a>
       <a href="#/queue" data-nav="queue">队列</a>
       <a href="#/settings" data-nav="settings">设置</a>
     </nav>
@@ -23,6 +24,14 @@
                placeholder="番号或关键词，例如 SSIS-001 / 葵つかさ" />
         <button type="submit">查询</button>
       </form>
+      <div class="feed-bar" id="jav-feed">
+        <div class="seg" id="jav-kind">
+          <button type="button" data-kind="censored" class="on">有码</button>
+          <button type="button" data-kind="uncensored">无码</button>
+        </div>
+        <button type="button" class="ghost" id="jav-latest">最新</button>
+        <span class="pager" id="jav-pager"></span>
+      </div>
       <p id="search-status" class="status" hidden></p>
       <p id="search-back" class="search-back" hidden>
         <button type="button" class="ghost" id="back-to-works">← 返回列表</button>
@@ -41,6 +50,41 @@
           <p class="hint">来源：磁力猫 · 已按无码 / 中文 / 热度排序，不会自动下载</p>
         </div>
         <div id="resource-list" class="res-list"></div>
+      </div>
+    </section>
+
+    <section id="view-western" class="view" hidden>
+      <form id="western-form" class="search-bar">
+        <input id="western-input" name="q" autocomplete="off" spellcheck="false"
+               placeholder="片名或演员" />
+        <button type="submit">查询</button>
+      </form>
+      <div class="feed-bar" id="western-feed">
+        <div class="seg" id="western-kind">
+          <button type="button" data-kind="scene" class="on">场景</button>
+          <button type="button" data-kind="movie">电影</button>
+        </div>
+        <button type="button" class="ghost" id="western-latest">最新</button>
+        <span class="pager" id="western-pager"></span>
+      </div>
+      <p id="western-status" class="status" hidden></p>
+      <p id="western-back" class="search-back" hidden>
+        <button type="button" class="ghost" id="western-back-btn">← 返回列表</button>
+      </p>
+      <div id="western-works-wrap" hidden>
+        <div class="table-head">
+          <h2>作品</h2>
+          <p class="hint">来源：ThePornDB · 点一张看详情和磁链</p>
+        </div>
+        <div id="western-works" class="works-grid"></div>
+      </div>
+      <article id="western-meta" class="card meta" hidden></article>
+      <div id="western-resources-wrap" hidden>
+        <div class="table-head">
+          <h2>磁链</h2>
+          <p class="hint">来源：磁力猫 · 按热度排序。下载后留在 western 目录，不按番号归档。</p>
+        </div>
+        <div id="western-resources" class="res-list"></div>
       </div>
     </section>
 
@@ -70,6 +114,10 @@
         <label>磁力猫搜索域
           <input name="clm_search" />
         </label>
+        <label>ThePornDB token
+          <input name="tpdb_api_key" type="password" autocomplete="off" />
+        </label>
+        <p class="hint">欧美页用这个 token 拉场景和电影。留空表示不修改已保存的 token。</p>
         <label>下载器
           <select name="downloader" id="downloader-select">
             <option value="aria2">aria2</option>
@@ -109,6 +157,6 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

@@ -78,6 +78,33 @@ def rank_key(item: dict, code: str) -> tuple:
     return (0 if relevant else 1, tier, -heat, size_bytes or 10**18)
 
 
+def heat_key(item: dict) -> tuple:
+    title = item.get("title") or ""
+    size_bytes = item.get("size_bytes")
+    if size_bytes is None:
+        size_bytes = parse_size(item.get("size") or "") or 0
+    pack = bool(item.get("pack")) or is_pack(title, size_bytes or None)
+    heat = int(item.get("heat") or 0)
+    return (1 if pack else 0, -heat, size_bytes or 10**18)
+
+
+def sort_by_heat(items: list[dict]) -> list[dict]:
+    """Keyword magnets: hotter first, packs last. Ignore 无码/中字 tiers."""
+    decorated = []
+    for it in items:
+        it = dict(it)
+        it["pack"] = bool(heat_key(it)[0])
+        it["_rank"] = heat_key(it)
+        decorated.append(it)
+    decorated.sort(key=lambda x: x["_rank"])
+    out = []
+    for i, it in enumerate(decorated, 1):
+        it.pop("_rank", None)
+        it["rank"] = i
+        out.append(it)
+    return out
+
+
 def sort_resources(items: list[dict], code: str) -> list[dict]:
     decorated = []
     for it in items:

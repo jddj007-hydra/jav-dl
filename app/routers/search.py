@@ -4,9 +4,39 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.codes import normalize_code
 from app.library import attach_library
-from app.sources.javbus import CACHE_VER, MetadataError, fetch_metadata, search_works
+from app.sources.javbus import CACHE_VER, MetadataError, fetch_latest, fetch_metadata, search_works
 
 router = APIRouter()
+
+
+@router.get("/api/jav/latest")
+async def jav_latest(
+    request: Request,
+    kind: str = Query("censored"),
+    page: int = Query(1, ge=1, le=50),
+):
+    if kind not in ("censored", "uncensored"):
+        raise HTTPException(400, "列表类型无效")
+    settings = request.app.state.settings
+    db = request.app.state.db
+    library = request.app.state.library
+    key = f"latest:javbus:{kind}:{page}"
+    cached = await db.get_metadata(key, settings.latest_ttl)
+    if isinstance(cached, dict) and isinstance(cached.get("items"), list):
+        items = cached["items"]
+    else:
+        try:
+            items = await fetch_latest(settings, kind, page)
+        except MetadataError as exc:
+            return {"kind": kind, "page": page, "items": [], "error": str(exc)}
+        await db.put_metadata(key, {"kind": kind, "page": page, "items": items})
+    hits = await library.get_many([it["code"] for it in items if it.get("code")])
+    return {
+        "kind": kind,
+        "page": page,
+        "items": attach_library(items, hits),
+        "error": None,
+    }
 
 
 @router.get("/api/search")

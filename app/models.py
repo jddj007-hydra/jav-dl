@@ -32,9 +32,14 @@ class ResourcesResponse(BaseModel):
 
 
 class DownloadRequest(BaseModel):
-    code: str
+    code: str = ""
     info_hash: str
     title: str = ""
+    kind: str = ""
+    tpdb_id: str = ""
+    site: str = ""
+    date: str = ""
+    work_title: str = ""
 
 
 class SettingsUpdate(BaseModel):
@@ -50,3 +55,4 @@ class SettingsUpdate(BaseModel):
     xunlei_device_name: str | None = None
     scrape_enabled: bool | None = None
     media_dir: str | None = None
+    tpdb_api_key: str | None = None

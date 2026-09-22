@@ -20,6 +20,15 @@ ALLOWED_HOST_PARTS = (
     "pics.dmm.com",
     "awsimgsrc.dmm.co.jp",
 )
+TPDB_HOSTS = ("theporndb.net", "metadataapi.net")
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _is_tpdb(host: str) -> bool:
+    return any(host == name or host.endswith("." + name) for name in TPDB_HOSTS)
 
 
 def _allowed(url: str, javbus_base: str) -> bool:
@@ -27,6 +36,8 @@ def _allowed(url: str, javbus_base: str) -> bool:
     if parsed.scheme not in ("http", "https"):
         return False
     host = (parsed.hostname or "").lower()
+    if _is_tpdb(host):
+        return True
     base_host = urlparse(javbus_base).hostname or ""
     if host == base_host.lower():
         return True
@@ -48,8 +59,13 @@ async def proxy_img(request: Request, url: str = Query(...)):
     if cached.exists() and cached.stat().st_size > 0:
         media = meta.read_text(encoding="utf-8") if meta.exists() else "image/jpeg"
         return FileResponse(cached, media_type=media)
+    referer = (
+        "https://theporndb.net/"
+        if _is_tpdb(_host(url))
+        else settings.javbus_base.rstrip("/") + "/"
+    )
     async with site_client(settings) as client:
-        r = await client.get(url, headers={"Referer": settings.javbus_base + "/"})
+        r = await client.get(url, headers={"Referer": referer})
     if r.status_code >= 400 or not r.content:
         raise HTTPException(502, "封面下载失败")
     if len(r.content) > 8 * 1024 * 1024:

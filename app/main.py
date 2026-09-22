@@ -16,7 +16,7 @@ from app.downloader.aria2 import Aria2
 from app.downloader.jobs import JobManager
 from app.downloader.xunlei import Xunlei
 from app.library import Library
-from app.routers import downloads, health, images, resources, search, settings as settings_router
+from app.routers import downloads, health, images, resources, search, settings as settings_router, western
 
 STATIC = Path(__file__).parent / "static"
 
@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
     app.add_middleware(BasicAuthMiddleware)
     app.include_router(health.router)
     app.include_router(search.router)
+    app.include_router(western.router)
     app.include_router(resources.router)
     app.include_router(downloads.router)
     app.include_router(settings_router.router)

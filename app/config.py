@@ -18,6 +18,7 @@ USER_KEYS = (
     "xunlei_device_name",
     "scrape_enabled",
     "media_dir",
+    "tpdb_api_key",
 )
 
 DOWNLOADERS = ("aria2", "xunlei")
@@ -53,6 +54,8 @@ class Settings(BaseSettings):
     auth_user: str = ""
     auth_pass: str = ""
     metadata_ttl: int = 86400
+    latest_ttl: int = 7200
+    tpdb_api_key: str = ""
     http_timeout: float = 20.0
     verify_tls: bool = False
 
@@ -92,6 +95,7 @@ class Settings(BaseSettings):
             "scrape_settle_seconds": int(self.scrape_settle_seconds),
             "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
+            "tpdb_api_key_set": bool(self.tpdb_api_key),
         }
 
 

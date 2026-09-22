@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
+from app.codes import normalize_code
 from app.config import Settings
 from app.db import Database
 from app.downloader.aria2 import Aria2, Aria2Error
@@ -104,15 +105,29 @@ class JobManager:
             return await self.xunlei.tell(gid)
         return await self.aria2.tell(gid)
 
-    async def enqueue(self, code: str, info_hash: str, title: str) -> dict:
+    def _dest_for(self, code: str, dest_rel: str | None) -> Path:
+        rel = Path(dest_rel or code)
+        if rel.is_absolute() or not rel.parts or any(part in ("", ".", "..") for part in rel.parts):
+            raise Aria2Error("目录无效")
+        return self.settings.download_dir.joinpath(rel)
+
+    async def enqueue(
+        self,
+        code: str,
+        info_hash: str,
+        title: str,
+        *,
+        dest_rel: str | None = None,
+    ) -> dict:
         info_hash = info_hash.lower()
         existing = await self.db.find_job_by_hash(info_hash)
         if existing and existing["status"] not in ("error", "cancelled", "complete"):
             return await self.public(existing)
 
-        dest = str(self.settings.download_dir / code)
+        dest_path = self._dest_for(code, dest_rel)
+        dest = str(dest_path)
         if not self._use_xunlei():
-            Path(dest).mkdir(parents=True, exist_ok=True)
+            dest_path.mkdir(parents=True, exist_ok=True)
         magnet = magnet_for(info_hash, title or code)
         gid = await self._add_magnet(magnet, dest)
         now = time.time()
@@ -219,6 +234,12 @@ class JobManager:
             updated = float(job.get("updated_at") or 0)
             if time.time() - updated < SCRAPE_RETRY_AFTER:
                 return job
+        if not normalize_code(job.get("code") or ""):
+            if status != "skipped":
+                await self.db.update_job(job["id"], scrape_status="skipped", scrape_error=None)
+                job["scrape_status"] = "skipped"
+                job["scrape_error"] = None
+            return job
 
         dest = Path(job.get("dest") or "")
         settle = max(0, int(self.settings.scrape_settle_seconds))

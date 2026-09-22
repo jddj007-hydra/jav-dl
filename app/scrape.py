@@ -23,6 +23,7 @@ SKIP_DIR_NAMES = {
     "recycle.bin",
     "system volume information",
     ".bt",
+    "western",
 }
 PACK_RANGE_RE = re.compile(r"\d{3}\s*[-~]\s*\d{3}")
 

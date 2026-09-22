@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const views = {
   search: $("view-search"),
+  western: $("view-western"),
   queue: $("view-queue"),
   settings: $("view-settings"),
 };
@@ -11,16 +12,35 @@ let lastWorksQuery = "";
 let lastLibrary = null;
 let fromWorks = false;
 let pollTimer = null;
+let javKind = "censored";
+let javPage = 1;
+let javMode = "latest";
+let javBootstrapped = false;
+let westernKind = "scene";
+let westernPage = 1;
+let westernMode = "latest";
+let westernBootstrapped = false;
+let westernItems = [];
+let westernResources = [];
+let westernCurrent = null;
 
 function route() {
   const hash = location.hash.replace("#/", "") || "search";
-  const name = hash.startsWith("queue") ? "queue" : hash.startsWith("settings") ? "settings" : "search";
+  const name = hash.startsWith("queue")
+    ? "queue"
+    : hash.startsWith("settings")
+      ? "settings"
+      : hash.startsWith("western")
+        ? "western"
+        : "search";
   Object.entries(views).forEach(([k, el]) => { el.hidden = k !== name; });
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === name);
   });
   if (name === "queue") refreshQueue();
   if (name === "settings") loadSettings();
+  if (name === "search") ensureJavLatest();
+  if (name === "western") ensureWesternLatest();
 }
 
 async function api(path, opts = {}) {
@@ -215,19 +235,83 @@ function showWorksList() {
   fromWorks = false;
   showBack(false);
   clearDetail();
+  $("jav-feed").hidden = false;
   $("code-input").value = lastWorksQuery;
   renderWorks(lastWorks);
   const n = lastWorks.length;
+  const latest = javMode === "latest";
   setStatus(
     $("search-status"),
-    n ? `找到 ${n} 部作品，点一张看磁链` : "没有搜到作品",
+    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部作品，点一张看磁链`) : (latest ? "没有更多了" : "没有搜到作品"),
     n ? "good" : "bad",
   );
+}
+
+function markSeg(id, kind) {
+  document.querySelectorAll(`#${id} button`).forEach((btn) => {
+    btn.classList.toggle("on", btn.dataset.kind === kind);
+  });
+}
+
+function renderPager(el, page, lastPage, onPick) {
+  const prev = page > 1;
+  const next = lastPage ? page < lastPage : true;
+  el.innerHTML = "";
+  const make = (label, target, enabled) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ghost";
+    btn.textContent = label;
+    btn.disabled = !enabled;
+    if (enabled) btn.addEventListener("click", () => onPick(target));
+    return btn;
+  };
+  el.append(make("上一页", page - 1, prev));
+  const label = document.createElement("span");
+  label.textContent = lastPage ? `第 ${page} / ${lastPage} 页` : `第 ${page} 页`;
+  el.append(label);
+  el.append(make("下一页", page + 1, next));
+}
+
+async function loadJavFeed(page) {
+  javMode = "latest";
+  javPage = page;
+  fromWorks = false;
+  showBack(false);
+  clearDetail();
+  $("jav-feed").hidden = false;
+  clearWorksView();
+  setStatus($("search-status"), "加载最新…");
+  try {
+    const data = await api(`/api/jav/latest?kind=${encodeURIComponent(javKind)}&page=${page}`);
+    const items = data.items || [];
+    rememberWorks("", items);
+    renderWorks(items);
+    renderPager($("jav-pager"), page, null, (next) => loadJavFeed(next));
+    if (!items.length) {
+      $("jav-pager").querySelectorAll("button")[1].disabled = true;
+    }
+    const n = items.length;
+    setStatus(
+      $("search-status"),
+      data.error || (n ? `最新 ${n} 部` : "没有更多了"),
+      n && !data.error ? "good" : "bad",
+    );
+  } catch (err) {
+    setStatus($("search-status"), err.message, "bad");
+  }
+}
+
+function ensureJavLatest() {
+  if (javBootstrapped) return;
+  javBootstrapped = true;
+  loadJavFeed(1);
 }
 
 async function runCodeSearch(code, { fromList = false } = {}) {
   fromWorks = fromList;
   showBack(fromList && lastWorks.length > 0);
+  if (fromList) $("jav-feed").hidden = true;
   if (fromList) {
     $("works-wrap").hidden = true;
   } else {
@@ -245,6 +329,9 @@ async function runCodeSearch(code, { fromList = false } = {}) {
       fromWorks = false;
       showBack(false);
       clearDetail();
+      $("jav-feed").hidden = false;
+      javMode = "search";
+      $("jav-pager").innerHTML = "";
       renderWorks(lastWorks);
       const n = lastWorks.length;
       msg = meta.value.error || (n ? `找到 ${n} 部作品，点一张看磁链` : "没有搜到作品");
@@ -285,6 +372,8 @@ $("search-form").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button");
   btn.disabled = true;
   setStatus($("search-status"), "查询中…");
+  javMode = "search";
+  $("jav-pager").innerHTML = "";
   fromWorks = false;
   showBack(false);
   clearDetail();
@@ -301,6 +390,7 @@ $("search-form").addEventListener("submit", async (e) => {
     }
     const items = data.items || [];
     rememberWorks(q, items);
+    javMode = "search";
     history.replaceState({ javdl: "works", q }, "", location.hash || "#/");
     renderWorks(items);
     setStatus(
@@ -314,6 +404,16 @@ $("search-form").addEventListener("submit", async (e) => {
     btn.disabled = false;
   }
 });
+
+$("jav-kind").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-kind]");
+  if (!btn) return;
+  javKind = btn.dataset.kind;
+  markSeg("jav-kind", javKind);
+  loadJavFeed(1);
+});
+
+$("jav-latest").addEventListener("click", () => loadJavFeed(1));
 
 $("works-list").addEventListener("click", (e) => {
   const card = e.target.closest("[data-code]");
@@ -334,7 +434,7 @@ $("back-to-works").addEventListener("click", () => {
 
 window.addEventListener("popstate", (e) => {
   const hash = location.hash.replace("#/", "") || "";
-  if (hash.startsWith("queue") || hash.startsWith("settings")) return;
+  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western")) return;
   if (e.state && e.state.javdl === "code") {
     $("code-input").value = e.state.code || "";
     runCodeSearch(e.state.code, { fromList: true });
@@ -461,6 +561,8 @@ async function loadSettings() {
   form.javbus_base.value = s.javbus_base || "";
   form.clm_home.value = s.clm_home || "";
   form.clm_search.value = s.clm_search || "";
+  form.tpdb_api_key.value = "";
+  form.tpdb_api_key.placeholder = s.tpdb_api_key_set ? "已保存，留空不改" : "";
   form.downloader.value = s.downloader === "xunlei" ? "xunlei" : "aria2";
   form.xunlei_url.value = s.xunlei_url || "";
   form.xunlei_username.value = s.xunlei_username || "";
@@ -479,11 +581,16 @@ async function loadSettings() {
       ["aria2", h.aria2],
       ["JavBus", h.javbus],
       ["磁力猫", h.clm],
-    ].map(([name, x]) => `
+      ["ThePornDB", h.tpdb, "token"],
+    ].map(([name, x, mode]) => {
+      const ok = mode === "token" ? !!(x && (x.configured || x.ok)) : !!(x && x.ok);
+      const label = mode === "token" ? (ok ? "已配置" : "未填写") : (ok ? "正常" : "不通");
+      return `
       <div class="pill">
         <span>${name}</span>
-        <span class="dot ${x.ok ? "ok" : "no"}">${x.ok ? "正常" : "不通"}${x.version ? " · " + x.version : ""}</span>
-      </div>`).join("");
+        <span class="dot ${ok ? "ok" : "no"}">${label}${x && x.version ? " · " + x.version : ""}</span>
+      </div>`;
+    }).join("");
   } catch {
     $("health-box").innerHTML = "";
   }
@@ -501,6 +608,7 @@ $("settings-form").addEventListener("submit", async (e) => {
     javbus_base: form.javbus_base.value.trim(),
     clm_home: form.clm_home.value.trim(),
     clm_search: form.clm_search.value.trim(),
+    tpdb_api_key: form.tpdb_api_key.value.trim(),
     downloader: form.downloader.value,
     xunlei_url: form.xunlei_url.value.trim(),
     xunlei_username: form.xunlei_username.value.trim(),
@@ -510,6 +618,7 @@ $("settings-form").addEventListener("submit", async (e) => {
   };
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;
+  if (!body.tpdb_api_key) delete body.tpdb_api_key;
   try {
     await api("/api/settings", {
       method: "PUT",
@@ -544,6 +653,290 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     $("lightbox").hidden = true;
   }
+});
+
+function renderWesternWorks(items) {
+  const wrap = $("western-works-wrap");
+  const list = $("western-works");
+  westernItems = items || [];
+  if (!westernItems.length) {
+    wrap.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  list.innerHTML = westernItems.map((it) => `
+    <button type="button" class="work-card" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
+      <img src="${coverSrc(it.cover)}" alt="" />
+      <span class="code">${escapeHtml(it.site || "")}</span>
+      <span class="work-title">${escapeHtml(it.title || "")}</span>
+      <span class="work-people">${escapeHtml((it.performers || []).join("、"))}</span>
+      <span class="work-date">${escapeHtml(it.date || "")}</span>
+    </button>`).join("");
+}
+
+function renderWesternMeta(item) {
+  const card = $("western-meta");
+  westernCurrent = item;
+  if (!item) {
+    card.hidden = true;
+    card.innerHTML = "";
+    return;
+  }
+  const tags = (item.tags || []).map((g) => `<span class="tag">${escapeHtml(g)}</span>`).join("");
+  const people = (item.performers || []).join("、");
+  card.hidden = false;
+  card.innerHTML = `
+    <div class="meta-main">
+      <img class="cover" src="${coverSrc(item.cover || item.background)}" data-full="${escapeHtml(item.background || item.cover || "")}" alt="" />
+      <div>
+        <h1>${escapeHtml(item.title || "")}</h1>
+        <dl>
+          ${dlRow("片商", escapeHtml(item.site || ""))}
+          ${dlRow("日期", escapeHtml(item.date || ""))}
+          ${dlRow("时长", item.duration ? escapeHtml(item.duration + " 分钟") : "")}
+          ${dlRow("演员", escapeHtml(people))}
+        </dl>
+        ${tags ? `<div class="genre-row">${tags}</div>` : ""}
+        ${item.description ? `<p class="summary">${escapeHtml(item.description)}</p>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderWesternResources(items) {
+  const wrap = $("western-resources-wrap");
+  const list = $("western-resources");
+  westernResources = items || [];
+  if (!westernResources.length) {
+    wrap.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  list.innerHTML = westernResources.map((it, i) => `
+    <article class="res-item${i === 0 ? " top" : ""}">
+      <div class="res-rank">${it.rank || i + 1}</div>
+      <div class="res-body">
+        <div class="res-title">${escapeHtml(it.title || "")}</div>
+        <div class="res-meta">
+          <span>${escapeHtml(it.size || "?")}</span>
+          <span>热度 ${it.heat ?? 0}</span>
+          <span>${escapeHtml(it.date || "")}</span>
+        </div>
+      </div>
+      <div class="res-actions">
+        <button type="button" data-west-dl="${it.info_hash}">下载</button>
+        <button type="button" class="ghost" data-west-copy="${it.info_hash}">复制</button>
+      </div>
+    </article>`).join("");
+}
+
+function showWesternList() {
+  $("western-back").hidden = true;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  renderWesternWorks(westernItems);
+  const n = westernItems.length;
+  const latest = westernMode === "latest";
+  setStatus(
+    $("western-status"),
+    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部`) : (latest ? "没有更多了" : "没有搜到作品"),
+    n ? "good" : "bad",
+  );
+}
+
+async function loadWesternFeed(page) {
+  westernMode = "latest";
+  westernPage = page;
+  $("western-back").hidden = true;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  setStatus($("western-status"), "加载最新…");
+  try {
+    const data = await api(`/api/western/latest?kind=${encodeURIComponent(westernKind)}&page=${page}`);
+    westernItems = data.items || [];
+    renderWesternWorks(westernItems);
+    renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => loadWesternFeed(next));
+    const n = westernItems.length;
+    setStatus(
+      $("western-status"),
+      data.error || (n ? `最新 ${n} 部` : "没有更多了"),
+      n && !data.error ? "good" : "bad",
+    );
+  } catch (err) {
+    setStatus($("western-status"), err.message, "bad");
+  }
+}
+
+function ensureWesternLatest() {
+  if (westernBootstrapped) return;
+  westernBootstrapped = true;
+  loadWesternFeed(1);
+}
+
+async function openWestern(id, kind) {
+  const listed = westernItems.find((it) => String(it.id) === String(id)) || null;
+  westernCurrent = listed;
+  $("western-works-wrap").hidden = true;
+  $("western-feed").hidden = true;
+  $("western-back").hidden = false;
+  renderWesternMeta(listed);
+  renderWesternResources([]);
+  setStatus($("western-status"), "查询详情和磁链…");
+  const query = [listed && listed.site, listed && listed.title].filter(Boolean).join(" ");
+  const [detail, magnets] = await Promise.allSettled([
+    api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
+    query ? api("/api/resources?q=" + encodeURIComponent(query)) : Promise.resolve({ items: [] }),
+  ]);
+  let msg = "";
+  let tone = "";
+  if (detail.status === "fulfilled") {
+    if (detail.value.item) renderWesternMeta({ ...listed, ...detail.value.item, kind });
+    if (detail.value.error) {
+      msg = detail.value.error;
+      tone = "bad";
+    }
+  } else {
+    msg = "详情失败：" + detail.reason.message;
+    tone = "bad";
+  }
+  if (magnets.status === "fulfilled") {
+    const items = magnets.value.items || [];
+    renderWesternResources(items);
+    if (magnets.value.error) {
+      msg = (msg ? msg + "；" : "") + magnets.value.error;
+      tone = "bad";
+    } else if (!items.length) {
+      msg = (msg ? msg + "；" : "") + "没有搜到磁链";
+      tone = "bad";
+    } else if (!msg) {
+      msg = `找到 ${items.length} 条磁链`;
+      tone = "good";
+    }
+  } else {
+    msg = (msg ? msg + "；" : "") + "磁链搜索失败：" + magnets.reason.message;
+    tone = "bad";
+  }
+  setStatus($("western-status"), msg, tone);
+}
+
+async function loadWesternSearch(q, page) {
+  westernMode = "search";
+  westernPage = page;
+  $("western-back").hidden = true;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  setStatus($("western-status"), "查询中…");
+  const data = await api(
+    `/api/western/search?kind=${encodeURIComponent(westernKind)}&q=${encodeURIComponent(q)}&page=${page}`,
+  );
+  westernItems = data.items || [];
+  renderWesternWorks(westernItems);
+  renderPager(
+    $("western-pager"),
+    data.page || page,
+    data.last_page || page,
+    (next) => loadWesternSearch(q, next).catch((err) => {
+      setStatus($("western-status"), err.message, "bad");
+    }),
+  );
+  setStatus(
+    $("western-status"),
+    data.error || (westernItems.length ? `找到 ${westernItems.length} 部` : "没有搜到作品"),
+    westernItems.length && !data.error ? "good" : "bad",
+  );
+}
+
+$("western-kind").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-kind]");
+  if (!btn) return;
+  westernKind = btn.dataset.kind;
+  markSeg("western-kind", westernKind);
+  if (westernMode === "search") {
+    $("western-form").requestSubmit();
+    return;
+  }
+  loadWesternFeed(1);
+});
+
+$("western-latest").addEventListener("click", () => {
+  $("western-input").value = "";
+  loadWesternFeed(1);
+});
+
+$("western-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("western-input").value.trim();
+  if (!q) {
+    loadWesternFeed(1);
+    return;
+  }
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  try {
+    await loadWesternSearch(q, 1);
+  } catch (err) {
+    setStatus($("western-status"), err.message, "bad");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("western-works").addEventListener("click", (e) => {
+  const card = e.target.closest("[data-id]");
+  if (!card) return;
+  openWestern(card.dataset.id, card.dataset.kind || westernKind);
+});
+
+$("western-back-btn").addEventListener("click", showWesternList);
+
+$("western-resources").addEventListener("click", async (e) => {
+  const dl = e.target.closest("[data-west-dl]");
+  const copy = e.target.closest("[data-west-copy]");
+  const hash = (dl || copy)?.dataset.westDl || copy?.dataset.westCopy;
+  if (!hash) return;
+  const item = westernResources.find((x) => x.info_hash === hash);
+  if (!item) return;
+  if (copy) {
+    try {
+      await navigator.clipboard.writeText(item.magnet);
+      copy.textContent = "已复制";
+      setTimeout(() => { copy.textContent = "复制"; }, 1200);
+    } catch {
+      prompt("磁链", item.magnet);
+    }
+    return;
+  }
+  const work = westernCurrent || {};
+  dl.disabled = true;
+  try {
+    await api("/api/downloads", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "western",
+        tpdb_id: work.id || "",
+        site: work.site || "",
+        date: work.date || "",
+        work_title: work.title || item.title,
+        info_hash: item.info_hash,
+        title: item.title,
+      }),
+    });
+    location.hash = "#/queue";
+  } catch (err) {
+    setStatus($("western-status"), err.message, "bad");
+  } finally {
+    dl.disabled = false;
+  }
+});
+
+$("western-meta").addEventListener("click", (e) => {
+  const img = e.target.closest("img[data-full]");
+  if (!img) return;
+  openLightbox(img.dataset.full || img.getAttribute("data-full"));
 });
 
 window.addEventListener("hashchange", route);
