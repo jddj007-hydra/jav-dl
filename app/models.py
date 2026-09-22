@@ -40,6 +40,8 @@ class DownloadRequest(BaseModel):
     site: str = ""
     date: str = ""
     work_title: str = ""
+    tpdb_kind: str = ""
+    performers: list[str] = []
 
 
 class SettingsUpdate(BaseModel):

@@ -14,10 +14,12 @@ from app.scrape import (
     ScrapeError,
     find_code_videos,
     has_incomplete_files,
+    is_incomplete,
     list_ready_sources,
     newest_mtime,
     scrape_job,
 )
+from app.western_archive import find_western_videos, read_sidecar, scrape_western_job
 from app.textutil import format_size
 from app.trackers import magnet_for
 
@@ -235,6 +237,9 @@ class JobManager:
             if time.time() - updated < SCRAPE_RETRY_AFTER:
                 return job
         if not normalize_code(job.get("code") or ""):
+            info = read_sidecar(Path(job.get("dest") or ""))
+            if self.settings.western_root and info and info.get("kind") == "western":
+                return await self._scrape_western(job, info)
             if status != "skipped":
                 await self.db.update_job(job["id"], scrape_status="skipped", scrape_error=None)
                 job["scrape_status"] = "skipped"
@@ -289,6 +294,39 @@ class JobManager:
 
         if self.library:
             await self.library.upsert(result)
+        return await self._mark_archived(job, result["path"])
+
+    async def _scrape_western(self, job: dict, info: dict) -> dict:
+        dest = Path(job.get("dest") or "")
+        settle = max(0, int(self.settings.scrape_settle_seconds))
+        min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
+        try:
+            src, _videos = find_western_videos(
+                self.settings.download_dir,
+                dest,
+                job.get("title") or info.get("title") or "",
+                min_bytes,
+            )
+        except ScrapeError as exc:
+            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
+            job["scrape_status"] = "error"
+            job["scrape_error"] = str(exc)
+            return job
+        if any(is_incomplete(video) for video in _videos):
+            return await self._mark_waiting(job)
+        if src.is_dir() and src.resolve() != self.settings.download_dir.resolve() and has_incomplete_files(src):
+            return await self._mark_waiting(job)
+        mtime = max((video.stat().st_mtime for video in _videos), default=0)
+        if mtime and time.time() - mtime < settle:
+            return await self._mark_waiting(job)
+        try:
+            async with self._scrape_lock:
+                result = await scrape_western_job(self.settings, job, info)
+        except ScrapeError as exc:
+            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
+            job["scrape_status"] = "error"
+            job["scrape_error"] = str(exc)
+            return job
         return await self._mark_archived(job, result["path"])
 
     async def _busy_codes(self) -> set[str]:

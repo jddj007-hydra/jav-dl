@@ -66,7 +66,7 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 1. 设置里填写 ThePornDB token（账号在 [theporndb.net](https://theporndb.net) 自己生成）。留空表示不改已保存的 token
 2. 打开「欧美」即拉场景最新；可切「电影」、翻页，或用片名 / 演员搜索
 3. 点一张看片商、演员、简介，再用「片商 + 标题」查磁力猫。按热度排，合集和大约 15GB 以上靠后，不用无码 / 中字那套规则
-4. 没有「库里已有」。下载目录是 `western/{片商-日期-标题}`，文件留在下载目录，不写进 `YYYYMM/番号/`
+4. 没有「库里已有」。下载目录是 `western/{片商-日期-标题}`。配置了 `WESTERN_MEDIA_DIR` 后，下完会按片商归档到该目录（`片商/文件名.nfo` 和 `文件名-poster.jpg`），不写进 `YYYYMM/番号/`
 
 两边的下载都进同一个队列。点下载后到「队列」看进度。
 
@@ -124,6 +124,7 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `DOWNLOAD_DIR` | `./downloads` | 本机下载根目录 |
 | `MEDIA_DIR` | `./media` | 刮削归档根目录（`YYYYMM/番号/`） |
 | `SCRAPE_ENABLED` | `true` | 带番号的文件是否刮削归档 |
+| `WESTERN_MEDIA_DIR` | 空 | 欧美归档根目录。空则只下载不归档。生产上是 6T 的 `欧美` |
 | `TPDB_API_KEY` | 空 | ThePornDB token，也可只在设置页填写 |
 | `ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | Docker 里是 `http://aria2:6800/jsonrpc` |
 | `ARIA2_SECRET` | `jav-dl-rpc` | 与 aria2 RPC 密钥一致 |

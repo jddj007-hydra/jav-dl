@@ -328,7 +328,7 @@ async def resolve_metadata(settings: Settings, db, code: str) -> dict:
     return meta
 
 
-async def fetch_cover_bytes(settings: Settings, url: str) -> bytes:
+async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = None) -> bytes:
     if not url:
         raise ScrapeError("没有封面地址")
     cache_dir = settings.data_dir / "img_cache"
@@ -338,7 +338,8 @@ async def fetch_cover_bytes(settings: Settings, url: str) -> bytes:
     if cached.exists() and cached.stat().st_size > 0:
         return cached.read_bytes()
     async with site_client(settings) as client:
-        r = await client.get(url, headers={"Referer": settings.javbus_base + "/"})
+        page = referer or (settings.javbus_base.rstrip("/") + "/")
+        r = await client.get(url, headers={"Referer": page})
     if r.status_code >= 400 or not r.content:
         raise ScrapeError("封面下载失败")
     if len(r.content) > 8 * 1024 * 1024:

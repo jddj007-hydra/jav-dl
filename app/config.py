@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     download_dir: Path = Path("./downloads")
     media_dir: Path = Path("./media")
+    western_media_dir: str = ""
     scrape_enabled: bool = True
     scrape_settle_seconds: int = 60
     scrape_min_mb: int = 50
@@ -67,6 +68,13 @@ class Settings(BaseSettings):
             self.media_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+
+    @property
+    def western_root(self) -> Path | None:
+        raw = (self.western_media_dir or "").strip()
+        if not raw or raw == ".":
+            return None
+        return Path(raw)
 
     @property
     def db_path(self) -> Path:

@@ -929,8 +929,10 @@ $("western-resources").addEventListener("click", async (e) => {
       body: JSON.stringify({
         kind: "western",
         tpdb_id: work.id || "",
+        tpdb_kind: work.kind || "scene",
         site: work.site || "",
         date: work.date || "",
+        performers: work.performers || [],
         work_title: work.title || item.title,
         info_hash: item.info_hash,
         title: item.title,

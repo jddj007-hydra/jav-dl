@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.codes import normalize_code
 from app.downloader.jobs import BackendError
 from app.models import DownloadRequest
 from app.slug import western_slug
+from app.western_archive import write_sidecar
 
 router = APIRouter()
 
@@ -34,6 +37,18 @@ async def create_download(request: Request, body: DownloadRequest):
                 body.title or work,
                 dest_rel=f"western/{slug}",
             )
+            kind_name = (body.tpdb_kind or "scene").strip().lower()
+            if kind_name not in ("scene", "movie"):
+                kind_name = "scene"
+            write_sidecar(Path(job["dest"]), {
+                "kind": "western",
+                "tpdb_id": (body.tpdb_id or "").strip(),
+                "tpdb_kind": kind_name,
+                "site": (body.site or "").strip(),
+                "title": work,
+                "date": (body.date or "").strip(),
+                "performers": [name.strip() for name in body.performers if name and name.strip()],
+            })
         else:
             code = normalize_code(body.code)
             if not code:

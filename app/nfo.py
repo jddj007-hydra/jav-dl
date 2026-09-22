@@ -34,12 +34,18 @@ def build_nfo(meta: dict) -> str:
     _text(movie, "premiered", release)
     _text(movie, "releasedate", release)
     _text(movie, "runtime", runtime_minutes(meta.get("runtime")))
+    _text(movie, "plot", meta.get("plot"))
     _text(movie, "studio", meta.get("studio"))
     _text(movie, "maker", meta.get("studio"))
     _text(movie, "label", meta.get("label"))
     _text(movie, "director", meta.get("director"))
     _text(movie, "id", code)
-    if code:
+    external_id = (meta.get("uniqueid") or "").strip()
+    external_type = (meta.get("uniqueid_type") or "").strip()
+    if external_id and external_type:
+        uid = ET.SubElement(movie, "uniqueid", {"type": external_type, "default": "true"})
+        uid.text = external_id
+    elif code:
         uid = ET.SubElement(movie, "uniqueid", {"type": "num", "default": "true"})
         uid.text = code
         uid_bus = ET.SubElement(movie, "uniqueid", {"type": "javbus"})

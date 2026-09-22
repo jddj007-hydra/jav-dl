@@ -126,6 +126,79 @@ def test_site_name_alone_does_not_count_as_the_scene():
     assert match == "none"
 
 
+def test_western_archive_uses_existing_studio_folder(tmp_path):
+    from app.nfo import build_nfo
+    from app.western_archive import find_western_videos, studio_dir
+
+    root = tmp_path / "欧美"
+    (root / "EvilAngel").mkdir(parents=True)
+    assert studio_dir(root, "Evil Angel") == root / "EvilAngel"
+    assert studio_dir(root, "New Site").name == "NewSite"
+
+    download = tmp_path / "downloads"
+    torrent = download / "Roccos.Teens.Unleashed.6"
+    torrent.mkdir(parents=True)
+    video = torrent / "scene.mp4"
+    video.write_bytes(b"x" * 80)
+    src, videos = find_western_videos(
+        download,
+        download / "western" / "slug",
+        "Roccos.Teens.Unleashed.6.XXX",
+        min_bytes=50,
+    )
+    assert src == torrent
+    assert videos == [video]
+
+    xml = build_nfo({
+        "title": "Rocco's Teens Unleashed",
+        "release_date": "2025-08-16",
+        "studio": "Evil Angel",
+        "actors": ["Baby Doll"],
+        "genres": ["Feature"],
+        "plot": "hello",
+        "uniqueid": "abc",
+        "uniqueid_type": "tpdb",
+    })
+    parsed = __import__("xml.etree.ElementTree", fromlist=["ElementTree"]).fromstring(xml)
+    assert parsed.findtext("studio") == "Evil Angel"
+    assert parsed.find("uniqueid").attrib["type"] == "tpdb"
+    assert parsed.find("uniqueid").text == "abc"
+    assert parsed.findtext("plot") == "hello"
+
+
+def test_scrape_western_moves_file_into_studio(tmp_path):
+    import asyncio
+
+    from app.config import Settings
+    from app.western_archive import scrape_western_job
+
+    async def run():
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            download_dir=tmp_path / "dl",
+            media_dir=tmp_path / "media",
+            western_media_dir=str(tmp_path / "欧美"),
+            scrape_min_mb=0,
+        )
+        settings.ensure_dirs()
+        (settings.western_root / "Brazzers").mkdir(parents=True)
+        torrent = settings.download_dir / "brazzers.scene.title"
+        torrent.mkdir()
+        (torrent / "clip.mp4").write_bytes(b"x" * 80)
+        result = await scrape_western_job(
+            settings,
+            {"dest": str(settings.download_dir / "western" / "slug"), "title": "brazzers.scene.title.xxx"},
+            {"kind": "western", "site": "Brazzers", "title": "Scene Title", "date": "2024-01-02", "performers": ["Ann Example"]},
+        )
+        folder = settings.western_root / "Brazzers"
+        assert Path(result["path"]) == folder
+        assert list(folder.glob("*.mp4"))
+        assert list(folder.glob("*.nfo"))
+        assert not (torrent / "clip.mp4").exists()
+
+    asyncio.run(run())
+
+
 def test_western_slug_is_not_a_code():
     slug = western_slug("AB", "", "123", "id")
     assert normalize_code(slug) is None
