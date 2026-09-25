@@ -13,12 +13,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import load_settings
 from app.db import Database
+from app.httputil import close_clients
 from app.logsetup import ensure_app_logging
 from app.downloader.aria2 import Aria2
 from app.downloader.jobs import JobManager
 from app.downloader.xunlei import Xunlei
 from app.library import Library
-from app.routers import downloads, health, images, resources, search, settings as settings_router, western
+from app.routers import downloads, health, images, library_page, resources, search, settings as settings_router, western
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("app")
@@ -29,8 +30,6 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         settings = request.app.state.settings
         user, pw = settings.auth_user, settings.auth_pass
         if not (user and pw):
-            return await call_next(request)
-        if request.url.path == "/api/health":
             return await call_next(request)
         import base64
 
@@ -52,10 +51,20 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def warn_open_auth(settings) -> None:
+    if settings.auth_user and settings.auth_pass:
+        return
+    log.warning(
+        "未设置 AUTH_USER 和 AUTH_PASS。进程监听 0.0.0.0 时，局域网可以打开设置页，"
+        "把迅雷地址改掉，服务会带着已保存的面板密码去访问新地址。请两个都设上。"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_app_logging()
     settings = load_settings()
+    warn_open_auth(settings)
     db = Database(settings)
     await db.init()
     aria2 = Aria2(settings)
@@ -91,6 +100,7 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    await close_clients()
 
 
 def create_app() -> FastAPI:
@@ -101,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(western.router)
     app.include_router(resources.router)
     app.include_router(downloads.router)
+    app.include_router(library_page.router)
     app.include_router(settings_router.router)
     app.include_router(images.router)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

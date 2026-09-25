@@ -24,6 +24,7 @@ from app.western_archive import (
     find_western_videos,
     list_ready_western,
     read_sidecar,
+    release_names_match,
     scrape_western_job,
     scrape_western_source,
 )
@@ -37,7 +38,14 @@ _ARIA2_GID = re.compile(r"[0-9a-fA-F]{16}")
 
 ACTIVE = {"active", "waiting", "paused", "downloading", "queued"}
 DONE = {"complete", "error", "removed", "cancelled"}
+TERMINAL = {"complete", "cancelled", "error"}
 SCRAPE_DONE = {"archived", "skipped"}
+CLEARABLE = {
+    "complete": ["complete"],
+    "cancelled": ["cancelled"],
+    "error": ["error"],
+    "finished": ["complete", "cancelled", "error"],
+}
 SCRAPE_RETRY_AFTER = 300
 WATCH_EVERY = 15
 
@@ -384,6 +392,7 @@ class JobManager:
         if mtime and time.time() - mtime < settle:
             return await self._mark_waiting(job)
 
+        job = await self._mark_scraping(job)
         try:
             async with self._scrape_lock:
                 result = await scrape_job(self.settings, self.db, job, found=found)
@@ -428,6 +437,7 @@ class JobManager:
         mtime = await asyncio.to_thread(source_mtime, src)
         if mtime and time.time() - mtime < settle:
             return await self._mark_waiting(job)
+        job = await self._mark_scraping(job)
         try:
             async with self._scrape_lock:
                 result = await scrape_western_job(self.settings, job, info, found=found)
@@ -437,24 +447,40 @@ class JobManager:
             job["scrape_status"] = "error"
             job["scrape_error"] = str(exc)
             return job
+        if self.library:
+            await self.library.remember_western(result)
         return await self._mark_archived(job, result["path"])
+
+    def _owns_files(self, job: dict) -> bool:
+        if job.get("status") in ("cancelled", "error"):
+            return False
+        return (job.get("scrape_status") or "") not in SCRAPE_DONE
+
+    async def _owning_jobs(self) -> list[dict]:
+        return [job for job in await self.db.list_jobs() if self._owns_files(job)]
+
+    def _claims(self, job: dict, src: Path) -> bool:
+        dest = Path(job.get("dest") or "")
+        if dest.parts and _paths_overlap(dest, src):
+            return True
+        if normalize_code(job.get("code") or ""):
+            return False
+        label = src.stem if src.is_file() else src.name
+        return release_names_match(label, job.get("title") or "")
 
     async def _busy_codes(self) -> set[str]:
         busy: set[str] = set()
-        for job in await self.db.list_jobs():
-            code = (job.get("code") or "").strip().upper()
-            if not code:
-                continue
-            status = job.get("status")
-            if status in ("cancelled", "error"):
-                continue
-            if status != "complete":
-                busy.add(code)
-                continue
-            scrape_st = job.get("scrape_status") or ""
-            if scrape_st in ("waiting", "scraping"):
+        for job in await self._owning_jobs():
+            code = normalize_code(job.get("code") or "")
+            if code:
                 busy.add(code)
         return busy
+
+    async def _mark_scraping(self, job: dict) -> dict:
+        await self.db.update_job(job["id"], scrape_status="scraping", scrape_error=None)
+        job["scrape_status"] = "scraping"
+        job["scrape_error"] = None
+        return job
 
     async def watch_western(self) -> None:
         """Xunlei panel downloads have no jav-dl job. Match Site.YY.MM.DD names."""
@@ -472,13 +498,16 @@ class JobManager:
             settle,
             now,
         )
+        owners = await self._owning_jobs()
         for src in ready:
+            if any(self._claims(job, src) for job in owners):
+                continue
             key = str(src)
             if self._watch_fail.get(key, 0) > now:
                 continue
             try:
                 async with self._scrape_lock:
-                    await scrape_western_source(self.settings, src)
+                    result = await scrape_western_source(self.settings, src)
             except ScrapeError as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s: %s", key, exc)
@@ -488,6 +517,8 @@ class JobManager:
                 log.warning("监控归档失败 %s", key, exc_info=True)
                 continue
             self._watch_fail.pop(key, None)
+            if self.library and isinstance(result, dict):
+                await self.library.remember_western(result)
             return
 
     async def watch_downloads(self) -> None:
@@ -667,8 +698,54 @@ class JobManager:
         self._aria2_settled.add(job_id)
         return await self.public(job)
 
+    async def delete(self, job_id: str) -> None:
+        job = await self._require(job_id)
+        if job.get("status") not in TERMINAL:
+            raise ValueError("进行中的任务请先取消")
+        await self.db.delete_job(job_id)
+        self._aria2_settled.discard(job_id)
+
+    async def clear_finished(self, status: str) -> int:
+        statuses = CLEARABLE.get((status or "").strip().lower())
+        if not statuses:
+            raise ValueError("只能清理已完成、已取消或失败的记录")
+        deleted = await self.db.delete_jobs_with_status(statuses)
+        if "complete" in statuses:
+            self._aria2_settled.clear()
+        return deleted
+
+    async def rescrape(self, job_id: str) -> dict:
+        job = await self._require(job_id)
+        if job.get("status") != "complete":
+            raise ValueError("只有下载完成的任务可以重新刮削")
+        await self.db.update_job(job_id, scrape_status="", scrape_error=None, archive_path="")
+        fresh = await self.db.get_job(job_id)
+        if not fresh:
+            raise KeyError(job_id)
+        return await self.public(await self.maybe_scrape(fresh))
+
     async def _require(self, job_id: str) -> dict:
         job = await self.db.get_job(job_id)
         if not job:
             raise KeyError(job_id)
         return job
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    try:
+        a = left.resolve() if left.exists() else left
+        b = right.resolve() if right.exists() else right
+    except OSError:
+        return False
+    if a == b:
+        return True
+    try:
+        a.relative_to(b)
+        return True
+    except ValueError:
+        pass
+    try:
+        b.relative_to(a)
+        return True
+    except ValueError:
+        return False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.library import attach_western, library_info
 from app.sources.tpdb import (
     TpdbError,
     fetch_detail,
@@ -65,7 +66,8 @@ async def _cached_list(
     if cache_key:
         cached = await db.get_metadata(cache_key, settings.latest_ttl)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list):
-            return {**cached, "items": _visible(cached["items"], latest=latest), "error": None}
+            visible = _visible(cached["items"], latest=latest)
+            return {**cached, "items": await _mark_library(request, visible), "error": None}
     try:
         payload = await fetch_list(settings, kind, page, query, theme)
     except TpdbError as exc:
@@ -84,7 +86,14 @@ async def _cached_list(
     }
     if cache_key:
         await db.put_metadata(cache_key, body)
-    return {**body, "items": _visible(body["items"], latest=latest), "error": None}
+    visible = _visible(body["items"], latest=latest)
+    return {**body, "items": await _mark_library(request, visible), "error": None}
+
+
+async def _mark_library(request: Request, items: list[dict]) -> list[dict]:
+    ids = [str(item.get("id") or "") for item in items]
+    hits = await request.app.state.library.western_many(ids)
+    return attach_western(items, hits)
 
 
 @router.get("/api/western/latest")
@@ -124,10 +133,20 @@ async def western_detail(request: Request, kind: str, item_id: str):
     key = f"tpdb:{kind}:{item_id}"
     cached = await db.get_metadata(key, settings.metadata_ttl)
     if isinstance(cached, dict) and cached.get("id"):
-        return {"item": cached, "error": None, "cached": True}
+        return {"item": await _with_library(request, cached), "error": None, "cached": True}
     try:
         item = await fetch_detail(settings, kind, item_id)
     except TpdbError as exc:
         return {"item": None, "error": str(exc), "cached": False}
     await db.put_metadata(key, item)
-    return {"item": item, "error": None, "cached": False}
+    return {"item": await _with_library(request, item), "error": None, "cached": False}
+
+
+async def _with_library(request: Request, item: dict) -> dict:
+    row = dict(item)
+    hits = await request.app.state.library.western_many([str(row.get("id") or "")])
+    hit = hits.get(str(row.get("id") or ""))
+    if hit is not None:
+        hit = {**hit, "has_video": 1}
+    row["library"] = library_info(hit)
+    return row

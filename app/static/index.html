@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=15" />
+  <link rel="stylesheet" href="/static/style.css?v=16" />
 </head>
 <body>
   <header class="top">
@@ -13,6 +13,7 @@
       <nav>
         <a href="#/" data-nav="search">JAV</a>
         <a href="#/western" data-nav="western">欧美</a>
+        <a href="#/library" data-nav="library">媒体库</a>
         <a href="#/queue" data-nav="queue">队列</a>
         <a href="#/settings" data-nav="settings">设置</a>
       </nav>
@@ -107,12 +108,40 @@
       </div>
     </section>
 
+    <section id="view-library" class="view" hidden>
+      <div class="section-head">
+        <h2>媒体库</h2>
+      </div>
+      <div class="feed-bar">
+        <div class="seg" id="library-kind">
+          <button type="button" data-lib="jav" class="on">番号</button>
+          <button type="button" data-lib="western">欧美</button>
+        </div>
+      </div>
+      <p class="hint" id="library-root"></p>
+      <p id="library-status" class="status" hidden></p>
+      <div id="library-list"></div>
+    </section>
+
     <section id="view-queue" class="view" hidden>
       <div class="section-head">
         <h2>下载队列</h2>
         <div id="queue-panels" class="panel-links" hidden></div>
       </div>
       <p class="hint">关掉浏览器不影响任务。磁链走 DHT，刚开始可能要等一会儿。</p>
+      <div class="feed-bar" id="queue-tools">
+        <div class="seg" id="queue-filter">
+          <button type="button" data-filter="all" class="on">全部</button>
+          <button type="button" data-filter="active">下载中</button>
+          <button type="button" data-filter="complete">已完成</button>
+          <button type="button" data-filter="error">失败</button>
+          <button type="button" data-filter="cancelled">已取消</button>
+        </div>
+        <button type="button" class="ghost" id="queue-clear-complete">清空已完成</button>
+        <button type="button" class="ghost" id="queue-clear-finished">清空已结束</button>
+        <button type="button" class="ghost" id="queue-rescan">重扫媒体库</button>
+      </div>
+      <p id="queue-note" class="status" hidden></p>
       <div id="queue-empty" class="empty" hidden>还没有任务</div>
       <ul id="queue-list" class="queue"></ul>
     </section>
@@ -136,6 +165,10 @@
         <label>磁力猫搜索域
           <input name="clm_search" />
         </label>
+        <label>备用搜索域
+          <input name="clm_search_backup" placeholder="主域失败或没结果时再用，留空则关掉" />
+        </label>
+        <p class="hint">同一个番号或同一组欧美关键词，十分钟内直接用上次的磁链。主搜索域打不开或没有结果时，再试备用搜索域。留空保存会清掉备用域。</p>
         <label>ThePornDB token
           <input name="tpdb_api_key" type="password" autocomplete="off" />
         </label>
@@ -168,8 +201,19 @@
         <label>归档目录
           <input name="media_dir" placeholder="./media" />
         </label>
+        <label>欧美归档目录
+          <input name="western_media_dir" placeholder="留空表示不改" />
+        </label>
+        <label>完成后静置（秒）
+          <input name="scrape_settle_seconds" inputmode="numeric" />
+        </label>
+        <label>最小体积（MB）
+          <input name="scrape_min_mb" inputmode="numeric" />
+        </label>
+        <p class="hint">静置是下完后再等多久才搬文件。小于最小体积的文件不当成正片。这三项和欧美目录留空保存会保留原来的值。</p>
         <p class="hint">监控下载目录，文件静置完成后按番号写 NFO / poster.jpg / fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
         <p class="hint" id="download-dir"></p>
+        <p class="hint" id="tls-status"></p>
         <button type="submit">保存</button>
         <p id="settings-status" class="status" hidden></p>
       </form>
@@ -179,6 +223,6 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=19"></script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

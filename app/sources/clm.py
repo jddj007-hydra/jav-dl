@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import logging
 import re
+import time
 from urllib.parse import urljoin
 
 import httpx
@@ -13,6 +15,12 @@ from app.httputil import site_client
 from app.ranking import detect_tags, is_pack
 from app.textutil import parse_size, strip_em
 from app.trackers import magnet_for
+
+# 同一个番号或同一组关键词，这段时间内直接用上次的磁链，不再打磁力猫。
+MAGNET_CACHE_TTL = 10 * 60
+MAGNET_CACHE_MAX = 200
+_magnet_cache: dict[tuple, tuple[float, list[dict]]] = {}
+log = logging.getLogger("app.clm")
 
 ATOB_RE = re.compile(r"window\.atob\(\"([^\"]+)\"\)")
 LOC_RE = re.compile(r"location\.(?:href|hree)\s*=\s*['\"]([^'\"]+)['\"]", re.I)
@@ -134,45 +142,147 @@ async def fetch_search_page(client: httpx.AsyncClient, url: str, hops: int = 0) 
     return html
 
 
-async def search_magnets(settings: Settings, code: str, pages: int = 2) -> list[dict]:
-    word = _b64_word(code)
-    base = settings.clm_search.rstrip("/")
-    async with site_client(settings) as client:
+def clear_magnet_cache() -> None:
+    _magnet_cache.clear()
+
+
+def _origin(raw: str | None) -> str:
+    return (raw or "").strip().rstrip("/")
+
+
+def _search_origins(settings: Settings) -> list[str]:
+    """Primary search domain, then the backup domain when it is different."""
+    primary = _origin(settings.clm_search)
+    backup = _origin(getattr(settings, "clm_search_backup", ""))
+    origins: list[str] = []
+    seen: set[str] = set()
+    for base in (primary, backup):
+        key = base.lower()
+        if not base or key in seen:
+            continue
+        seen.add(key)
+        origins.append(base)
+    return origins
+
+
+def _copy_items(items: list[dict]) -> list[dict]:
+    copied: list[dict] = []
+    for item in items:
+        row = dict(item)
+        tags = row.get("tags")
+        if isinstance(tags, list):
+            row["tags"] = list(tags)
+        copied.append(row)
+    return copied
+
+
+def _cache_key(query: str, pages: int, settings: Settings) -> tuple:
+    origins = tuple(base.lower() for base in _search_origins(settings))
+    home = _origin(settings.clm_home).lower()
+    return (query.strip().casefold(), pages, origins, home)
+
+
+def _cache_get(key: tuple, now: float) -> list[dict] | None:
+    row = _magnet_cache.get(key)
+    if row is None:
+        return None
+    stored, items = row
+    if now - stored >= MAGNET_CACHE_TTL:
+        _magnet_cache.pop(key, None)
+        return None
+    return _copy_items(items)
+
+
+def _cache_put(key: tuple, items: list[dict], now: float) -> None:
+    _magnet_cache[key] = (now, _copy_items(items))
+    expired = [
+        cached_key
+        for cached_key, (stored, _cached_items) in _magnet_cache.items()
+        if now - stored >= MAGNET_CACHE_TTL
+    ]
+    for cached_key in expired:
+        _magnet_cache.pop(cached_key, None)
+    while len(_magnet_cache) > MAGNET_CACHE_MAX:
+        oldest = min(_magnet_cache, key=lambda cached_key: _magnet_cache[cached_key][0])
+        _magnet_cache.pop(oldest, None)
+
+
+async def _collect_pages(
+    client: httpx.AsyncClient,
+    base: str,
+    word: str,
+    code: str,
+    pages: int,
+) -> tuple[list[dict], Exception | None]:
+    collected: list[dict] = []
+    seen: set[str] = set()
+    last_err: Exception | None = None
+    for page in range(1, pages + 1):
+        query_url = f"{base}/search?word={word}&sort=hits"
+        if page > 1:
+            query_url += f"&p={page}"
         try:
-            await client.get(settings.clm_home.rstrip("/") + "/")
-        except httpx.HTTPError:
-            pass
-        collected: list[dict] = []
-        seen: set[str] = set()
-        last_err: Exception | None = None
-        for page in range(1, pages + 1):
-            q = f"{base}/search?word={word}&sort=hits"
-            if page > 1:
-                q += f"&p={page}"
+            html = await fetch_search_page(client, query_url)
+        except MagnetSearchError as exc:
+            last_err = exc
+            break
+        except httpx.HTTPError as exc:
+            last_err = exc
+            break
+        chunk = parse_search_html(html, code)
+        if not chunk:
+            break
+        for item in chunk:
+            if item["info_hash"] in seen:
+                continue
+            seen.add(item["info_hash"])
+            collected.append(item)
+    return collected, last_err
+
+
+async def search_magnets(settings: Settings, code: str, pages: int = 2) -> list[dict]:
+    query = (code or "").strip()
+    if not query:
+        return []
+    pages = max(1, int(pages))
+    key = _cache_key(query, pages, settings)
+    cached = _cache_get(key, time.monotonic())
+    if cached is not None:
+        return cached
+
+    word = _b64_word(query)
+    origins = _search_origins(settings)
+    home = _origin(settings.clm_home)
+    if not origins and home:
+        origins = [home]
+    async with site_client(settings) as client:
+        if home:
             try:
-                html = await fetch_search_page(client, q)
-            except httpx.HTTPError as e:
-                last_err = e
+                await client.get(home + "/")
+            except httpx.HTTPError:
+                pass
+        collected: list[dict] = []
+        last_err: Exception | None = None
+        for index, base in enumerate(origins):
+            items, err = await _collect_pages(client, base, word, query, pages)
+            if items:
+                collected = items
+                last_err = None
                 break
-            chunk = parse_search_html(html, code)
-            if not chunk and page == 1:
-                # maybe the configured domain bounced poorly; try home origin
-                home = settings.clm_home.rstrip("/")
-                if home != base:
-                    try:
-                        html = await fetch_search_page(
-                            client, f"{home}/search?word={word}&sort=hits"
-                        )
-                        chunk = parse_search_html(html, code)
-                    except httpx.HTTPError as e:
-                        last_err = e
-            if not chunk:
-                break
-            for it in chunk:
-                if it["info_hash"] in seen:
-                    continue
-                seen.add(it["info_hash"])
-                collected.append(it)
+            last_err = err or last_err
+            if index == 0 and len(origins) > 1:
+                log.info("磁力猫主域没有结果，改用备用搜索域")
+        tried = {base.lower() for base in origins}
+        if not collected and home and home.lower() not in tried:
+            items, err = await _collect_pages(client, home, word, query, pages)
+            if items:
+                collected = items
+                last_err = None
+            else:
+                last_err = err or last_err
         if not collected and last_err:
+            if isinstance(last_err, MagnetSearchError):
+                raise last_err
             raise MagnetSearchError(f"磁力猫请求失败: {last_err}")
-        return collected
+        _cache_put(key, collected, time.monotonic())
+        return _copy_items(collected)

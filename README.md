@@ -29,7 +29,7 @@ JAV
 docker compose up -d --build
 ```
 
-打开 http://localhost:8787
+打开 http://localhost:8787。web 服务带 healthcheck，打的是本机 `/api/health`；设了账号密码时会带上 Basic。
 
 下载文件在 Docker volume `jav-downloads` 里。宿主机有 Clash 时，可在设置页打开代理，地址用 `http://host.docker.internal:7890`。**代理只用于查站，BT 不走代理。**
 
@@ -84,6 +84,7 @@ FastAPI :8787
    ├── /api/western/{kind}/{id}
    ├── /api/resources         磁力猫：?code= 番号排序，?q= 关键词按热度
    ├── /api/downloads         入队 / 暂停 / 继续 / 取消
+   ├── /api/library           媒体库：番号按月份，欧美按片商
    ├── /api/img               封面代理 + 磁盘缓存
    ├── /api/settings          代理、站点、ThePornDB token（写入 data/config.json）
    └── /api/health            aria2 / 迅雷 / JavBus / 磁力猫 / token 是否已填
@@ -99,7 +100,7 @@ FastAPI :8787
 | `app/slug.py` | 欧美下载目录名，保证不是合法番号 |
 | `app/sources/javbus.py` | JavBus HTML 解析（详情、搜索、最新列表） |
 | `app/sources/tpdb.py` | ThePornDB 场景 / 电影 |
-| `app/sources/clm.py` | 磁力猫搜索（atob 包装页、base32 id → info_hash） |
+| `app/sources/clm.py` | 磁力猫搜索（atob 包装页、base32 id → info_hash、十分钟结果缓存、备用域） |
 | `app/ranking.py` | 番号磁链的 UC/U/C 排序；关键词磁链按热度 |
 | `app/downloader/jobs.py` | 任务状态机，对接 aria2 / 迅雷 |
 | `app/scrape.py` | 带番号的文件写 NFO/封面，归档到 `YYYYMM/番号/`；跳过 `western/` |
@@ -124,13 +125,16 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `DOWNLOAD_DIR` | `./downloads` | 本机下载根目录 |
 | `MEDIA_DIR` | `./media` | 刮削归档根目录（`YYYYMM/番号/`） |
 | `SCRAPE_ENABLED` | `true` | 带番号的文件是否刮削归档 |
-| `WESTERN_MEDIA_DIR` | 空 | 欧美归档根目录。空则只下载不归档。生产上是 6T 的 `欧美` |
+| `SCRAPE_SETTLE_SECONDS` | `60` | 下完后再静置这么久才归档。设置页可改，留空保存则保留原值 |
+| `SCRAPE_MIN_MB` | `50` | 小于这个体积不当成正片。设置页可改，留空保存则保留原值 |
+| `WESTERN_MEDIA_DIR` | 空 | 欧美归档根目录。空则只下载不归档。设置页可改，留空保存则保留原值 |
 | `TPDB_API_KEY` | 空 | ThePornDB token，也可只在设置页填写 |
 | `ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | Docker 里是 `http://aria2:6800/jsonrpc` |
 | `ARIA2_SECRET` | `jav-dl-rpc` | 与 aria2 RPC 密钥一致 |
+| `CLM_SEARCH_BACKUP` | 空 | 主搜索域失败或没有结果时再用的磁力猫域名。设置页可改，留空保存会清掉 |
 | `PROXY_ENABLED` | `false` | 查站代理 |
 | `PROXY_URL` | `http://127.0.0.1:7890` | Docker 里可写 `http://host.docker.internal:7890` |
-| `AUTH_USER` / `AUTH_PASS` | 空 | 同时非空则开 HTTP Basic |
+| `AUTH_USER` / `AUTH_PASS` | 空 | 同时非空则开 HTTP Basic，`/api/health` 也要登录。都空着时启动会警告 |
 | `DOWNLOADER` | `aria2` | `aria2` 或 `xunlei` |
 | `XUNLEI_URL` | `http://127.0.0.1:2345` | 群晖迅雷面板 |
 | `XUNLEI_USERNAME` / `XUNLEI_PASSWORD` | 空 | 面板账号 |

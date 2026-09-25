@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS library (
     has_poster INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS western_library (
+    path TEXT PRIMARY KEY,
+    tpdb_id TEXT NOT NULL DEFAULT '',
+    studio TEXT NOT NULL,
+    title TEXT NOT NULL,
+    has_nfo INTEGER NOT NULL DEFAULT 0,
+    has_poster INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
+);
 """
 
 DOWNLOAD_COLUMNS = (
@@ -146,6 +155,24 @@ class Database:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def delete_job(self, job_id: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("DELETE FROM downloads WHERE id = ?", (job_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def delete_jobs_with_status(self, statuses: list[str]) -> int:
+        if not statuses:
+            return 0
+        marks = ",".join("?" for _ in statuses)
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                f"DELETE FROM downloads WHERE status IN ({marks})",
+                statuses,
+            )
+            await db.commit()
+            return cur.rowcount or 0
+
     async def replace_library(self, rows: list[dict]) -> None:
         now = time.time()
         async with aiosqlite.connect(self.path) as db:
@@ -184,6 +211,13 @@ class Database:
             )
             await db.commit()
 
+    async def list_library(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM library ORDER BY month DESC, code")
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
     async def get_library(self, code: str) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
@@ -204,3 +238,76 @@ class Database:
             )
             rows = await cur.fetchall()
         return {row["code"]: dict(row) for row in rows}
+
+    async def replace_western(self, rows: list[dict]) -> None:
+        now = time.time()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM western_library")
+            if rows:
+                await db.executemany(
+                    """INSERT INTO western_library
+                       (path, tpdb_id, studio, title, has_nfo, has_poster, updated_at)
+                       VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster, :updated_at)""",
+                    [{
+                        "path": row["path"],
+                        "tpdb_id": row.get("tpdb_id") or "",
+                        "studio": row.get("studio") or "",
+                        "title": row.get("title") or "",
+                        "has_nfo": 1 if row.get("has_nfo") else 0,
+                        "has_poster": 1 if row.get("has_poster") else 0,
+                        "updated_at": now,
+                    } for row in rows],
+                )
+            await db.commit()
+
+    async def upsert_western(self, row: dict) -> None:
+        payload = {
+            "path": row["path"],
+            "tpdb_id": row.get("tpdb_id") or "",
+            "studio": row.get("studio") or "",
+            "title": row.get("title") or "",
+            "has_nfo": 1 if row.get("has_nfo") else 0,
+            "has_poster": 1 if row.get("has_poster") else 0,
+            "updated_at": time.time(),
+        }
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO western_library
+                   (path, tpdb_id, studio, title, has_nfo, has_poster, updated_at)
+                   VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster, :updated_at)
+                   ON CONFLICT(path) DO UPDATE SET
+                     tpdb_id=excluded.tpdb_id,
+                     studio=excluded.studio,
+                     title=excluded.title,
+                     has_nfo=excluded.has_nfo,
+                     has_poster=excluded.has_poster,
+                     updated_at=excluded.updated_at""",
+                payload,
+            )
+            await db.commit()
+
+    async def list_western(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM western_library ORDER BY studio, title"
+            )
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def western_by_ids(self, ids: list[str]) -> dict[str, dict]:
+        uniq = [item for item in dict.fromkeys(ids) if item]
+        if not uniq:
+            return {}
+        placeholders = ",".join("?" * len(uniq))
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                f"SELECT * FROM western_library WHERE tpdb_id IN ({placeholders})",
+                uniq,
+            )
+            rows = await cur.fetchall()
+        found: dict[str, dict] = {}
+        for row in rows:
+            found.setdefault(row["tpdb_id"], dict(row))
+        return found

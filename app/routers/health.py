@@ -1,31 +1,44 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
 
 from app import __version__
 from app.httputil import site_client
 
 router = APIRouter()
+PROBE_TIMEOUT = 3.0
+
+
+async def _bounded(coro, default):
+    try:
+        return await asyncio.wait_for(coro, PROBE_TIMEOUT)
+    except Exception:
+        return default
+
+
+async def _site_ok(settings, url: str) -> bool:
+    try:
+        async with site_client(settings) as client:
+            response = await asyncio.wait_for(
+                client.get(url, timeout=PROBE_TIMEOUT),
+                PROBE_TIMEOUT,
+            )
+            return response.status_code < 500
+    except Exception:
+        return False
 
 
 @router.get("/api/health")
 async def health(request: Request):
     settings = request.app.state.settings
-    aria2_ver = await request.app.state.aria2.version()
-    xunlei_ver = await request.app.state.xunlei.version()
-    javbus_ok = False
-    clm_ok = False
-    async with site_client(settings) as client:
-        try:
-            r = await client.get(settings.javbus_base.rstrip("/") + "/", timeout=8.0)
-            javbus_ok = r.status_code < 500
-        except Exception:
-            javbus_ok = False
-        try:
-            r = await client.get(settings.clm_search.rstrip("/") + "/", timeout=8.0)
-            clm_ok = r.status_code < 500
-        except Exception:
-            clm_ok = False
+    aria2_ver, xunlei_ver, javbus_ok, clm_ok = await asyncio.gather(
+        _bounded(request.app.state.aria2.version(), None),
+        _bounded(request.app.state.xunlei.version(), None),
+        _site_ok(settings, settings.javbus_base.rstrip("/") + "/"),
+        _site_ok(settings, settings.clm_search.rstrip("/") + "/"),
+    )
     return {
         "ok": True,
         "version": __version__,

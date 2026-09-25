@@ -12,6 +12,7 @@ from app.codes import extract_code, normalize_code, title_mentions_code
 from app.western_magnets import is_western_release_name
 from app.config import Settings
 from app.httputil import site_client
+from app.imgcache import trim_img_cache
 from app.nfo import build_nfo
 from app.sources.javbus import CACHE_VER, MetadataError, fetch_metadata
 
@@ -354,6 +355,7 @@ async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = 
     if len(r.content) > 8 * 1024 * 1024:
         raise ScrapeError("封面过大")
     cached.write_bytes(r.content)
+    trim_img_cache(cache_dir)
     return r.content
 
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.codes import normalize_code
 from app.downloader.jobs import BackendError
-from app.models import DownloadRequest
+from app.models import ClearDownloads, DownloadRequest
 from app.slug import western_slug
 from app.western_archive import write_sidecar
 
@@ -72,6 +72,47 @@ async def resume(request: Request, job_id: str):
 @router.post("/api/downloads/{job_id}/cancel")
 async def cancel(request: Request, job_id: str):
     return await _act(request, job_id, "cancel")
+
+
+@router.post("/api/downloads/{job_id}/rescrape")
+async def rescrape(request: Request, job_id: str):
+    jobs = request.app.state.jobs
+    try:
+        return await jobs.rescrape(job_id)
+    except KeyError:
+        raise HTTPException(404, "任务不存在") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.delete("/api/downloads/{job_id}")
+async def delete_download(request: Request, job_id: str):
+    jobs = request.app.state.jobs
+    try:
+        await jobs.delete(job_id)
+    except KeyError:
+        raise HTTPException(404, "任务不存在") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/api/downloads/clear")
+async def clear_downloads(request: Request, body: ClearDownloads):
+    jobs = request.app.state.jobs
+    try:
+        deleted = await jobs.clear_finished(body.status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"deleted": deleted}
+
+
+@router.post("/api/library/refresh")
+async def refresh_library(request: Request):
+    library = getattr(request.app.state, "library", None)
+    if library is None:
+        raise HTTPException(503, "媒体库还没准备好")
+    return {"count": await library.refresh()}
 
 
 async def _act(request: Request, job_id: str, op: str):

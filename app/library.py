@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from app.codes import normalize_code
@@ -20,6 +21,44 @@ def library_info(hit: dict | None) -> dict:
         "has_nfo": bool(hit.get("has_nfo")),
         "has_poster": bool(hit.get("has_poster")),
     }
+
+
+def tpdb_id_from_nfo(text: str) -> str:
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return ""
+    for el in root.iter("uniqueid"):
+        if (el.attrib.get("type") or "").lower() != "tpdb":
+            continue
+        value = (el.text or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def nfo_title(text: str) -> str:
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return ""
+    for tag in ("originaltitle", "title"):
+        value = (root.findtext(tag) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def attach_western(items: list[dict], hits: dict[str, dict]) -> list[dict]:
+    out = []
+    for item in items:
+        row = dict(item)
+        hit = hits.get(str(row.get("id") or ""))
+        if hit is not None:
+            hit = {**hit, "has_video": 1}
+        row["library"] = library_info(hit)
+        out.append(row)
+    return out
 
 
 def attach_library(items: list[dict], hits: dict[str, dict]) -> list[dict]:
@@ -80,6 +119,37 @@ def scan_media(media_dir: Path) -> list[dict]:
     return list(found.values())
 
 
+def scan_western(root: Path | None) -> list[dict]:
+    if root is None or not root.is_dir():
+        return []
+    rows: list[dict] = []
+    for studio in sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")):
+        try:
+            files = [path for path in studio.iterdir() if path.is_file()]
+        except OSError:
+            continue
+        by_name = {path.name.lower(): path for path in files}
+        for video in sorted(path for path in files if is_video(path)):
+            nfo = by_name.get(f"{video.stem.lower()}.nfo")
+            poster = by_name.get(f"{video.stem.lower()}-poster.jpg")
+            text = ""
+            if nfo:
+                try:
+                    text = nfo.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = ""
+            title = nfo_title(text) or video.stem
+            rows.append({
+                "path": f"{studio.name}/{video.name}",
+                "tpdb_id": tpdb_id_from_nfo(text),
+                "studio": studio.name,
+                "title": title,
+                "has_nfo": 1 if nfo else 0,
+                "has_poster": 1 if poster else 0,
+            })
+    return rows
+
+
 class Library:
     def __init__(self, settings: Settings, db: Database):
         self.settings = settings
@@ -89,8 +159,18 @@ class Library:
     async def refresh(self) -> int:
         async with self._lock:
             rows = await asyncio.to_thread(scan_media, self.settings.media_dir)
+            western = await asyncio.to_thread(scan_western, self.settings.western_root)
             await self.db.replace_library(rows)
-            return len(rows)
+            await self.db.replace_western(western)
+            return len(rows) + len(western)
+
+    async def remember_western(self, result: dict) -> None:
+        for entry in result.get("entries") or []:
+            if entry.get("path"):
+                await self.db.upsert_western(entry)
+
+    async def western_many(self, ids: list[str]) -> dict[str, dict]:
+        return await self.db.western_by_ids(ids)
 
     async def upsert(self, row: dict) -> None:
         await self.db.upsert_library(row)

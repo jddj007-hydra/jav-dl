@@ -492,6 +492,23 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .dot { font-weight: 650; }
 .dot.ok { color: var(--good); }
 .dot.no { color: var(--bad); }
+.lib-group { margin: 0 0 22px; }
+.lib-group h2 { font-size: 15px; margin: 0 0 8px; }
+.lib-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.lib-main { min-width: 0; flex: 1; }
+.lib-main strong { display: block; }
+.lib-row .path { color: var(--muted); font-size: 12px; word-break: break-all; }
 
 @media (max-width: 720px) {
   .meta-main { grid-template-columns: 1fr; }

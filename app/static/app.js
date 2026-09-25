@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 const views = {
   search: $("view-search"),
   western: $("view-western"),
+  library: $("view-library"),
   queue: $("view-queue"),
   settings: $("view-settings"),
 };
@@ -10,6 +11,9 @@ let lastResources = [];
 let lastWorks = [];
 let lastWorksQuery = "";
 let lastLibrary = null;
+let detailCode = "";
+let libraryKind = "jav";
+let libraryPayload = null;
 let fromWorks = false;
 let pollTimer = null;
 let javKind = "censored";
@@ -24,6 +28,20 @@ let westernBootstrapped = false;
 let westernItems = [];
 let westernResources = [];
 let westernCurrent = null;
+let queueItems = [];
+let queueFilter = "all";
+
+const STATUS_LABEL = {
+  queued: "排队",
+  waiting: "排队",
+  active: "下载中",
+  downloading: "下载中",
+  paused: "已暂停",
+  complete: "已完成",
+  error: "失败",
+  cancelled: "已取消",
+  removed: "已取消",
+};
 
 function renderPanelLinks(settings) {
   const links = (settings && settings.panels) || [];
@@ -55,15 +73,18 @@ function route() {
     ? "queue"
     : hash.startsWith("settings")
       ? "settings"
-      : hash.startsWith("western")
-        ? "western"
-        : "search";
+      : hash.startsWith("library")
+        ? "library"
+        : hash.startsWith("western")
+          ? "western"
+          : "search";
   Object.entries(views).forEach(([k, el]) => { el.hidden = k !== name; });
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === name);
   });
   if (name === "queue") refreshQueue();
   if (name === "settings") loadSettings();
+  if (name === "library") loadLibrary();
   if (name === "search") ensureJavLatest();
   if (name === "western") ensureWesternLatest();
 }
@@ -123,6 +144,7 @@ function renderMeta(payload) {
   const card = $("meta-card");
   const meta = payload.metadata;
   lastLibrary = payload.library || null;
+  detailCode = payload.code || "";
   if (!meta) {
     if (lastLibrary && lastLibrary.present) {
       card.hidden = false;
@@ -218,7 +240,7 @@ function renderResources(items) {
         </div>
       </div>
       <div class="res-actions">
-        <button type="button" data-dl="${it.info_hash}">${lastLibrary && lastLibrary.present ? "下载（库里已有）" : "下载"}</button>
+        <button type="button" data-dl="${it.info_hash}" data-code="${escapeHtml(detailCode)}">${lastLibrary && lastLibrary.present ? "下载（库里已有）" : "下载"}</button>
         <button type="button" class="ghost" data-copy="${it.info_hash}">复制</button>
       </div>
     </article>`).join("");
@@ -459,7 +481,7 @@ $("back-to-works").addEventListener("click", () => {
 
 window.addEventListener("popstate", (e) => {
   const hash = location.hash.replace("#/", "") || "";
-  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western")) return;
+  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western") || hash.startsWith("library")) return;
   if (e.state && e.state.javdl === "code") {
     $("code-input").value = e.state.code || "";
     runCodeSearch(e.state.code, { fromList: true });
@@ -492,7 +514,7 @@ $("resource-list").addEventListener("click", async (e) => {
     await api("/api/downloads", {
       method: "POST",
       body: JSON.stringify({
-        code: $("code-input").value.trim(),
+        code: dl.dataset.code || detailCode,
         info_hash: item.info_hash,
         title: item.title,
       }),
@@ -509,20 +531,63 @@ function scrapeLine(j) {
   if (j.scrape_status === "archived" && j.archive_path) {
     return `<p class="status good">已归档 ${escapeHtml(j.archive_path)}</p>`;
   }
+  if (j.scrape_status === "scraping") {
+    return `<p class="status">正在刮削</p>`;
+  }
   if (j.scrape_status === "waiting") {
     return `<p class="status">等待刮削</p>`;
   }
   if (j.scrape_status === "error" && j.scrape_error) {
     return `<p class="status bad">刮削失败：${escapeHtml(j.scrape_error)}</p>`;
   }
+  if (j.scrape_status === "skipped") {
+    return `<p class="status">不刮削</p>`;
+  }
   return "";
 }
 
-function renderQueue(items) {
+function downloadError(j) {
+  if (!j.error) return "";
+  const text = String(j.error);
+  const line = text.startsWith("下载失败") ? text : `下载失败：${text}`;
+  return `<p class="status bad">${escapeHtml(line)}</p>`;
+}
+
+function queueMatches(j) {
+  if (queueFilter === "active") return ["queued", "waiting", "active", "downloading", "paused"].includes(j.status);
+  if (queueFilter === "complete") return j.status === "complete";
+  if (queueFilter === "error") return j.status === "error";
+  if (queueFilter === "cancelled") return j.status === "cancelled";
+  return true;
+}
+
+function queueActions(j) {
+  const terminal = ["complete", "error", "cancelled"].includes(j.status);
+  const buttons = [];
+  if (j.status === "paused") {
+    buttons.push(`<button data-act="resume" data-id="${j.id}">继续</button>`);
+  } else if (!terminal) {
+    buttons.push(`<button class="ghost" data-act="pause" data-id="${j.id}">暂停</button>`);
+  }
+  if (!terminal) {
+    buttons.push(`<button class="ghost" data-act="cancel" data-id="${j.id}">取消</button>`);
+  }
+  if (j.status === "complete" && j.scrape_status === "error") {
+    buttons.push(`<button data-act="rescrape" data-id="${j.id}">重新刮削</button>`);
+  }
+  if (terminal) {
+    buttons.push(`<button class="ghost" data-act="delete" data-id="${j.id}">删除</button>`);
+  }
+  return buttons.join("");
+}
+
+function renderQueue() {
   const list = $("queue-list");
   const empty = $("queue-empty");
+  const items = queueItems.filter(queueMatches);
   if (!items.length) {
     empty.hidden = false;
+    empty.textContent = queueItems.length ? "这个状态下没有任务" : "还没有任务";
     list.innerHTML = "";
     return;
   }
@@ -531,7 +596,7 @@ function renderQueue(items) {
     <li>
       <div class="row">
         <strong><span class="code">${escapeHtml(j.code)}</span>${escapeHtml(j.title)}</strong>
-        <span>${escapeHtml(j.status)}</span>
+        <span>${escapeHtml(STATUS_LABEL[j.status] || j.status)}</span>
       </div>
       <div class="bar"><span style="width:${Math.min(100, j.progress || 0)}%"></span></div>
       <div class="meta-line">
@@ -541,30 +606,76 @@ function renderQueue(items) {
         <span>${j.eta ? "ETA " + escapeHtml(j.eta) : ""}</span>
         <span>${j.seeders ? j.seeders + " 种子" : ""}</span>
       </div>
-      ${j.error ? `<p class="status bad">${escapeHtml(j.error)}</p>` : ""}
+      ${downloadError(j)}
       ${scrapeLine(j)}
-      <div class="row-actions">
-        ${j.status === "paused" ? `<button data-act="resume" data-id="${j.id}">继续</button>` : `<button class="ghost" data-act="pause" data-id="${j.id}">暂停</button>`}
-        <button class="ghost" data-act="cancel" data-id="${j.id}">取消</button>
-      </div>
+      <div class="row-actions">${queueActions(j)}</div>
     </li>`).join("");
 }
 
 async function refreshQueue() {
   try {
     const data = await api("/api/downloads");
-    renderQueue(data.items || []);
+    queueItems = data.items || [];
+    renderQueue();
   } catch (err) {
     $("queue-list").innerHTML = `<li class="status bad">${escapeHtml(err.message)}</li>`;
   }
 }
+
+$("queue-filter").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-filter]");
+  if (!btn) return;
+  queueFilter = btn.dataset.filter;
+  for (const child of $("queue-filter").querySelectorAll("button")) {
+    child.classList.toggle("on", child === btn);
+  }
+  renderQueue();
+});
+
+async function clearQueue(status, message) {
+  if (!confirm(message)) return;
+  const data = await api("/api/downloads/clear", {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+  setStatus($("queue-note"), `已删除 ${data.deleted} 条`, "good");
+  await refreshQueue();
+}
+
+$("queue-clear-complete").addEventListener("click", () => {
+  clearQueue("complete", "删除所有已完成的记录？下载文件不会动。").catch((err) => {
+    setStatus($("queue-note"), err.message, "bad");
+  });
+});
+
+$("queue-clear-finished").addEventListener("click", () => {
+  clearQueue("finished", "删除已完成、失败和已取消的记录？进行中的任务会留下。").catch((err) => {
+    setStatus($("queue-note"), err.message, "bad");
+  });
+});
+
+$("queue-rescan").addEventListener("click", async (e) => {
+  e.currentTarget.disabled = true;
+  try {
+    const data = await api("/api/library/refresh", { method: "POST" });
+    setStatus($("queue-note"), `媒体库已重扫，共 ${data.count} 部`, "good");
+  } catch (err) {
+    setStatus($("queue-note"), err.message, "bad");
+  } finally {
+    e.currentTarget.disabled = false;
+  }
+});
 
 $("queue-list").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
   btn.disabled = true;
   try {
-    await api(`/api/downloads/${btn.dataset.id}/${btn.dataset.act}`, { method: "POST" });
+    if (btn.dataset.act === "delete") {
+      await api(`/api/downloads/${btn.dataset.id}`, { method: "DELETE" });
+    } else {
+      await api(`/api/downloads/${btn.dataset.id}/${btn.dataset.act}`, { method: "POST" });
+    }
     await refreshQueue();
   } catch (err) {
     alert(err.message);
@@ -586,6 +697,7 @@ async function loadSettings() {
   form.javbus_base.value = s.javbus_base || "";
   form.clm_home.value = s.clm_home || "";
   form.clm_search.value = s.clm_search || "";
+  form.clm_search_backup.value = s.clm_search_backup || "";
   form.tpdb_api_key.value = "";
   form.tpdb_api_key.placeholder = s.tpdb_api_key_set ? "已保存，留空不改" : "";
   form.downloader.value = s.downloader === "xunlei" ? "xunlei" : "aria2";
@@ -596,9 +708,15 @@ async function loadSettings() {
   form.xunlei_device_name.value = s.xunlei_device_name || "";
   form.scrape_enabled.checked = s.scrape_enabled !== false;
   form.media_dir.value = s.media_dir || "";
+  form.western_media_dir.value = s.western_media_dir || "";
+  form.scrape_settle_seconds.value = s.scrape_settle_seconds ?? "";
+  form.scrape_min_mb.value = s.scrape_min_mb ?? "";
   toggleXunleiFields();
   renderPanelLinks(s);
   $("download-dir").textContent = "下载目录（只读，由运行环境决定）：" + (s.download_dir || "");
+  $("tls-status").textContent = s.verify_tls
+    ? "查站证书校验：开"
+    : "查站证书校验：关。默认保持关闭，要打开请设环境变量 VERIFY_TLS=true。";
   const panelById = Object.fromEntries((s.panels || []).map((item) => [item.id, item.url]));
   try {
     const h = await api("/api/health");
@@ -639,6 +757,7 @@ $("settings-form").addEventListener("submit", async (e) => {
     javbus_base: form.javbus_base.value.trim(),
     clm_home: form.clm_home.value.trim(),
     clm_search: form.clm_search.value.trim(),
+    clm_search_backup: form.clm_search_backup.value.trim(),
     tpdb_api_key: form.tpdb_api_key.value.trim(),
     downloader: form.downloader.value,
     xunlei_url: form.xunlei_url.value.trim(),
@@ -647,6 +766,12 @@ $("settings-form").addEventListener("submit", async (e) => {
     scrape_enabled: form.scrape_enabled.checked,
     media_dir: form.media_dir.value.trim(),
   };
+  const settle = form.scrape_settle_seconds.value.trim();
+  if (settle !== "") body.scrape_settle_seconds = Number(settle);
+  const minMb = form.scrape_min_mb.value.trim();
+  if (minMb !== "") body.scrape_min_mb = Number(minMb);
+  const westernDir = form.western_media_dir.value.trim();
+  if (westernDir) body.western_media_dir = westernDir;
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;
   if (!body.tpdb_api_key) delete body.tpdb_api_key;
@@ -699,7 +824,8 @@ function renderWesternWorks(items) {
   list.innerHTML = westernItems.map((it) => {
     const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
     return `
-    <button type="button" class="work-card" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
+    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
+      ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
       <img src="${coverSrc(it.cover)}" alt="" />
       <span class="code">${escapeHtml(it.site || "")}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
@@ -724,6 +850,7 @@ function renderWesternMeta(item) {
     <div class="meta-main">
       <img class="cover" src="${coverSrc(item.cover || item.background)}" data-full="${escapeHtml(item.background || item.cover || "")}" alt="" />
       <div>
+        ${libraryFlag(item.library)}
         <h1>${escapeHtml(item.title || "")}</h1>
         <dl>
           ${dlRow("片商", escapeHtml(item.site || ""))}
@@ -760,7 +887,7 @@ function renderWesternResources(items) {
         </div>
       </div>
       <div class="res-actions">
-        <button type="button" data-west-dl="${it.info_hash}">下载</button>
+        <button type="button" data-west-dl="${it.info_hash}">${westernCurrent && westernCurrent.library && westernCurrent.library.present ? "下载（库里已有）" : "下载"}</button>
         <button type="button" class="ghost" data-west-copy="${it.info_hash}">复制</button>
       </div>
     </article>`).join("");
@@ -853,7 +980,15 @@ async function openWestern(id, kind) {
   let msg = "";
   let tone = "";
   if (detail.status === "fulfilled") {
-    if (detail.value.item) renderWesternMeta({ ...listed, ...detail.value.item, kind });
+    if (detail.value.item) {
+      const item = detail.value.item;
+      renderWesternMeta({
+        ...listed,
+        ...item,
+        library: item.library || (listed && listed.library) || null,
+        kind,
+      });
+    }
     if (detail.value.error) {
       msg = detail.value.error;
       tone = "bad";
@@ -1021,6 +1156,75 @@ $("western-meta").addEventListener("click", (e) => {
   const img = e.target.closest("img[data-full]");
   if (!img) return;
   openLightbox(img.dataset.full || img.getAttribute("data-full"));
+});
+
+function monthLabel(month) {
+  return /^\d{6}$/.test(month) ? `${month.slice(0, 4)}-${month.slice(4)}` : (month || "未分月");
+}
+
+function renderLibrary() {
+  const data = libraryPayload || { jav: [], western: [], jav_root: "", western_root: "" };
+  const jav = libraryKind === "jav";
+  const groups = jav ? (data.jav || []) : (data.western || []);
+  const root = $("library-root");
+  root.textContent = jav
+    ? `番号目录：${data.jav_root || ""}`
+    : (data.western_root ? `片商目录：${data.western_root}` : "还没配置欧美归档目录");
+  const list = $("library-list");
+  const status = $("library-status");
+  if (!groups.length) {
+    list.innerHTML = "";
+    setStatus(status, jav ? "番号库是空的" : (data.western_root ? "还没有欧美片子" : "还没配置欧美归档目录"), "");
+    return;
+  }
+  setStatus(status, "", "");
+  list.innerHTML = groups.map((group) => {
+    const heading = jav ? monthLabel(group.month) : (group.studio || "未知片商");
+    const items = (group.items || []).map((item) => {
+      const name = jav ? item.code : item.title;
+      return `
+        <div class="lib-row">
+          <div class="lib-main">
+            <strong>${escapeHtml(name)}</strong>
+            <div class="path">${escapeHtml(item.full_path || item.path || "")}</div>
+          </div>
+          <button type="button" class="ghost" data-copy-path="${escapeHtml(item.full_path || "")}">复制路径</button>
+        </div>`;
+    }).join("");
+    return `<section class="lib-group"><h2>${escapeHtml(heading)}</h2>${items}</section>`;
+  }).join("");
+}
+
+async function loadLibrary() {
+  try {
+    libraryPayload = await api("/api/library");
+    renderLibrary();
+  } catch (err) {
+    setStatus($("library-status"), err.message, "bad");
+  }
+}
+
+$("library-kind").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-lib]");
+  if (!btn) return;
+  libraryKind = btn.dataset.lib;
+  for (const child of $("library-kind").querySelectorAll("button")) {
+    child.classList.toggle("on", child === btn);
+  }
+  if (libraryPayload) renderLibrary();
+});
+
+$("library-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-copy-path]");
+  if (!btn) return;
+  const path = btn.dataset.copyPath || "";
+  try {
+    await navigator.clipboard.writeText(path);
+    btn.textContent = "已复制";
+    setTimeout(() => { btn.textContent = "复制路径"; }, 1200);
+  } catch {
+    prompt("路径", path);
+  }
 });
 
 window.addEventListener("hashchange", route);

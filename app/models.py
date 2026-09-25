@@ -31,6 +31,10 @@ class ResourcesResponse(BaseModel):
     error: str | None = None
 
 
+class ClearDownloads(BaseModel):
+    status: str
+
+
 class DownloadRequest(BaseModel):
     code: str = ""
     info_hash: str
@@ -50,6 +54,7 @@ class SettingsUpdate(BaseModel):
     javbus_base: str | None = None
     clm_home: str | None = None
     clm_search: str | None = None
+    clm_search_backup: str | None = None
     downloader: str | None = None
     xunlei_url: str | None = None
     xunlei_username: str | None = None
@@ -57,4 +62,7 @@ class SettingsUpdate(BaseModel):
     xunlei_device_name: str | None = None
     scrape_enabled: bool | None = None
     media_dir: str | None = None
+    western_media_dir: str | None = None
+    scrape_settle_seconds: int | None = Field(default=None, ge=0)
+    scrape_min_mb: int | None = Field(default=None, ge=0)
     tpdb_api_key: str | None = None

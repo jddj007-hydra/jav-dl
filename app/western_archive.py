@@ -70,6 +70,15 @@ def _norm_name(name: str) -> str:
     return _ALNUM.sub("", name.lower())
 
 
+def release_names_match(label: str, title: str) -> bool:
+    """True when a download name and a queue title are the same release."""
+    left = _norm_name(label)
+    right = _norm_name(title)
+    if len(left) < 6 or len(right) < 6:
+        return False
+    return left in right or right in left
+
+
 def _videos_in(root: Path, min_bytes: int) -> list[Path]:
     if not root.exists():
         return []
@@ -310,10 +319,20 @@ def _commit_western(
         raise ScrapeError("没有可归档的视频")
     _discard_finished_dir(src, settings.download_dir)
     _discard_slug(Path(job.get("dest") or ""), settings.download_dir)
+    title = meta.get("title") or ""
+    tpdb_id = (meta.get("uniqueid") or "").strip()
     return {
         "path": str(folder),
         "videos": [str(path) for path in written],
-        "title": meta.get("title") or "",
+        "title": title,
+        "entries": [{
+            "path": f"{folder.name}/{path.name}",
+            "tpdb_id": tpdb_id,
+            "studio": folder.name,
+            "title": title or path.stem,
+            "has_nfo": 1,
+            "has_poster": 1 if poster else 0,
+        } for path in written],
     }
 
 

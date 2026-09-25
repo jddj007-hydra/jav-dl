@@ -12,6 +12,7 @@ USER_KEYS = (
     "javbus_base",
     "clm_home",
     "clm_search",
+    "clm_search_backup",
     "downloader",
     "xunlei_url",
     "xunlei_username",
@@ -19,6 +20,9 @@ USER_KEYS = (
     "xunlei_device_name",
     "scrape_enabled",
     "media_dir",
+    "western_media_dir",
+    "scrape_settle_seconds",
+    "scrape_min_mb",
     "tpdb_api_key",
 )
 
@@ -41,6 +45,18 @@ def browser_http_url(raw: str | None) -> str | None:
     if parsed.username or parsed.password:
         return None
     return text.rstrip("/") or None
+
+
+def site_origin(raw: str | None) -> str | None:
+    """http(s) origin only. Drop path, query, and userinfo."""
+    text = browser_http_url(raw)
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if not parsed.hostname:
+        return None
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"{parsed.scheme}://{parsed.hostname}{port}"
 
 
 def panel_links(settings: Settings) -> list[dict]:
@@ -85,6 +101,7 @@ class Settings(BaseSettings):
     javbus_base: str = "https://www.javbus.com"
     clm_home: str = "https://clm.cc"
     clm_search: str = "https://clm64.top"
+    clm_search_backup: str = ""
     auth_user: str = ""
     auth_pass: str = ""
     metadata_ttl: int = 86400
@@ -124,6 +141,7 @@ class Settings(BaseSettings):
             "javbus_base": self.javbus_base,
             "clm_home": self.clm_home,
             "clm_search": self.clm_search,
+            "clm_search_backup": self.clm_search_backup or "",
             "download_dir": str(self.download_dir),
             "aria2_rpc": self.aria2_rpc,
             "downloader": normalize_downloader(self.downloader),
@@ -133,12 +151,52 @@ class Settings(BaseSettings):
             "xunlei_device_name": self.xunlei_device_name,
             "scrape_enabled": bool(self.scrape_enabled),
             "media_dir": str(self.media_dir),
+            "western_media_dir": self.western_media_dir or "",
             "scrape_settle_seconds": int(self.scrape_settle_seconds),
             "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
+            "verify_tls": bool(self.verify_tls),
             "tpdb_api_key_set": bool(self.tpdb_api_key),
             "panels": panel_links(self),
         }
+
+
+def _keep_paths(allowed: dict) -> None:
+    if "media_dir" in allowed:
+        raw = str(allowed["media_dir"]).strip()
+        if not raw:
+            allowed.pop("media_dir")
+        else:
+            allowed["media_dir"] = Path(raw)
+    if "western_media_dir" in allowed:
+        raw = str(allowed["western_media_dir"]).strip()
+        if not raw:
+            allowed.pop("western_media_dir")
+        else:
+            allowed["western_media_dir"] = raw
+    # 备用域留空表示关掉。非法地址不覆盖原来的值。
+    if "clm_search_backup" in allowed:
+        raw = str(allowed["clm_search_backup"]).strip()
+        if not raw:
+            allowed["clm_search_backup"] = ""
+        else:
+            origin = site_origin(raw)
+            if not origin:
+                allowed.pop("clm_search_backup")
+            else:
+                allowed["clm_search_backup"] = origin
+    for key in ("scrape_settle_seconds", "scrape_min_mb"):
+        if key not in allowed:
+            continue
+        try:
+            number = int(allowed[key])
+        except (TypeError, ValueError):
+            allowed.pop(key)
+            continue
+        if number < 0:
+            allowed.pop(key)
+        else:
+            allowed[key] = number
 
 
 def _overlay(settings: Settings) -> Settings:
@@ -154,12 +212,7 @@ def _overlay(settings: Settings) -> Settings:
         return settings
     if "downloader" in allowed:
         allowed["downloader"] = normalize_downloader(str(allowed["downloader"]))
-    if "media_dir" in allowed:
-        raw = str(allowed["media_dir"]).strip()
-        if not raw:
-            allowed.pop("media_dir")
-        else:
-            allowed["media_dir"] = Path(raw)
+    _keep_paths(allowed)
     return settings.model_copy(update=allowed)
 
 
@@ -175,12 +228,7 @@ def save_user_config(settings: Settings, updates: dict) -> Settings:
     allowed = {k: updates[k] for k in USER_KEYS if k in updates}
     if "downloader" in allowed:
         allowed["downloader"] = normalize_downloader(str(allowed["downloader"]))
-    if "media_dir" in allowed:
-        raw = str(allowed["media_dir"]).strip()
-        if not raw:
-            allowed.pop("media_dir")
-        else:
-            allowed["media_dir"] = Path(raw)
+    _keep_paths(allowed)
     merged = settings.model_copy(update=allowed)
     merged.data_dir.mkdir(parents=True, exist_ok=True)
     payload = {}

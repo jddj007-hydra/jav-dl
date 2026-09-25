@@ -62,6 +62,53 @@ def test_user_config_persists_scrape(tmp_path):
     assert over.media_dir == tmp_path / "lib"
 
 
+def test_scrape_timing_and_western_dir_roundtrip(tmp_path):
+    s = Settings(
+        data_dir=tmp_path,
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        scrape_settle_seconds=60,
+        scrape_min_mb=50,
+        western_media_dir="",
+    )
+    s.ensure_dirs()
+    merged = save_user_config(s, {
+        "scrape_settle_seconds": 15,
+        "scrape_min_mb": 0,
+        "western_media_dir": str(tmp_path / "west"),
+    })
+    assert merged.scrape_settle_seconds == 15
+    assert merged.scrape_min_mb == 0
+    assert merged.western_media_dir == str(tmp_path / "west")
+    current = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
+    kept = save_user_config(current, {
+        "western_media_dir": "  ",
+        "scrape_settle_seconds": -3,
+    })
+    assert kept.western_media_dir == str(tmp_path / "west")
+    assert kept.scrape_settle_seconds == 15
+    assert kept.public_dict()["scrape_min_mb"] == 0
+
+
+def test_backup_search_domain_normalizes_and_blank_clears(tmp_path):
+    s = Settings(data_dir=tmp_path, download_dir=tmp_path / "dl")
+    s.ensure_dirs()
+    merged = save_user_config(s, {"clm_search_backup": "https://Backup.Example/search?word=1"})
+    assert merged.clm_search_backup == "https://backup.example"
+    assert merged.public_dict()["clm_search_backup"] == "https://backup.example"
+    current = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
+    assert current.clm_search_backup == "https://backup.example"
+
+    cleared = save_user_config(current, {"clm_search_backup": "  "})
+    assert cleared.clm_search_backup == ""
+    saved = save_user_config(cleared, {"clm_search_backup": "https://keep.example:8443/x"})
+    assert saved.clm_search_backup == "https://keep.example:8443"
+    kept = save_user_config(saved, {"clm_search_backup": "notaurl"})
+    assert kept.clm_search_backup == "https://keep.example:8443"
+    kept = save_user_config(kept, {"clm_search_backup": "https://user:pass@evil.example"})
+    assert kept.clm_search_backup == "https://keep.example:8443"
+
+
 def test_empty_media_dir_keeps_old(tmp_path):
     s = Settings(data_dir=tmp_path, download_dir=tmp_path / "dl", media_dir=tmp_path / "media")
     s.ensure_dirs()
