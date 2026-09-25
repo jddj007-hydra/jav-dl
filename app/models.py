@@ -82,3 +82,8 @@ class SettingsUpdate(BaseModel):
     scrape_settle_seconds: int | None = Field(default=None, ge=0)
     scrape_min_mb: int | None = Field(default=None, ge=0)
     tpdb_api_key: str | None = None
+    notify_channel: str | None = None
+    notify_telegram_token: str | None = None
+    notify_telegram_chat: str | None = None
+    notify_bark_url: str | None = None
+    notify_serverchan_key: str | None = None

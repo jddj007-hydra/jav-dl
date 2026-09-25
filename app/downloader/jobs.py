@@ -28,6 +28,7 @@ from app.western_archive import (
     scrape_western_job,
     scrape_western_source,
 )
+from app.notify import send_notice
 from app.pickfiles import format_select_file, format_sub_file_index, present_files
 from app.textutil import format_size
 from app.trackers import magnet_for
@@ -76,6 +77,14 @@ def _eta(total: int, done: int, speed: int) -> str:
     if remain < 3600:
         return f"{int(remain // 60)}m"
     return f"{int(remain // 3600)}h{int((remain % 3600) // 60):02d}m"
+
+
+def _job_label(job: dict) -> str:
+    code = str(job.get("code") or "").strip()
+    title = str(job.get("title") or "").strip()
+    if code and title and title != code:
+        return f"{code} {title}"
+    return code or title or "任务"
 
 
 def cleanup_dir(dest: str) -> None:
@@ -327,7 +336,8 @@ class JobManager:
         if st.get("status") == "missing":
             return await self._sync_missing(job, st, backend)
 
-        status = _map_status(st.get("status"), job.get("status") or "queued")
+        old_status = job.get("status")
+        status = _map_status(st.get("status"), old_status or "queued")
         old_gid = str(job.get("gid") or "")
         fields: dict = {"status": status, "error": None}
         if status == "error":
@@ -349,7 +359,18 @@ class JobManager:
         job = dict(job)
         job.update(fields)
         job["_live"] = st
+        await self._notify_download(job, old_status)
         return job
+
+    async def _notify_download(self, job: dict, old_status: str | None) -> None:
+        status = job.get("status")
+        if status == old_status:
+            return
+        label = _job_label(job)
+        if status == "complete":
+            await send_notice(self.settings, "下载完成", label)
+        elif status == "error":
+            await send_notice(self.settings, "下载失败", f"{label}\n{job.get('error') or '下载失败'}")
 
     async def _sync_missing(self, job: dict, status: dict, backend: str) -> dict:
         if status.get("truncated"):
@@ -366,7 +387,8 @@ class JobManager:
             if backend == "aria2":
                 self._aria2_settled.add(job["id"])
             return job
-        if job.get("status") != "error":
+        old_status = job.get("status")
+        if old_status != "error":
             log.warning(
                 "任务在下载器里找不到 id=%s gid=%s：%s",
                 job["id"],
@@ -381,6 +403,7 @@ class JobManager:
         job = dict(job)
         job.update(fields)
         job["_live"] = {}
+        await self._notify_download(job, old_status)
         return job
 
     async def sync_all(self) -> None:
@@ -432,6 +455,14 @@ class JobManager:
         job["scrape_status"] = "archived"
         job["archive_path"] = path
         job["scrape_error"] = None
+        await send_notice(self.settings, "归档完成", f"{_job_label(job)}\n{path}")
+        return job
+
+    async def _record_scrape_error(self, job: dict, reason: str) -> dict:
+        await self.db.update_job(job["id"], scrape_status="error", scrape_error=reason)
+        job["scrape_status"] = "error"
+        job["scrape_error"] = reason
+        await send_notice(self.settings, "归档失败", f"{_job_label(job)}\n{reason}")
         return job
 
     async def maybe_scrape(self, job: dict) -> dict:
@@ -477,14 +508,7 @@ class JobManager:
             if hit and hit.get("has_video"):
                 return await self._mark_archived(job, hit.get("path") or "")
             log.warning("刮削失败 %s: 没有可归档的视频", job.get("code"))
-            await self.db.update_job(
-                job["id"],
-                scrape_status="error",
-                scrape_error="没有可归档的视频",
-            )
-            job["scrape_status"] = "error"
-            job["scrape_error"] = "没有可归档的视频"
-            return job
+            return await self._record_scrape_error(job, "没有可归档的视频")
 
         src, _videos = found
         if await asyncio.to_thread(source_incomplete, src):
@@ -499,16 +523,10 @@ class JobManager:
                 result = await scrape_job(self.settings, self.db, job, found=found)
         except ScrapeError as e:
             log.warning("刮削失败 %s: %s", job.get("code"), e)
-            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
-            job["scrape_status"] = "error"
-            job["scrape_error"] = str(e)
-            return job
+            return await self._record_scrape_error(job, str(e))
         except Exception as e:
             log.warning("刮削失败 %s", job.get("code"), exc_info=True)
-            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
-            job["scrape_status"] = "error"
-            job["scrape_error"] = str(e)
-            return job
+            return await self._record_scrape_error(job, str(e))
 
         if self.library:
             await self.library.upsert(result)
@@ -528,10 +546,7 @@ class JobManager:
             )
         except ScrapeError as exc:
             log.warning("刮削失败 %s: %s", job.get("code"), exc)
-            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
-            job["scrape_status"] = "error"
-            job["scrape_error"] = str(exc)
-            return job
+            return await self._record_scrape_error(job, str(exc))
         src, _videos = found
         if await asyncio.to_thread(source_incomplete, src):
             return await self._mark_waiting(job)
@@ -544,10 +559,7 @@ class JobManager:
                 result = await scrape_western_job(self.settings, job, info, found=found)
         except ScrapeError as exc:
             log.warning("刮削失败 %s: %s", job.get("code"), exc)
-            await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
-            job["scrape_status"] = "error"
-            job["scrape_error"] = str(exc)
-            return job
+            return await self._record_scrape_error(job, str(exc))
         if self.library:
             await self.library.remember_western(result)
         return await self._mark_archived(job, result["path"])
@@ -612,14 +624,18 @@ class JobManager:
             except ScrapeError as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s: %s", key, exc)
+                await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
                 continue
-            except Exception:
+            except Exception as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s", key, exc_info=True)
+                await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
                 continue
             self._watch_fail.pop(key, None)
             if self.library and isinstance(result, dict):
                 await self.library.remember_western(result)
+            path = result.get("path") if isinstance(result, dict) else ""
+            await send_notice(self.settings, "归档完成", f"{src.name}\n{path}")
             return
 
     async def watch_downloads(self) -> None:
@@ -654,14 +670,18 @@ class JobManager:
             except ScrapeError as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s: %s", key, exc)
+                await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
                 continue
-            except Exception:
+            except Exception as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s", key, exc_info=True)
+                await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
                 continue
             self._watch_fail.pop(key, None)
             if self.library:
                 await self.library.upsert(result)
+            path = result.get("path") if isinstance(result, dict) else ""
+            await send_notice(self.settings, "归档完成", f"{code}\n{path}")
             return
 
     def _row(

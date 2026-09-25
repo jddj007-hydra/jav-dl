@@ -35,6 +35,9 @@ async def put_settings(request: Request, body: SettingsUpdate):
         updates.pop("xunlei_password")
     if updates.get("tpdb_api_key") == "":
         updates.pop("tpdb_api_key")
+    for key in ("notify_telegram_token", "notify_bark_url", "notify_serverchan_key"):
+        if updates.get(key) == "":
+            updates.pop(key)
     settings = save_user_config(request.app.state.settings, updates)
     bind_runtime(request.app, settings)
     library = getattr(request.app.state, "library", None)

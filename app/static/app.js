@@ -835,6 +835,13 @@ function toggleXunleiFields() {
   $("xunlei-fields").hidden = !on;
 }
 
+function toggleNotifyFields() {
+  const channel = $("notify-channel").value;
+  $("notify-telegram").hidden = channel !== "telegram";
+  $("notify-bark").hidden = channel !== "bark";
+  $("notify-serverchan").hidden = channel !== "serverchan";
+}
+
 async function loadSettings() {
   const s = await api("/api/settings");
   const form = $("settings-form");
@@ -857,7 +864,16 @@ async function loadSettings() {
   form.western_media_dir.value = s.western_media_dir || "";
   form.scrape_settle_seconds.value = s.scrape_settle_seconds ?? "";
   form.scrape_min_mb.value = s.scrape_min_mb ?? "";
+  form.notify_channel.value = s.notify_channel || "";
+  form.notify_telegram_token.value = "";
+  form.notify_telegram_token.placeholder = s.notify_telegram_token_set ? "已保存，留空不改" : "";
+  form.notify_telegram_chat.value = s.notify_telegram_chat || "";
+  form.notify_bark_url.value = "";
+  form.notify_bark_url.placeholder = s.notify_bark_set ? "已保存，留空不改" : "https://api.day.app/你的key";
+  form.notify_serverchan_key.value = "";
+  form.notify_serverchan_key.placeholder = s.notify_serverchan_set ? "已保存，留空不改" : "";
   toggleXunleiFields();
+  toggleNotifyFields();
   renderPanelLinks(s);
   $("download-dir").textContent = "下载目录（只读，由运行环境决定）：" + (s.download_dir || "");
   $("tls-status").textContent = s.verify_tls
@@ -892,6 +908,7 @@ async function loadSettings() {
 }
 
 $("downloader-select").addEventListener("change", toggleXunleiFields);
+$("notify-channel").addEventListener("change", toggleNotifyFields);
 
 $("settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -921,6 +938,14 @@ $("settings-form").addEventListener("submit", async (e) => {
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;
   if (!body.tpdb_api_key) delete body.tpdb_api_key;
+  body.notify_channel = form.notify_channel.value;
+  body.notify_telegram_chat = form.notify_telegram_chat.value.trim();
+  const telegramToken = form.notify_telegram_token.value.trim();
+  if (telegramToken) body.notify_telegram_token = telegramToken;
+  const bark = form.notify_bark_url.value.trim();
+  if (bark) body.notify_bark_url = bark;
+  const serverchan = form.notify_serverchan_key.value.trim();
+  if (serverchan) body.notify_serverchan_key = serverchan;
   try {
     await api("/api/settings", {
       method: "PUT",

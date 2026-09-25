@@ -24,6 +24,11 @@ USER_KEYS = (
     "scrape_settle_seconds",
     "scrape_min_mb",
     "tpdb_api_key",
+    "notify_channel",
+    "notify_telegram_token",
+    "notify_telegram_chat",
+    "notify_bark_url",
+    "notify_serverchan_key",
 )
 
 DOWNLOADERS = ("aria2", "xunlei")
@@ -107,6 +112,11 @@ class Settings(BaseSettings):
     metadata_ttl: int = 86400
     latest_ttl: int = 7200
     tpdb_api_key: str = ""
+    notify_channel: str = ""
+    notify_telegram_token: str = ""
+    notify_telegram_chat: str = ""
+    notify_bark_url: str = ""
+    notify_serverchan_key: str = ""
     http_timeout: float = 20.0
     verify_tls: bool = False
 
@@ -157,6 +167,11 @@ class Settings(BaseSettings):
             "auth_enabled": bool(self.auth_user and self.auth_pass),
             "verify_tls": bool(self.verify_tls),
             "tpdb_api_key_set": bool(self.tpdb_api_key),
+            "notify_channel": self.notify_channel or "",
+            "notify_telegram_chat": self.notify_telegram_chat or "",
+            "notify_telegram_token_set": bool(self.notify_telegram_token),
+            "notify_bark_set": bool(self.notify_bark_url),
+            "notify_serverchan_set": bool(self.notify_serverchan_key),
             "panels": panel_links(self),
         }
 
@@ -197,6 +212,14 @@ def _keep_paths(allowed: dict) -> None:
             allowed.pop(key)
         else:
             allowed[key] = number
+    if "notify_channel" in allowed:
+        from app.notify import normalize_channel
+
+        channel = normalize_channel(str(allowed.get("notify_channel") or ""))
+        if channel is None:
+            allowed.pop("notify_channel")
+        else:
+            allowed["notify_channel"] = channel
 
 
 def _overlay(settings: Settings) -> Settings:

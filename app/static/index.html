@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=18" />
+  <link rel="stylesheet" href="/static/style.css?v=19" />
 </head>
 <body>
   <header class="top">
@@ -228,6 +228,33 @@
         </label>
         <p class="hint">静置是下完后再等多久才搬文件。小于最小体积的文件不当成正片。这三项和欧美目录留空保存会保留原来的值。</p>
         <p class="hint">监控下载目录，文件静置完成后按番号写 NFO / poster.jpg / fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
+        <label>通知
+          <select name="notify_channel" id="notify-channel">
+            <option value="">不通知</option>
+            <option value="telegram">Telegram</option>
+            <option value="bark">Bark</option>
+            <option value="serverchan">Server酱</option>
+          </select>
+        </label>
+        <div id="notify-telegram" class="xunlei-fields" hidden>
+          <label>Bot Token
+            <input name="notify_telegram_token" type="password" autocomplete="off" />
+          </label>
+          <label>Chat ID
+            <input name="notify_telegram_chat" autocomplete="off" />
+          </label>
+        </div>
+        <div id="notify-bark" class="xunlei-fields" hidden>
+          <label>Bark 地址或 Key
+            <input name="notify_bark_url" type="password" autocomplete="off" placeholder="https://api.day.app/你的key" />
+          </label>
+        </div>
+        <div id="notify-serverchan" class="xunlei-fields" hidden>
+          <label>SendKey
+            <input name="notify_serverchan_key" type="password" autocomplete="off" />
+          </label>
+        </div>
+        <p class="hint">下载完成、归档完成、失败各发一条，带番号或片名。失败会带上原因。通知发不出去只记日志，不影响下载和归档。密钥留空表示不修改。</p>
         <p class="hint" id="download-dir"></p>
         <p class="hint" id="tls-status"></p>
         <button type="submit">保存</button>
@@ -251,6 +278,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=26"></script>
+  <script src="/static/app.js?v=27"></script>
 </body>
 </html>

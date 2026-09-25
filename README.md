@@ -129,6 +129,10 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `SCRAPE_MIN_MB` | `50` | 小于这个体积不当成正片。设置页可改，留空保存则保留原值 |
 | `WESTERN_MEDIA_DIR` | 空 | 欧美归档根目录。空则只下载不归档。设置页可改，留空保存则保留原值 |
 | `TPDB_API_KEY` | 空 | ThePornDB token，也可只在设置页填写 |
+| `NOTIFY_CHANNEL` | 空 | `telegram`、`bark`、`serverchan` 之一。空则不通知 |
+| `NOTIFY_TELEGRAM_TOKEN` / `NOTIFY_TELEGRAM_CHAT` | 空 | Telegram 机器人 token 和 chat id |
+| `NOTIFY_BARK_URL` | 空 | Bark key，或完整地址如 `https://api.day.app/key` |
+| `NOTIFY_SERVERCHAN_KEY` | 空 | Server酱 SendKey |
 | `ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | Docker 里是 `http://aria2:6800/jsonrpc` |
 | `ARIA2_SECRET` | `jav-dl-rpc` | 与 aria2 RPC 密钥一致 |
 | `CLM_SEARCH_BACKUP` | 空 | 主搜索域失败或没有结果时再用的磁力猫域名。设置页可改，留空保存会清掉 |
@@ -141,6 +145,8 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `XUNLEI_DEVICE_NAME` | `群晖-xunlei` | 用来匹配在线设备 |
 
 下载器可以在设置页切换。切到迅雷前需要面板已登录，并且手动下过一次以便识别下载目录。每条任务记下当时的下载器，之后切换只影响新任务。
+
+通知在设置页选一种。下载完成、归档完成、失败各发一条，带番号或片名，失败带原因。通知失败只写日志。
 
 刮削在设置页开关。只处理文件名或文件夹里能抽出唯一番号的视频。`downloads/western/` 整目录跳过。归档目录可改成和别的库共用的 media；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。
 
