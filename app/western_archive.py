@@ -14,8 +14,14 @@ from app.scrape import (
     has_incomplete_files,
     is_incomplete,
     is_video,
+    iter_videos,
+    iter_watch_targets,
+    safe_rmtree,
+    source_incomplete,
+    source_mtime,
 )
-from app.sources.tpdb import TpdbError, fetch_detail
+from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail
+from app.western_magnets import is_western_release_name, release_text
 
 SIDECAR = ".javdl.json"
 _UNSAFE = re.compile(r"[^\w.\- ]+", re.UNICODE)
@@ -79,6 +85,47 @@ def _videos_in(root: Path, min_bytes: int) -> list[Path]:
     return found
 
 
+def _names_western(target: Path) -> bool:
+    if is_western_release_name(target.name):
+        return True
+    if not target.is_dir():
+        return False
+    try:
+        children = list(target.iterdir())
+    except OSError:
+        return False
+    return any(child.is_file() and is_western_release_name(child.name) for child in children)
+
+
+def list_ready_western(
+    download_root: Path,
+    min_bytes: int,
+    settle: int,
+    now: float,
+) -> list[Path]:
+    """Finished Xunlei folders whose names look like Site.YY.MM.DD."""
+    ready: list[Path] = []
+    for target in iter_watch_targets(download_root):
+        if not _names_western(target):
+            continue
+        if source_incomplete(target):
+            continue
+        mtime = source_mtime(target)
+        if mtime and now - mtime < settle:
+            continue
+        if target.is_file():
+            try:
+                size = target.stat().st_size
+            except OSError:
+                continue
+            if is_video(target) and size >= min_bytes:
+                ready.append(target)
+            continue
+        if iter_videos(target, min_bytes):
+            ready.append(target)
+    return ready
+
+
 def find_western_videos(
     download_root: Path,
     dest: Path,
@@ -112,9 +159,18 @@ def find_western_videos(
     return matches[0]
 
 
+def _archive_stem(name: str) -> str:
+    cleaned = release_text(name)
+    if cleaned and is_western_release_name(cleaned):
+        return _safe_stem(cleaned)
+    return _safe_stem(name)
+
+
 def _safe_stem(name: str) -> str:
-    stem = Path(name).stem
-    cleaned = _UNSAFE.sub(".", stem).strip(" .")
+    text = Path(name).name
+    if text.lower().endswith(tuple(VIDEO_EXTS)):
+        text = Path(text).stem
+    cleaned = _UNSAFE.sub(".", text).strip(" .")
     cleaned = re.sub(r"\.{2,}", ".", cleaned)
     return (cleaned or "video")[:160]
 
@@ -166,6 +222,43 @@ async def western_metadata(settings: Settings, info: dict) -> dict:
     return meta
 
 
+def _match_names(src: Path, min_bytes: int) -> list[str]:
+    names = [src.name]
+    if not src.is_dir():
+        return names
+    for video in iter_videos(src, min_bytes):
+        if video.name not in names:
+            names.append(video.name)
+    return names
+
+
+async def scrape_western_source(settings: Settings, src: Path) -> dict:
+    """Archive one finished download that never entered the jav-dl queue."""
+    min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)
+    detail = None
+    error = "没有匹配的欧美作品"
+    for name in _match_names(src, min_bytes):
+        try:
+            detail = await fetch_by_filename(settings, name)
+        except TpdbError as exc:
+            error = str(exc)
+            continue
+        if detail:
+            break
+    if not detail:
+        raise ScrapeError(error)
+    info = {
+        "kind": "western",
+        "tpdb_id": detail.get("id") or "",
+        "tpdb_kind": detail.get("kind") or "scene",
+        "site": detail.get("site") or "",
+        "title": detail.get("title") or src.stem,
+        "date": detail.get("date") or "",
+        "performers": detail.get("performers") or [],
+    }
+    return await scrape_western_job(settings, {"dest": str(src), "title": src.name}, info)
+
+
 async def scrape_western_job(settings: Settings, job: dict, info: dict) -> dict:
     root = settings.western_root
     if root is None:
@@ -197,7 +290,7 @@ async def scrape_western_job(settings: Settings, job: dict, info: dict) -> dict:
     for video in videos:
         if video.suffix.lower() not in VIDEO_EXTS or is_incomplete(video):
             continue
-        name = _place_name(folder, _safe_stem(video.name), video.suffix.lower() or ".mp4")
+        name = _place_name(folder, _archive_stem(video.name), video.suffix.lower() or ".mp4")
         target = folder / name
         shutil.move(str(video), str(target))
         target.chmod(0o644)
@@ -209,6 +302,8 @@ async def scrape_western_job(settings: Settings, job: dict, info: dict) -> dict:
         written.append(target)
     if not written:
         raise ScrapeError("没有可归档的视频")
+    if src.is_dir():
+        safe_rmtree(src, settings.download_dir)
     return {
         "path": str(folder),
         "videos": [str(path) for path in written],

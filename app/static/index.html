@@ -4,17 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=13" />
+  <link rel="stylesheet" href="/static/style.css?v=15" />
 </head>
 <body>
   <header class="top">
     <a class="brand" href="#/">jav-dl</a>
-    <nav>
-      <a href="#/" data-nav="search">JAV</a>
-      <a href="#/western" data-nav="western">欧美</a>
-      <a href="#/queue" data-nav="queue">队列</a>
-      <a href="#/settings" data-nav="settings">设置</a>
-    </nav>
+    <div class="top-actions">
+      <nav>
+        <a href="#/" data-nav="search">JAV</a>
+        <a href="#/western" data-nav="western">欧美</a>
+        <a href="#/queue" data-nav="queue">队列</a>
+        <a href="#/settings" data-nav="settings">设置</a>
+      </nav>
+      <div id="panel-links" class="panel-links" hidden></div>
+    </div>
   </header>
 
   <main>
@@ -67,6 +70,22 @@
         <button type="button" class="ghost" id="western-latest">最新</button>
         <span class="pager" id="western-pager"></span>
       </div>
+      <div class="theme-bar" id="western-themes">
+        <button type="button" data-theme="" class="on">全部</button>
+        <button type="button" data-theme="blowjob">口交</button>
+        <button type="button" data-theme="anal">肛交</button>
+        <button type="button" data-theme="creampie">内射</button>
+        <button type="button" data-theme="threesome">3P</button>
+        <button type="button" data-theme="lesbian">女同</button>
+        <button type="button" data-theme="milf">熟女</button>
+        <button type="button" data-theme="tits">巨乳</button>
+        <button type="button" data-theme="pov">POV</button>
+        <button type="button" data-theme="gangbang">群交</button>
+        <button type="button" data-theme="bbc">黑人</button>
+        <button type="button" data-theme="facial">颜射</button>
+        <button type="button" data-theme="massage">按摩</button>
+        <button type="button" data-theme="schoolgirl">制服</button>
+      </div>
       <p id="western-status" class="status" hidden></p>
       <p id="western-back" class="search-back" hidden>
         <button type="button" class="ghost" id="western-back-btn">← 返回列表</button>
@@ -74,7 +93,7 @@
       <div id="western-works-wrap" hidden>
         <div class="table-head">
           <h2>作品</h2>
-          <p class="hint">来源：ThePornDB · 点一张看详情和磁链</p>
+          <p class="hint">来源：ThePornDB · 只列 15 分钟以上 · 点一张看详情和磁链</p>
         </div>
         <div id="western-works" class="works-grid"></div>
       </div>
@@ -89,7 +108,10 @@
     </section>
 
     <section id="view-queue" class="view" hidden>
-      <h2>下载队列</h2>
+      <div class="section-head">
+        <h2>下载队列</h2>
+        <div id="queue-panels" class="panel-links" hidden></div>
+      </div>
       <p class="hint">关掉浏览器不影响任务。磁链走 DHT，刚开始可能要等一会儿。</p>
       <div id="queue-empty" class="empty" hidden>还没有任务</div>
       <ul id="queue-list" class="queue"></ul>
@@ -157,6 +179,6 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=16"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>

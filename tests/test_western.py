@@ -11,9 +11,24 @@ from app.ranking import sort_by_heat
 from app.routers.images import _allowed
 from app.scrape import list_ready_sources
 from app.slug import western_slug
-from app.western_magnets import parse_release_date, rank_western_magnets, western_search_terms
+from app.western_archive import list_ready_western
+from app.western_magnets import is_western_release_name, parse_release_date, rank_western_magnets, western_search_terms
 from app.sources.javbus import latest_page_url
 from app.sources.tpdb import duration_minutes, map_item
+
+
+def test_excluded_orientation_tags():
+    from app.sources.tpdb import is_excluded_orientation
+
+    assert is_excluded_orientation(["Gay"])
+    assert is_excluded_orientation(["Threesome (Gay)"])
+    assert is_excluded_orientation(["Bisexual"])
+    assert is_excluded_orientation(["Solo Trans"])
+    assert is_excluded_orientation(["Futanari"])
+    assert is_excluded_orientation([], "男同作品")
+    assert not is_excluded_orientation([], "Gayle and Anna")
+    assert not is_excluded_orientation(["Anal", "Big Tits", "Hardcore"])
+    assert not is_excluded_orientation([], "School of Cock")
 
 
 def test_latest_page_urls():
@@ -154,6 +169,45 @@ def test_rank_western_prefers_title_overlap():
     assert all(not item["info_hash"].startswith("a") for item in ranked)
 
 
+def test_related_only_drops_unrelated_studio_magnets():
+    items = [
+        {
+            "title": "EvilAngel.22.01.01.Other.Scene.XXX.1080p",
+            "heat": 9000,
+            "size": "4 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "EvilAngel.Rocco.Siffredi.Teens.Unleashed.Scene",
+            "heat": 10,
+            "size": "2 GB",
+            "info_hash": "b" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Evil Angel",
+        "Rocco's Teens Unleashed",
+        ["Baby Doll"],
+        "2026-10-29",
+        related_only=True,
+    )
+    assert match == "title"
+    assert [item["info_hash"] for item in ranked] == ["b" * 40]
+
+
+def test_fallback_terms_use_performer_not_the_whole_studio():
+    from app.western_magnets import western_fallback_terms
+
+    terms = western_fallback_terms(
+        "Taboo Heat",
+        "BTS - Violet Voss And Amiee Cambridge Cheating Step Moms",
+        ["Violet Voss", "Amiee Cambridge"],
+    )
+    assert terms[0] == "TabooHeat Violet Voss"
+    assert "TabooHeat" not in terms
+
+
 def test_site_name_alone_does_not_count_as_the_scene():
     items = [{
         "title": "County Line Rocco Siffredi",
@@ -250,6 +304,131 @@ def test_western_slug_is_not_a_code():
     named = western_slug("Brazzers", "2024-01-02", "Late Night")
     assert named.startswith("brazzers-2024-01-02")
     assert normalize_code(named) is None
+
+
+def test_archive_stem_drops_watermark_prefix():
+    from app.western_archive import _archive_stem
+
+    ugly = "489155.com@[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C.mp4"
+    assert _archive_stem(ugly) == "JulesJordan.26.08.18.Octavia.Red.4K-C"
+    plain = "sexart.26.08.28.lula.stocch.and.anabel.busty.hot.view.mp4"
+    assert _archive_stem(plain).lower().startswith("sexart.26.08.28")
+
+
+def test_prefixed_release_name_is_western():
+    assert is_western_release_name("[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C")
+    assert is_western_release_name("489155.com@[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C.mp4")
+    assert not is_western_release_name("[中文字幕]SSIS-001.mp4")
+    assert not is_western_release_name("SSIS-001.mp4")
+
+
+def test_prefixed_folder_is_ready(tmp_path):
+    import os
+
+    folder = tmp_path / "[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C"
+    folder.mkdir()
+    video = folder / "489155.com@[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C.mp4"
+    video.write_bytes(b"x" * 80)
+    old = time.time() - 1000
+    os.utime(folder, (old, old))
+    os.utime(video, (old, old))
+    ready = list_ready_western(tmp_path, min_bytes=50, settle=0, now=time.time())
+    assert ready == [folder]
+
+
+def test_list_hides_short_scenes_and_accepts_known_themes():
+    from app.sources.tpdb import THEMES, TpdbError, is_too_short, list_params
+
+    params = list_params(1, None, "anal")
+    assert params["duration"] == 15 * 60
+    assert params["duration_operation"] == ">="
+    assert params["orderBy"] == "recently_released"
+    assert params["tags[70]"] == "Anal"
+    assert "q" not in params
+    search = list_params(2, "blake", None)
+    assert search["q"] == "blake"
+    assert search["page"] == 2
+    assert is_too_short("")
+    assert is_too_short("14")
+    assert not is_too_short("15")
+    html = Path("app/static/index.html").read_text(encoding="utf-8")
+    for slug, (_tag_id, _tag_name, label) in THEMES.items():
+        assert f'data-theme="{slug}"' in html
+        assert f">{label}<" in html
+    try:
+        list_params(1, None, "nope")
+    except TpdbError as exc:
+        assert "题材" in str(exc)
+    else:
+        raise AssertionError("unknown theme should fail")
+
+
+def test_choose_match_uses_performer_and_release_date():
+    from app.sources.tpdb import choose_match
+
+    rows = [
+        {
+            "id": "1",
+            "title": "Other",
+            "date": "2026-09-01",
+            "site": {"name": "Sweet Sinner"},
+            "performers": [{"name": "Someone Else"}],
+            "duration": 1800,
+        },
+        {
+            "id": "2",
+            "title": "The Wet Spot",
+            "date": "2026-09-01",
+            "site": {"name": "Sweet Sinner"},
+            "performers": [{"name": "Blake Blossom"}],
+            "duration": 1754,
+        },
+    ]
+    picked = choose_match(rows, "scene", "SweetSinner.26.09.01.Blake.Blossom.Nasty.At.Night")
+    assert picked["id"] == "2"
+    old = [{"id": "9", "title": "Old", "date": "2020-09-01", "site": {"name": "Sweet Sinner"}, "duration": 1800}]
+    assert choose_match(old, "scene", "SweetSinner.26.09.01.Blake.Blossom") is None
+
+
+def test_filename_queries_drop_group_and_quality():
+    from app.sources.tpdb import filename_queries
+
+    anal = filename_queries("AnalOverdose.17.04.20.Riley.Nixon.XXX.1080p.MP4-KTR[N1C]")
+    assert "AnalOverdose.17.04.20.Riley.Nixon.XXX.1080p.MP4-KTR" in anal
+    producers = filename_queries("ProducersFun 22.03.23 Blake Blossom XXX 1080p MP4 [SpankHash]")
+    assert "ProducersFun.22.03.23.Blake.Blossom" in producers
+    sex = filename_queries("SexArt.26.08.28.Lula.Stocch.And.Anabel.Busty.Hot.View.XXX.1080p.MP4-TRB")
+    assert "SexArt.26.08.28.Lula.Stocch" in sex
+    sweet = filename_queries("SweetSinner.26.09.01.Blake.Blossom.Nasty.At.Night.XXX.720p.MP4-XXX[XC]")
+    assert "SweetSinner.26.09.01.Blake.Blossom" in sweet
+    jules = filename_queries("489155.com@[中文字幕]JulesJordan.26.08.18.Octavia.Red.4K-C.mp4")
+    assert "JulesJordan.26.08.18.Octavia.Red" in jules
+
+
+def test_western_release_name_is_not_a_jav_code():
+    assert is_western_release_name("AnalOverdose.17.04.20.Riley.Nixon.XXX.1080p.MP4-KTR[N1C]")
+    assert is_western_release_name("analoverdose.17.04.20.riley.nixon[N1C].mp4")
+    assert is_western_release_name("ProducersFun 22.03.23 Blake Blossom XXX 1080p MP4 [SpankHash]")
+    assert not is_western_release_name("SSIS-001.mp4")
+    assert not is_western_release_name("SSIS-001")
+
+
+def test_xunlei_western_folder_is_watched_as_western(tmp_path):
+    import os
+
+    folder = tmp_path / "AnalOverdose.17.04.20.Riley.Nixon.XXX.1080p.MP4-KTR[N1C]"
+    folder.mkdir()
+    video = folder / "analoverdose.17.04.20.riley.nixon[N1C].mp4"
+    video.write_bytes(b"x" * 80)
+    old = time.time() - 1000
+    os.utime(folder, (old, old))
+    os.utime(video, (old, old))
+    jav = tmp_path / "SSIS-001.mp4"
+    jav.write_bytes(b"x" * 80)
+    os.utime(jav, (old, old))
+    now = time.time()
+    assert list_ready_sources(tmp_path, min_bytes=50, settle=0, now=now) == [("SSIS-001", jav)]
+    assert list_ready_western(tmp_path, min_bytes=50, settle=0, now=now) == [folder]
 
 
 def test_western_dir_is_not_a_watch_target(tmp_path):

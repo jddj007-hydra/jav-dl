@@ -19,10 +19,35 @@ let javBootstrapped = false;
 let westernKind = "scene";
 let westernPage = 1;
 let westernMode = "latest";
+let westernTheme = "";
 let westernBootstrapped = false;
 let westernItems = [];
 let westernResources = [];
 let westernCurrent = null;
+
+function renderPanelLinks(settings) {
+  const links = (settings && settings.panels) || [];
+  const html = links.map((item) => {
+    const url = escapeHtml(item.url || "");
+    const label = escapeHtml(item.label || "");
+    if (!url) return "";
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  }).join("");
+  for (const id of ["panel-links", "queue-panels"]) {
+    const box = $(id);
+    if (!box) continue;
+    box.innerHTML = html;
+    box.hidden = !html;
+  }
+}
+
+async function loadPanelLinks() {
+  try {
+    renderPanelLinks(await api("/api/settings"));
+  } catch {
+    renderPanelLinks(null);
+  }
+}
 
 function route() {
   const hash = location.hash.replace("#/", "") || "search";
@@ -572,23 +597,29 @@ async function loadSettings() {
   form.scrape_enabled.checked = s.scrape_enabled !== false;
   form.media_dir.value = s.media_dir || "";
   toggleXunleiFields();
+  renderPanelLinks(s);
   $("download-dir").textContent = "下载目录（只读，由运行环境决定）：" + (s.download_dir || "");
+  const panelById = Object.fromEntries((s.panels || []).map((item) => [item.id, item.url]));
   try {
     const h = await api("/api/health");
     $("health-box").innerHTML = [
       ["下载器", { ok: true, version: h.downloader || "?" }],
-      ["迅雷", h.xunlei],
-      ["aria2", h.aria2],
+      ["迅雷", h.xunlei, null, "xunlei"],
+      ["aria2", h.aria2, null, "aria2"],
       ["JavBus", h.javbus],
       ["磁力猫", h.clm],
       ["ThePornDB", h.tpdb, "token"],
-    ].map(([name, x, mode]) => {
+    ].map(([name, x, mode, panelId]) => {
       const ok = mode === "token" ? !!(x && (x.configured || x.ok)) : !!(x && x.ok);
       const label = mode === "token" ? (ok ? "已配置" : "未填写") : (ok ? "正常" : "不通");
+      const href = panelId ? panelById[panelId] : "";
+      const jump = href
+        ? `<a class="jump" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">打开</a>`
+        : "";
       return `
       <div class="pill">
         <span>${name}</span>
-        <span class="dot ${ok ? "ok" : "no"}">${label}${x && x.version ? " · " + x.version : ""}</span>
+        <span class="pill-side">${jump}<span class="dot ${ok ? "ok" : "no"}">${label}${x && x.version ? " · " + escapeHtml(x.version) : ""}</span></span>
       </div>`;
     }).join("");
   } catch {
@@ -665,14 +696,17 @@ function renderWesternWorks(items) {
     return;
   }
   wrap.hidden = false;
-  list.innerHTML = westernItems.map((it) => `
+  list.innerHTML = westernItems.map((it) => {
+    const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
+    return `
     <button type="button" class="work-card" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
       <img src="${coverSrc(it.cover)}" alt="" />
       <span class="code">${escapeHtml(it.site || "")}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
       <span class="work-people">${escapeHtml((it.performers || []).join("、"))}</span>
-      <span class="work-date">${escapeHtml(it.date || "")}</span>
-    </button>`).join("");
+      <span class="work-date">${escapeHtml(when)}</span>
+    </button>`;
+  }).join("");
 }
 
 function renderWesternMeta(item) {
@@ -737,6 +771,7 @@ function showWesternList() {
   $("western-meta").hidden = true;
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
+  $("western-themes").hidden = false;
   renderWesternWorks(westernItems);
   const n = westernItems.length;
   const latest = westernMode === "latest";
@@ -747,6 +782,21 @@ function showWesternList() {
   );
 }
 
+function westernParams(page, q) {
+  const params = new URLSearchParams();
+  params.set("kind", westernKind);
+  params.set("page", String(page));
+  if (q) params.set("q", q);
+  if (westernTheme) params.set("theme", westernTheme);
+  return params.toString();
+}
+
+function markThemes() {
+  document.querySelectorAll("#western-themes button").forEach((btn) => {
+    btn.classList.toggle("on", (btn.dataset.theme || "") === westernTheme);
+  });
+}
+
 async function loadWesternFeed(page) {
   westernMode = "latest";
   westernPage = page;
@@ -754,9 +804,10 @@ async function loadWesternFeed(page) {
   $("western-meta").hidden = true;
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
+  $("western-themes").hidden = false;
   setStatus($("western-status"), "加载最新…");
   try {
-    const data = await api(`/api/western/latest?kind=${encodeURIComponent(westernKind)}&page=${page}`);
+    const data = await api(`/api/western/latest?${westernParams(page)}`);
     westernItems = data.items || [];
     renderWesternWorks(westernItems);
     renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => loadWesternFeed(next));
@@ -782,6 +833,7 @@ async function openWestern(id, kind) {
   westernCurrent = listed;
   $("western-works-wrap").hidden = true;
   $("western-feed").hidden = true;
+  $("western-themes").hidden = true;
   $("western-back").hidden = false;
   renderWesternMeta(listed);
   renderWesternResources([]);
@@ -821,12 +873,17 @@ async function openWestern(id, kind) {
       tone = "bad";
     } else if (!msg) {
       const matched = magnets.value.matched;
-      const studio = (westernCurrent && westernCurrent.site) || "";
       const when = (listed && listed.date) || "";
-      msg = matched === "date"
-        ? `按片商和发行日${when ? " " + when : ""} 找到 ${items.length} 条`
-        : `这个发行日没有对上的磁链，下面是片商的 ${items.length} 条`;
-      tone = "good";
+      if (matched === "date") {
+        msg = `按片商和发行日${when ? " " + when : ""} 找到 ${items.length} 条`;
+        tone = "good";
+      } else if (matched === "title") {
+        msg = `这个发行日没有同日种子，下面 ${items.length} 条是片名或演员对得上的`;
+        tone = "good";
+      } else {
+        msg = "磁力猫里没有这个发行日的磁链";
+        tone = "bad";
+      }
     }
   } else {
     msg = (msg ? msg + "；" : "") + "磁链搜索失败：" + magnets.reason.message;
@@ -842,10 +899,9 @@ async function loadWesternSearch(q, page) {
   $("western-meta").hidden = true;
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
+  $("western-themes").hidden = false;
   setStatus($("western-status"), "查询中…");
-  const data = await api(
-    `/api/western/search?kind=${encodeURIComponent(westernKind)}&q=${encodeURIComponent(q)}&page=${page}`,
-  );
+  const data = await api(`/api/western/search?${westernParams(page, q)}`);
   westernItems = data.items || [];
   renderWesternWorks(westernItems);
   renderPager(
@@ -877,6 +933,19 @@ $("western-kind").addEventListener("click", (e) => {
 
 $("western-latest").addEventListener("click", () => {
   $("western-input").value = "";
+  loadWesternFeed(1);
+});
+
+$("western-themes").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-theme]");
+  if (!btn || !$("western-themes").contains(btn)) return;
+  westernTheme = btn.dataset.theme || "";
+  markThemes();
+  const q = $("western-input").value.trim();
+  if (westernMode === "search" && q) {
+    loadWesternSearch(q, 1).catch((err) => setStatus($("western-status"), err.message, "bad"));
+    return;
+  }
   loadWesternFeed(1);
 });
 
@@ -956,6 +1025,7 @@ $("western-meta").addEventListener("click", (e) => {
 
 window.addEventListener("hashchange", route);
 route();
+loadPanelLinks();
 pollTimer = setInterval(() => {
   if (!views.queue.hidden) refreshQueue();
 }, 2000);

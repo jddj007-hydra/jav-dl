@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import date
+from pathlib import Path
 
 from app.config import Settings
 from app.ranking import heat_key
@@ -28,6 +29,60 @@ def words(text: str) -> list[str]:
             continue
         out.append(word)
     return out
+
+
+_WESTERN_HEAD = re.compile(
+    r"^[A-Za-z][A-Za-z0-9]*[.\s_-]+"
+    r"(?:(?:19|20)\d{2}|\d{2})[.\- ]"
+    r"(?:0[1-9]|1[0-2])[.\- ]"
+    r"(?:0[1-9]|[12]\d|3[01])(?!\d)"
+)
+_LEADING_NOISE = re.compile(r"^(?:\[[^\]]*\]|[^\s@/\\]{1,48}@)+")
+_RELEASE_BRACKETS = re.compile(r"\[[^\]]*\]|\([^)]*\)")
+_GROUP_SUFFIX = re.compile(r"-[A-Z0-9]{2,8}$")
+_RELEASE_SUFFIXES = {".mp4", ".mkv", ".avi", ".wmv", ".ts", ".mov", ".m4v", ".webm"}
+
+
+def release_text(name: str) -> str:
+    """Drop watermarks, subtitle tags, and the trailing release group."""
+    text = (name or "").strip()
+    if Path(text).suffix.lower() in _RELEASE_SUFFIXES:
+        text = Path(text).stem
+    previous = None
+    while text and previous != text:
+        previous = text
+        text = _LEADING_NOISE.sub("", text).strip()
+    text = _RELEASE_BRACKETS.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = _GROUP_SUFFIX.sub("", text).strip(" .")
+    return text
+
+
+def is_western_release_name(name: str) -> bool:
+    """Scene releases look like Site.YY.MM.DD, which is not a JAV code."""
+    text = (name or "").strip()
+    if not text:
+        return False
+    from app.codes import normalize_code
+
+    if normalize_code(Path(text).stem):
+        return False
+    cleaned = release_text(text)
+    if not cleaned or normalize_code(cleaned):
+        return False
+    return bool(_WESTERN_HEAD.match(cleaned))
+
+
+def split_release_name(text: str) -> tuple[str, list[str]] | None:
+    """Site plus date, then the tokens that follow it."""
+    match = _RELEASE_DATE.search(text or "")
+    if not match:
+        return None
+    head = (text or "")[: match.end()].strip(" .")
+    tail = [tok for tok in re.split(r"[.\s_-]+", (text or "")[match.end():].strip()) if tok]
+    if not head:
+        return None
+    return head, tail
 
 
 def parse_release_date(title: str) -> str | None:
@@ -104,6 +159,35 @@ def western_search_terms(
     return terms
 
 
+def western_fallback_terms(
+    site: str,
+    title: str,
+    performers: list[str] | None = None,
+) -> list[str]:
+    """Studio plus a performer or one title word, for when the release date is absent."""
+    forms = _studio_forms(site)
+    if not forms:
+        return []
+    studio = forms[0]
+    terms: list[str] = []
+    for name in (performers or [])[:2]:
+        bits = words(name)
+        if len(bits) >= 2:
+            terms.append(f"{studio} {bits[0]} {bits[1]}")
+        elif len(bits) == 1 and len(bits[0]) >= 4:
+            terms.append(f"{studio} {bits[0]}")
+    site_words = {word.lower() for word in words(site)}
+    distinctive = [word for word in words(title) if word.lower() not in site_words and len(word) >= 5]
+    distinctive.sort(key=len, reverse=True)
+    if distinctive:
+        terms.append(f"{studio} {distinctive[0]}")
+    out: list[str] = []
+    for term in terms:
+        if term not in out:
+            out.append(term)
+    return out[:3]
+
+
 def _has_token(hay: str, token: str) -> bool:
     return re.search(rf"(^|[^a-z0-9]){re.escape(token.lower())}([^a-z0-9]|$)", hay) is not None
 
@@ -114,6 +198,7 @@ def rank_western_magnets(
     title: str,
     performers: list[str] | None = None,
     scene_date: str = "",
+    related_only: bool = False,
 ) -> tuple[list[dict], str]:
     title_tokens = [word.lower() for word in words(title)]
     site_tokens = [word.lower() for word in words(site)]
@@ -140,18 +225,24 @@ def rank_western_magnets(
         row["_hits"] = (title_hits, person_hits, site_hits)
         row["_gap"] = gap if gap is not None else 10_000
         scored.append(row)
-    close = [row for row in scored if scene_date and row["_gap"] <= 1]
-    pool = close or scored
-
     def _strong(row: dict) -> int:
         title_hits, person_hits, _site_hits = row["_hits"]
         if title_hits >= 2 or (title_hits >= 1 and person_hits > 0):
             return 1
         return 0
 
+    close = [row for row in scored if scene_date and row["_gap"] <= 1]
+    if close:
+        pool = close
+    elif related_only:
+        pool = [row for row in scored if _strong(row)]
+    else:
+        pool = scored
+    limit = 24 if close else (8 if related_only else 24)
+
     pool.sort(key=lambda row: (
         heat_key(row)[0],
-        row["_gap"] if close else 0,
+        row["_gap"],
         -_strong(row),
         -row["_hits"][0],
         -row["_hits"][1],
@@ -166,7 +257,7 @@ def rank_western_magnets(
     else:
         match = "none"
     out: list[dict] = []
-    for index, row in enumerate(pool[:24], 1):
+    for index, row in enumerate(pool[:limit], 1):
         row.pop("_hits", None)
         row.pop("_gap", None)
         row.pop("_kind", None)
@@ -216,10 +307,29 @@ async def collect_western_magnets(
     studio_terms = [term for term in terms if term not in date_terms]
     merged, error = await _search_terms(settings, date_terms, pages=1)
     items, match = rank_western_magnets(merged, site, title, performers, scene_date)
-    if match != "date":
-        extra, studio_error = await _search_terms(settings, studio_terms, pages=2)
-        items, match = rank_western_magnets(extra, site, title, performers, "")
-        error = studio_error or error
+    if match == "date":
+        return items, match, None
+    extra, extra_error = await _search_terms(
+        settings,
+        western_fallback_terms(site, title, performers) or studio_terms[:1],
+        pages=1,
+    )
+    combined: list[dict] = []
+    seen: set[str] = set()
+    for item in [*merged, *extra]:
+        info_hash = item.get("info_hash") or ""
+        if not info_hash or info_hash in seen:
+            continue
+        seen.add(info_hash)
+        combined.append(item)
+    items, match = rank_western_magnets(
+        combined,
+        site,
+        title,
+        performers,
+        scene_date,
+        related_only=True,
+    )
     if items:
-        error = None
-    return items, match, error
+        return items, match, None
+    return [], "none", extra_error or error or "磁力猫里没有这个发行日的磁链"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +28,38 @@ DOWNLOADERS = ("aria2", "xunlei")
 def normalize_downloader(value: str | None) -> str:
     v = (value or "aria2").strip().lower()
     return v if v in DOWNLOADERS else "aria2"
+
+
+def browser_http_url(raw: str | None) -> str | None:
+    """Keep an http(s) URL a browser can open. Drop userinfo so a link cannot leak a password."""
+    text = (raw or "").strip()
+    if not text or any(ch in text for ch in " \t\r\n\"'<>"):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    return text.rstrip("/") or None
+
+
+def panel_links(settings: Settings) -> list[dict]:
+    """Browser jump targets for downloaders that actually have a web page.
+
+    迅雷面板就是 xunlei_url。aria2 只提供 JSON-RPC，默认还绑在 127.0.0.1，
+    浏览器打不开，所以这里不给 aria2 链接。
+    """
+    links: list[dict] = []
+    downloader = normalize_downloader(settings.downloader)
+    xunlei_configured = (
+        downloader == "xunlei"
+        or bool((settings.xunlei_username or "").strip())
+        or bool(settings.xunlei_password)
+    )
+    xunlei_url = browser_http_url(settings.xunlei_url)
+    if xunlei_configured and xunlei_url:
+        links.append({"id": "xunlei", "label": "迅雷面板", "url": xunlei_url})
+    return links
 
 
 class Settings(BaseSettings):
@@ -104,6 +137,7 @@ class Settings(BaseSettings):
             "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
             "tpdb_api_key_set": bool(self.tpdb_api_key),
+            "panels": panel_links(self),
         }
 
 

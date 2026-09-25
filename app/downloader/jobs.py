@@ -19,7 +19,13 @@ from app.scrape import (
     newest_mtime,
     scrape_job,
 )
-from app.western_archive import find_western_videos, read_sidecar, scrape_western_job
+from app.western_archive import (
+    find_western_videos,
+    list_ready_western,
+    read_sidecar,
+    scrape_western_job,
+    scrape_western_source,
+)
 from app.textutil import format_size
 from app.trackers import magnet_for
 
@@ -199,6 +205,10 @@ class JobManager:
         if now - self._last_watch >= WATCH_EVERY:
             self._last_watch = now
             try:
+                await self.watch_western()
+            except Exception:
+                pass
+            try:
                 await self.watch_downloads()
             except Exception:
                 pass
@@ -345,6 +355,38 @@ class JobManager:
             if scrape_st in ("waiting", "scraping"):
                 busy.add(code)
         return busy
+
+    async def watch_western(self) -> None:
+        """Xunlei panel downloads have no jav-dl job. Match Site.YY.MM.DD names."""
+        if not self.settings.scrape_enabled or self.settings.western_root is None:
+            return
+        if not (self.settings.tpdb_api_key or "").strip():
+            return
+        min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
+        settle = max(0, int(self.settings.scrape_settle_seconds))
+        now = time.time()
+        ready = await asyncio.to_thread(
+            list_ready_western,
+            self.settings.download_dir,
+            min_bytes,
+            settle,
+            now,
+        )
+        for src in ready:
+            key = str(src)
+            if self._watch_fail.get(key, 0) > now:
+                continue
+            try:
+                async with self._scrape_lock:
+                    await scrape_western_source(self.settings, src)
+            except ScrapeError:
+                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                continue
+            except Exception:
+                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                continue
+            self._watch_fail.pop(key, None)
+            return
 
     async def watch_downloads(self) -> None:
         if not self.settings.scrape_enabled:

@@ -48,6 +48,40 @@ button, input { font: inherit; }
   white-space: nowrap;
 }
 .brand::before { content: "● "; color: var(--accent); }
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.panel-links {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.panel-links a {
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.panel-links a:hover {
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(210, 122, 79, 0.55);
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.section-head h2 { margin: 0; }
 nav {
   display: flex;
   gap: 2px;
@@ -126,6 +160,27 @@ h2 { font-size: 16px; font-weight: 650; margin: 0 0 8px; }
   font-weight: 600;
 }
 .feed-bar > .ghost:hover { color: var(--text); border-color: var(--line); }
+.theme-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 14px;
+}
+.theme-bar button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.theme-bar button:hover { color: var(--text); }
+.theme-bar button.on {
+  color: var(--text);
+  background: #2a211c;
+  border-color: rgba(210, 122, 79, 0.55);
+}
 .pager {
   display: flex;
   align-items: center;
@@ -425,11 +480,15 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .pill {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
 }
+.pill-side { display: flex; align-items: center; gap: 10px; }
+.pill .jump { font-size: 13px; white-space: nowrap; }
 .dot { font-weight: 650; }
 .dot.ok { color: var(--good); }
 .dot.no { color: var(--bad); }
@@ -438,6 +497,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
   .meta-main { grid-template-columns: 1fr; }
   .meta .cover { width: 100%; height: auto; max-height: 320px; }
   .top { flex-wrap: wrap; gap: 10px; padding: 12px 16px; }
+  .top-actions { flex: 1 1 100%; flex-wrap: wrap; }
   nav { flex: 1 1 100%; }
   nav a { flex: 1; text-align: center; padding: 8px 6px; }
   .res-item {

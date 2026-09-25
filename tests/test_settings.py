@@ -1,4 +1,4 @@
-from app.config import Settings, _overlay, normalize_downloader, save_user_config
+from app.config import Settings, _overlay, browser_http_url, normalize_downloader, panel_links, save_user_config
 from app.models import SettingsUpdate
 
 
@@ -69,6 +69,36 @@ def test_empty_media_dir_keeps_old(tmp_path):
     current = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
     merged = save_user_config(current, {"media_dir": "  "})
     assert merged.media_dir == tmp_path / "lib"
+
+
+def test_panel_link_for_configured_xunlei():
+    selected = Settings(
+        downloader="xunlei",
+        xunlei_url="http://192.168.121.104:2345/",
+        xunlei_password="secret",
+    )
+    assert panel_links(selected) == [
+        {"id": "xunlei", "label": "迅雷面板", "url": "http://192.168.121.104:2345"}
+    ]
+    assert selected.public_dict()["panels"][0]["url"] == "http://192.168.121.104:2345"
+
+    saved = Settings(
+        downloader="aria2",
+        xunlei_url="http://nas:2345",
+        xunlei_username="admin",
+        xunlei_password="secret",
+    )
+    assert panel_links(saved)[0]["url"] == "http://nas:2345"
+
+
+def test_panel_link_hidden_until_xunlei_is_configured():
+    assert panel_links(Settings(downloader="aria2")) == []
+    assert panel_links(Settings(downloader="xunlei", xunlei_url="")) == []
+    assert panel_links(Settings(downloader="xunlei", xunlei_url="javascript:alert(1)")) == []
+    assert browser_http_url("http://user:pass@192.168.121.104:2345") is None
+    # aria2 只有 JSON-RPC，没有网页
+    aria = Settings(downloader="aria2", aria2_rpc="http://127.0.0.1:6800/jsonrpc")
+    assert panel_links(aria) == []
 
 
 def test_settings_update_accepts_downloader():

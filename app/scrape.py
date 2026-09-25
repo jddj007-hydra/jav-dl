@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from app.codes import extract_code, normalize_code, title_mentions_code
+from app.western_magnets import is_western_release_name
 from app.config import Settings
 from app.httputil import site_client
 from app.nfo import build_nfo
@@ -233,7 +234,7 @@ def list_ready_sources(
         mtime = source_mtime(target)
         if mtime and now - mtime < settle:
             continue
-        if looks_like_pack(target.name):
+        if looks_like_pack(target.name) or is_western_release_name(target.name):
             continue
         if target.is_file():
             if not is_video(target):
@@ -254,6 +255,8 @@ def list_ready_sources(
         code = extract_code(target.name)
         if not code:
             for video in videos:
+                if is_western_release_name(video.name):
+                    continue
                 code = extract_code(video.name)
                 if code:
                     break

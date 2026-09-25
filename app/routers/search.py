@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.codes import normalize_code
 from app.library import attach_library
 from app.sources.javbus import CACHE_VER, MetadataError, fetch_latest, fetch_metadata, search_works
+from app.sources.tpdb import is_excluded_orientation
 
 router = APIRouter()
 
@@ -30,6 +31,7 @@ async def jav_latest(
         except MetadataError as exc:
             return {"kind": kind, "page": page, "items": [], "error": str(exc)}
         await db.put_metadata(key, {"kind": kind, "page": page, "items": items})
+    items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     return {
         "kind": kind,
