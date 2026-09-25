@@ -17,6 +17,7 @@ from app.scrape import (
     is_incomplete,
     iter_videos,
     looks_like_pack,
+    safe_rmtree,
     scrape_job,
 )
 
@@ -228,6 +229,158 @@ def test_maybe_scrape_waits_for_settle(tmp_path):
         assert out["scrape_status"] == "waiting"
 
     asyncio.run(run())
+
+
+def test_find_code_videos_loose_file_is_the_file_itself(tmp_path):
+    bucket = tmp_path / "xunlei"
+    bucket.mkdir()
+    video = bucket / "SSIS-001.mp4"
+    video.write_bytes(b"x" * 80)
+    src, videos = find_code_videos("SSIS-001", tmp_path / "missing", tmp_path, min_bytes=50)
+    assert src == video
+    assert videos == [video]
+
+
+def test_safe_rmtree_keeps_shared_buckets(tmp_path):
+    root = tmp_path / "dl"
+    for name in ("xunlei", "jav-dl", "western"):
+        bucket = root / name
+        bucket.mkdir(parents=True)
+        (bucket / "keep.txt").write_text("x", encoding="utf-8")
+        safe_rmtree(bucket, root)
+        assert bucket.is_dir()
+        assert (bucket / "keep.txt").is_file()
+    leaf = root / "xunlei" / "SSIS-001"
+    leaf.mkdir()
+    safe_rmtree(leaf, root)
+    assert not leaf.exists()
+    assert (root / "xunlei").is_dir()
+
+
+def test_loose_file_archives_while_another_download_is_busy(tmp_path, monkeypatch):
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "禁欲",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    root = tmp_path / "dl"
+    video = root / "xunlei" / "SSIS-001.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x" * 80)
+    busy = root / "IPX-001"
+    busy.mkdir()
+    (busy / "a.mp4").write_bytes(b"x" * 80)
+    (busy / "a.mp4.aria2").write_bytes(b"ctl")
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=root,
+        media_dir=tmp_path / "media",
+        scrape_enabled=True,
+        scrape_settle_seconds=0,
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        job = _job(root / "jav-dl" / "SSIS-001")
+        job["status"] = "complete"
+        job["cleaned"] = 1
+        await db.insert_job(job)
+        mgr = JobManager(settings, db, object())
+        out = await mgr.maybe_scrape(job)
+        assert out["scrape_status"] == "archived"
+        assert video.parent.is_dir()
+        assert not video.exists()
+        assert (busy / "a.mp4.aria2").is_file()
+        assert (settings.media_dir / "202102" / "SSIS-001" / "SSIS-001.mp4").is_file()
+
+    asyncio.run(run())
+
+
+def test_scrape_job_moves_files_off_the_event_loop(tmp_path, monkeypatch):
+    seen = []
+    real = asyncio.to_thread
+
+    async def wrapped(fn, *args, **kwargs):
+        seen.append(getattr(fn, "__name__", ""))
+        return await real(fn, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", wrapped)
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "禁欲",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    root = tmp_path / "dl"
+    dest = root / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=root,
+        media_dir=tmp_path / "media",
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await scrape_job(settings, db, {"code": "SSIS-001", "dest": str(dest)})
+
+    asyncio.run(run())
+    assert "find_code_videos" in seen
+    assert "_commit_jav" in seen
+
+
+def test_watch_logs_a_scrape_failure_once(tmp_path, monkeypatch, caplog):
+    import logging
+
+    async def boom(*args, **kwargs):
+        raise ScrapeError("元数据失败")
+
+    monkeypatch.setattr("app.downloader.jobs.scrape_job", boom)
+    root = tmp_path / "dl"
+    folder = root / "SSIS-001"
+    folder.mkdir(parents=True)
+    (folder / "a.mp4").write_bytes(b"x" * 80)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=root,
+        media_dir=tmp_path / "media",
+        scrape_enabled=True,
+        scrape_settle_seconds=0,
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+    caplog.set_level(logging.WARNING, logger="app.downloader.jobs")
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, object())
+        await mgr.watch_downloads()
+        await mgr.watch_downloads()
+
+    asyncio.run(run())
+    messages = [rec.message for rec in caplog.records if "监控归档失败" in rec.message]
+    assert len(messages) == 1
+    assert "元数据失败" in messages[0]
 
 
 def test_maybe_scrape_skipped_when_disabled(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import load_settings
 from app.db import Database
+from app.logsetup import ensure_app_logging
 from app.downloader.aria2 import Aria2
 from app.downloader.jobs import JobManager
 from app.downloader.xunlei import Xunlei
@@ -19,6 +21,7 @@ from app.library import Library
 from app.routers import downloads, health, images, resources, search, settings as settings_router, western
 
 STATIC = Path(__file__).parent / "static"
+log = logging.getLogger("app")
 
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
@@ -51,6 +54,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_app_logging()
     settings = load_settings()
     db = Database(settings)
     await db.init()
@@ -73,7 +77,7 @@ async def lifespan(app: FastAPI):
             try:
                 await jobs.sync_all()
             except Exception:
-                pass
+                log.warning("队列轮询失败", exc_info=True)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=2.0)
             except asyncio.TimeoutError:

@@ -298,6 +298,46 @@ def test_scrape_western_moves_file_into_studio(tmp_path):
     asyncio.run(run())
 
 
+def test_western_slug_dir_is_removed_after_a_loose_file_is_archived(tmp_path):
+    import asyncio
+
+    from app.config import Settings
+    from app.western_archive import find_western_videos, scrape_western_job
+
+    download = tmp_path / "dl"
+    video = download / "brazzers.scene.title.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x" * 80)
+    slug = download / "western" / "slug"
+    slug.mkdir(parents=True)
+    (slug / ".javdl.json").write_text("{}\n", encoding="utf-8")
+    src, videos = find_western_videos(download, slug, "brazzers.scene.title.xxx", min_bytes=50)
+    assert src == video
+    assert videos == [video]
+
+    async def run():
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            download_dir=download,
+            media_dir=tmp_path / "media",
+            western_media_dir=str(tmp_path / "欧美"),
+            scrape_min_mb=0,
+        )
+        settings.ensure_dirs()
+        (settings.western_root / "Brazzers").mkdir(parents=True)
+        await scrape_western_job(
+            settings,
+            {"dest": str(slug), "title": "brazzers.scene.title.xxx"},
+            {"kind": "western", "site": "Brazzers", "title": "Scene Title", "date": "2024-01-02", "performers": []},
+        )
+
+    asyncio.run(run())
+    assert not slug.exists()
+    assert (download / "western").is_dir()
+    assert not video.exists()
+    assert list((tmp_path / "欧美" / "Brazzers").glob("*.mp4"))
+
+
 def test_western_slug_is_not_a_code():
     slug = western_slug("AB", "", "123", "id")
     assert normalize_code(slug) is None

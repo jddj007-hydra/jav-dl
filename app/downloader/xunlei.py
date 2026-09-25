@@ -61,6 +61,46 @@ def map_phase(task: dict) -> str:
     return "active"
 
 
+def task_view(task: dict) -> dict:
+    params = task.get("params") or {}
+    status = map_phase(task)
+    total = int(task.get("file_size") or 0)
+    done = int(params.get("checked_size") or 0)
+    try:
+        speed = int(str(params.get("speed") or "0").split(".")[0])
+    except ValueError:
+        speed = 0
+    err = params.get("error_detail") or ""
+    return {
+        "gid": str(task.get("id") or ""),
+        "status": status,
+        "totalLength": str(total),
+        "completedLength": str(done),
+        "downloadSpeed": str(speed),
+        "errorMessage": err if status == "error" else "",
+        "connections": 0,
+        "numSeeders": 0,
+        "truncated": False,
+    }
+
+
+def view_task(gid: str, index: dict[str, dict], truncated: bool) -> dict:
+    task = index.get(str(gid))
+    if task:
+        return task_view(task)
+    return {
+        "gid": gid,
+        "status": "missing",
+        "truncated": bool(truncated),
+        "totalLength": "0",
+        "completedLength": "0",
+        "downloadSpeed": "0",
+        "errorMessage": "迅雷任务不存在或已删",
+        "connections": 0,
+        "numSeeders": 0,
+    }
+
+
 class Xunlei:
     def __init__(self, settings):
         self.base = (settings.xunlei_url or "").rstrip("/")
@@ -69,8 +109,8 @@ class Xunlei:
         self.device_name = settings.xunlei_device_name
         self._token = ""
         self._token_at = 0.0
-        self._device_id = ""
-        self._parent_folder_id = ""
+        self._device_id_cache = ""
+        self._folder_id_cache = ""
 
     def _auth(self) -> tuple[str, str] | None:
         if self.username or self.password:
@@ -151,23 +191,33 @@ class Xunlei:
             return None
         return str(data.get("running_version") or "") or None
 
-    async def _tasks(self, token: str) -> list[dict]:
+    async def _tasks(self, token: str, filters: str) -> tuple[list[dict], bool]:
         out: list[dict] = []
         page = ""
         for _ in range(8):
-            q = "drive/v1/tasks?space=&limit=100&device_space="
+            q = f"drive/v1/tasks?{filters}&limit=100&device_space="
             if page:
                 q += f"&page_token={quote(page)}"
             data = await self._json("GET", q, token=token)
             out.extend(data.get("tasks") or [])
             page = data.get("next_page_token") or ""
             if not page:
-                break
-        return out
+                return out, False
+        return out, True
+
+    async def _download_tasks(self, token: str) -> tuple[list[dict], bool]:
+        # 不带 type/space 时返回的是整个账号的云盘离线任务，NAS 上的任务会被淹没
+        device_id = await self._device_id(token)
+        return await self._tasks(token, f"type=user%23download-url&space={quote(device_id)}")
+
+    async def list_download_tasks(self) -> tuple[dict[str, dict], bool]:
+        token = await self.token()
+        tasks, truncated = await self._download_tasks(token)
+        index = {str(task.get("id") or ""): task for task in tasks if task.get("id")}
+        return index, truncated
 
     async def _runner(self, token: str) -> dict:
-        tasks = await self._tasks(token)
-        runners = [t for t in tasks if t.get("type") == "user#runner"]
+        runners, _truncated = await self._tasks(token, "type=user%23runner")
         if not runners:
             raise XunleiError("迅雷还没有在线设备，先在面板里登录迅雷账号")
         want = (self.device_name or "").strip()
@@ -182,26 +232,40 @@ class Xunlei:
         return runners[0]
 
     async def _device_id(self, token: str) -> str:
-        if self._device_id:
-            return self._device_id
+        if self._device_id_cache:
+            return self._device_id_cache
         runner = await self._runner(token)
         target = str((runner.get("params") or {}).get("target") or "")
         if not target:
             raise XunleiError("读不到迅雷设备 ID")
-        self._device_id = target
+        self._device_id_cache = target
         return target
 
     async def _parent_folder_id(self, token: str) -> str:
-        if self._parent_folder_id:
-            return self._parent_folder_id
-        for t in await self._tasks(token):
-            if t.get("type") != "user#download-url":
-                continue
+        if self._folder_id_cache:
+            return self._folder_id_cache
+        device_id = await self._device_id(token)
+        folders = quote(json.dumps({"kind": {"eq": "drive#folder"}}, separators=(",", ":")))
+        try:
+            data = await self._json(
+                "GET",
+                f"drive/v1/files?space={quote(device_id)}&limit=100&parent_id=&filters={folders}&device_space=",
+                token=token,
+            )
+        except XunleiError:
+            data = {}
+        for f in data.get("files") or []:
+            fid = str(f.get("id") or "")
+            if fid and str(f.get("name") or "") == "downloads":
+                self._folder_id_cache = fid
+                return fid
+        tasks, _truncated = await self._download_tasks(token)
+        for t in tasks:
             params = t.get("params") or {}
             fid = str(params.get("parent_folder_id") or "")
             path = str(params.get("parent_folder_path") or "")
             if fid and (not path or path.rstrip("/") == "/downloads"):
-                self._parent_folder_id = fid
+                self._folder_id_cache = fid
                 return fid
         raise XunleiError("找不到迅雷下载目录，先在迅雷面板里手动下过一次")
 
@@ -258,40 +322,16 @@ class Xunlei:
 
     async def _find_by_magnet(self, token: str, magnet: str) -> str:
         needle = magnet.lower()
-        for t in await self._tasks(token):
+        tasks, _truncated = await self._download_tasks(token)
+        for t in tasks:
             url = str((t.get("params") or {}).get("url") or "")
             if url.lower() == needle or needle[20:60] in url.lower():
                 return str(t.get("id") or "")
         return ""
 
     async def tell(self, gid: str) -> dict:
-        token = await self.token()
-        task = None
-        for t in await self._tasks(token):
-            if str(t.get("id") or "") == gid:
-                task = t
-                break
-        if not task:
-            return {"status": "error", "errorMessage": "迅雷任务不存在或已删"}
-        params = task.get("params") or {}
-        status = map_phase(task)
-        total = int(task.get("file_size") or 0)
-        done = int(params.get("checked_size") or 0)
-        try:
-            speed = int(str(params.get("speed") or "0").split(".")[0])
-        except ValueError:
-            speed = 0
-        err = params.get("error_detail") or ""
-        return {
-            "gid": gid,
-            "status": status,
-            "totalLength": str(total),
-            "completedLength": str(done),
-            "downloadSpeed": str(speed),
-            "errorMessage": err if status == "error" else "",
-            "connections": 0,
-            "numSeeders": 0,
-        }
+        index, truncated = await self.list_download_tasks()
+        return view_task(gid, index, truncated)
 
     async def pause(self, gid: str) -> None:
         await self._task_op("pause", gid)

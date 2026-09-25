@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import re
 import shutil
 from datetime import date
@@ -29,6 +31,8 @@ SKIP_DIR_NAMES = {
 PACK_RANGE_RE = re.compile(r"\d{3}\s*[-~]\s*\d{3}")
 
 MONTH_RE = re.compile(r"(\d{4})[-/.](\d{1,2})")
+BUCKET_DIRS = {"jav-dl", "xunlei", "western"}
+log = logging.getLogger("app.scrape")
 
 
 class ScrapeError(Exception):
@@ -131,7 +135,7 @@ def find_code_videos(
         except OSError:
             size = 0
         if is_video(dest) and size >= min_bytes:
-            return dest.parent, [dest]
+            return dest, [dest]
     elif dest.exists():
         videos = iter_videos(dest, min_bytes)
         if videos:
@@ -161,7 +165,7 @@ def find_code_videos(
                     and title_mentions_code(child.name, code)
                     and not looks_like_pack(child.name)
                 ):
-                    matches.append((root, [child]))
+                    matches.append((child, [child]))
                 continue
             if not child.is_dir():
                 continue
@@ -315,6 +319,8 @@ def safe_rmtree(path: Path, root: Path) -> None:
         return
     if resolved == base or not resolved.is_relative_to(base):
         return
+    if resolved.parent == base and resolved.name.lower() in BUCKET_DIRS:
+        return
     shutil.rmtree(resolved, ignore_errors=True)
 
 
@@ -394,14 +400,45 @@ def archive_videos(
     return written
 
 
-async def scrape_job(settings: Settings, db, job: dict) -> dict:
+def _commit_jav(
+    code: str,
+    videos: list[Path],
+    dest_dir: Path,
+    nfo_xml: str,
+    poster_bytes: bytes | None,
+    src: Path,
+    min_bytes: int,
+    download_root: Path,
+    cover: str,
+) -> tuple[bool, bool]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    archive_videos(code, videos, dest_dir, nfo_xml)
+    has_poster, has_fanart = write_images(dest_dir, poster_bytes)
+    if cover and not (has_poster and has_fanart):
+        raise ScrapeError("封面写入失败")
+    if not src.is_file() and not iter_videos(src, min_bytes):
+        safe_rmtree(src, download_root)
+    return has_poster, has_fanart
+
+
+async def scrape_job(
+    settings: Settings,
+    db,
+    job: dict,
+    found: tuple[Path, list[Path]] | None = None,
+) -> dict:
     code = (job.get("code") or "").strip().upper()
     if not code:
         raise ScrapeError("任务没有番号")
     dest = Path(job.get("dest") or "")
     min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)
-    src, videos = find_code_videos(code, dest, settings.download_dir, min_bytes)
-    if has_incomplete_files(src):
+    if found is None:
+        src, videos = await asyncio.to_thread(
+            find_code_videos, code, dest, settings.download_dir, min_bytes,
+        )
+    else:
+        src, videos = found
+    if await asyncio.to_thread(source_incomplete, src):
         raise ScrapeError("下载尚未完成")
 
     meta = await resolve_metadata(settings, db, code)
@@ -414,15 +451,19 @@ async def scrape_job(settings: Settings, db, job: dict) -> dict:
     if cover:
         poster_bytes = await fetch_cover_bytes(settings, cover)
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    archive_videos(code, videos, dest_dir, nfo_xml)
-    has_poster, has_fanart = write_images(dest_dir, poster_bytes)
-    if cover and not (has_poster and has_fanart):
-        raise ScrapeError("封面写入失败")
-
-    leftover = iter_videos(src, min_bytes)
-    if not leftover:
-        safe_rmtree(src, settings.download_dir)
+    has_poster, _has_fanart = await asyncio.to_thread(
+        _commit_jav,
+        code,
+        videos,
+        dest_dir,
+        nfo_xml,
+        poster_bytes,
+        src,
+        min_bytes,
+        settings.download_dir,
+        cover,
+    )
+    log.info("已归档 %s -> %s", code, f"{month}/{code}")
 
     return {
         "code": code,

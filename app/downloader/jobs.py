@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -9,15 +11,14 @@ from app.codes import normalize_code
 from app.config import Settings
 from app.db import Database
 from app.downloader.aria2 import Aria2, Aria2Error
-from app.downloader.xunlei import Xunlei, XunleiError
+from app.downloader.xunlei import Xunlei, XunleiError, view_task
 from app.scrape import (
     ScrapeError,
     find_code_videos,
-    has_incomplete_files,
-    is_incomplete,
     list_ready_sources,
-    newest_mtime,
     scrape_job,
+    source_incomplete,
+    source_mtime,
 )
 from app.western_archive import (
     find_western_videos,
@@ -29,7 +30,10 @@ from app.western_archive import (
 from app.textutil import format_size
 from app.trackers import magnet_for
 
+log = logging.getLogger("app.downloader.jobs")
+
 BackendError = (Aria2Error, XunleiError)
+_ARIA2_GID = re.compile(r"[0-9a-fA-F]{16}")
 
 ACTIVE = {"active", "waiting", "paused", "downloading", "queued"}
 DONE = {"complete", "error", "removed", "cancelled"}
@@ -99,19 +103,58 @@ class JobManager:
         self._last_watch = 0.0
         self._watch_fail: dict[str, float] = {}
         self._scrape_lock = asyncio.Lock()
+        self._aria2_settled: set[str] = set()
 
     def _use_xunlei(self) -> bool:
         return (self.settings.downloader or "aria2").strip().lower() == "xunlei"
+
+    def _backend(self, job: dict) -> str:
+        name = (job.get("backend") or "").strip().lower()
+        if name in ("aria2", "xunlei"):
+            return name
+        gid = str(job.get("gid") or "").split(",")[0].strip()
+        if _ARIA2_GID.fullmatch(gid):
+            return "aria2"
+        if gid:
+            return "xunlei"
+        return "xunlei" if self._use_xunlei() else "aria2"
+
+    def _needs_tell(self, job: dict) -> bool:
+        if not job.get("gid") or job.get("status") == "cancelled":
+            return False
+        backend = self._backend(job)
+        if backend == "xunlei" and job.get("status") == "complete" and job.get("cleaned"):
+            return False
+        if backend == "aria2" and job.get("id") in self._aria2_settled:
+            return False
+        return True
+
+    async def _xunlei_snapshot(self, jobs: list[dict]) -> dict | None:
+        if not any(self._needs_tell(job) and self._backend(job) == "xunlei" for job in jobs):
+            return None
+        try:
+            index, truncated = await self.xunlei.list_download_tasks()
+        except XunleiError as exc:
+            return {"index": {}, "truncated": False, "error": exc}
+        return {"index": index, "truncated": truncated, "error": None}
+
+    async def _fetch_status(self, job: dict, snapshot: dict | None) -> tuple[dict, str]:
+        gid = str(job.get("gid") or "")
+        if self._backend(job) == "xunlei":
+            snap = snapshot
+            if snap is None:
+                index, truncated = await self.xunlei.list_download_tasks()
+                snap = {"index": index, "truncated": truncated, "error": None}
+            if snap.get("error"):
+                raise snap["error"]
+            return view_task(gid, snap["index"], bool(snap.get("truncated"))), gid
+        resolved = await self.aria2.resolve(gid)
+        return resolved, str(resolved.get("stored") or gid)
 
     async def _add_magnet(self, magnet: str, dest: str) -> str:
         if self._use_xunlei():
             return await self.xunlei.add_magnet(magnet, dest)
         return await self.aria2.add_magnet(magnet, dest)
-
-    async def _tell(self, gid: str) -> dict:
-        if self._use_xunlei():
-            return await self.xunlei.tell(gid)
-        return await self.aria2.tell(gid)
 
     def _dest_for(self, code: str, dest_rel: str | None) -> Path:
         rel = Path(dest_rel or code)
@@ -152,46 +195,95 @@ class JobManager:
             "created_at": now,
             "updated_at": now,
             "cleaned": 0,
+            "backend": "xunlei" if self._use_xunlei() else "aria2",
         }
         await self.db.insert_job(job)
         return await self.public(job)
 
-    async def sync_one(self, job: dict) -> dict:
-        gid = job.get("gid")
-        if not gid or job.get("status") in ("cancelled",):
+    async def sync_one(self, job: dict, snapshot: dict | None = None) -> dict:
+        if not self._needs_tell(job):
             return job
+        backend = self._backend(job)
         try:
-            st = await self._tell(gid)
-        except BackendError as e:
+            st, stored = await self._fetch_status(job, snapshot)
+        except BackendError as exc:
             if job.get("status") in DONE:
+                if backend == "aria2":
+                    self._aria2_settled.add(job["id"])
                 return job
-            await self.db.update_job(job["id"], error=str(e))
+            await self.db.update_job(job["id"], error=str(exc))
             job = dict(job)
-            job["error"] = str(e)
+            job["error"] = str(exc)
+            job["_live"] = {}
             return job
+        if st.get("status") == "missing":
+            return await self._sync_missing(job, st, backend)
+
         status = _map_status(st.get("status"), job.get("status") or "queued")
-        error = st.get("errorMessage") or job.get("error")
-        fields: dict = {"status": status}
-        if error:
-            fields["error"] = error
-        if status == "complete" and not job.get("cleaned"):
-            cleanup_dir(job["dest"])
-            fields["cleaned"] = 1
+        old_gid = str(job.get("gid") or "")
+        fields: dict = {"status": status, "error": None}
+        if status == "error":
+            fields["error"] = st.get("errorMessage") or job.get("error") or "下载失败"
+        gid_changed = bool(stored) and stored != old_gid
+        if gid_changed:
+            fields["gid"] = stored
+            self._aria2_settled.discard(job["id"])
+            log.info("aria2 任务 %s 从 %s 跟到 %s", job["id"], old_gid, stored)
+        if status == "complete":
+            if gid_changed or not job.get("cleaned"):
+                await asyncio.to_thread(cleanup_dir, job["dest"])
+                fields["cleaned"] = 1
+            if backend == "aria2":
+                self._aria2_settled.add(job["id"])
+        elif gid_changed:
+            fields["cleaned"] = 0
         await self.db.update_job(job["id"], **fields)
         job = dict(job)
         job.update(fields)
         job["_live"] = st
         return job
 
+    async def _sync_missing(self, job: dict, status: dict, backend: str) -> dict:
+        if status.get("truncated"):
+            return job
+        if job.get("status") == "complete":
+            fields: dict = {}
+            if not job.get("cleaned"):
+                await asyncio.to_thread(cleanup_dir, job["dest"])
+                fields["cleaned"] = 1
+            if fields:
+                await self.db.update_job(job["id"], **fields)
+                job = dict(job)
+                job.update(fields)
+            if backend == "aria2":
+                self._aria2_settled.add(job["id"])
+            return job
+        if job.get("status") != "error":
+            log.warning(
+                "任务在下载器里找不到 id=%s gid=%s：%s",
+                job["id"],
+                job.get("gid"),
+                status.get("errorMessage") or "",
+            )
+        fields = {
+            "status": "error",
+            "error": status.get("errorMessage") or "任务不存在或已删",
+        }
+        await self.db.update_job(job["id"], **fields)
+        job = dict(job)
+        job.update(fields)
+        job["_live"] = {}
+        return job
+
     async def sync_all(self) -> None:
         jobs = await self.db.list_jobs()
+        snapshot = await self._xunlei_snapshot(jobs)
         for job in jobs:
             try:
                 if job.get("status") == "cancelled":
                     continue
-                needs_tell = not (job.get("status") == "complete" and job.get("cleaned"))
-                if needs_tell:
-                    job = await self.sync_one(job)
+                if self._needs_tell(job):
+                    job = await self.sync_one(job, snapshot)
                 scrape_st = job.get("scrape_status") or ""
                 if (
                     job.get("status") == "complete"
@@ -200,6 +292,7 @@ class JobManager:
                 ):
                     await self.maybe_scrape(job)
             except Exception:
+                log.warning("同步任务失败 id=%s", job.get("id"), exc_info=True)
                 continue
         now = time.time()
         if now - self._last_watch >= WATCH_EVERY:
@@ -207,11 +300,11 @@ class JobManager:
             try:
                 await self.watch_western()
             except Exception:
-                pass
+                log.warning("欧美监控失败", exc_info=True)
             try:
                 await self.watch_downloads()
             except Exception:
-                pass
+                log.warning("下载目录监控失败", exc_info=True)
 
     async def _mark_waiting(self, job: dict) -> dict:
         if job.get("scrape_status") != "waiting":
@@ -264,7 +357,8 @@ class JobManager:
             hit = await self.library.get(job.get("code") or "")
 
         try:
-            src, _videos = find_code_videos(
+            found = await asyncio.to_thread(
+                find_code_videos,
                 job.get("code") or "",
                 dest,
                 self.settings.download_dir,
@@ -273,6 +367,7 @@ class JobManager:
         except ScrapeError:
             if hit and hit.get("has_video"):
                 return await self._mark_archived(job, hit.get("path") or "")
+            log.warning("刮削失败 %s: 没有可归档的视频", job.get("code"))
             await self.db.update_job(
                 job["id"],
                 scrape_status="error",
@@ -282,21 +377,24 @@ class JobManager:
             job["scrape_error"] = "没有可归档的视频"
             return job
 
-        if has_incomplete_files(src):
+        src, _videos = found
+        if await asyncio.to_thread(source_incomplete, src):
             return await self._mark_waiting(job)
-        mtime = newest_mtime(src)
+        mtime = await asyncio.to_thread(source_mtime, src)
         if mtime and time.time() - mtime < settle:
             return await self._mark_waiting(job)
 
         try:
             async with self._scrape_lock:
-                result = await scrape_job(self.settings, self.db, job)
+                result = await scrape_job(self.settings, self.db, job, found=found)
         except ScrapeError as e:
+            log.warning("刮削失败 %s: %s", job.get("code"), e)
             await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
             job["scrape_status"] = "error"
             job["scrape_error"] = str(e)
             return job
         except Exception as e:
+            log.warning("刮削失败 %s", job.get("code"), exc_info=True)
             await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(e))
             job["scrape_status"] = "error"
             job["scrape_error"] = str(e)
@@ -311,28 +409,30 @@ class JobManager:
         settle = max(0, int(self.settings.scrape_settle_seconds))
         min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
         try:
-            src, _videos = find_western_videos(
+            found = await asyncio.to_thread(
+                find_western_videos,
                 self.settings.download_dir,
                 dest,
                 job.get("title") or info.get("title") or "",
                 min_bytes,
             )
         except ScrapeError as exc:
+            log.warning("刮削失败 %s: %s", job.get("code"), exc)
             await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
             job["scrape_status"] = "error"
             job["scrape_error"] = str(exc)
             return job
-        if any(is_incomplete(video) for video in _videos):
+        src, _videos = found
+        if await asyncio.to_thread(source_incomplete, src):
             return await self._mark_waiting(job)
-        if src.is_dir() and src.resolve() != self.settings.download_dir.resolve() and has_incomplete_files(src):
-            return await self._mark_waiting(job)
-        mtime = max((video.stat().st_mtime for video in _videos), default=0)
+        mtime = await asyncio.to_thread(source_mtime, src)
         if mtime and time.time() - mtime < settle:
             return await self._mark_waiting(job)
         try:
             async with self._scrape_lock:
-                result = await scrape_western_job(self.settings, job, info)
+                result = await scrape_western_job(self.settings, job, info, found=found)
         except ScrapeError as exc:
+            log.warning("刮削失败 %s: %s", job.get("code"), exc)
             await self.db.update_job(job["id"], scrape_status="error", scrape_error=str(exc))
             job["scrape_status"] = "error"
             job["scrape_error"] = str(exc)
@@ -379,11 +479,13 @@ class JobManager:
             try:
                 async with self._scrape_lock:
                     await scrape_western_source(self.settings, src)
-            except ScrapeError:
+            except ScrapeError as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                log.warning("监控归档失败 %s: %s", key, exc)
                 continue
             except Exception:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                log.warning("监控归档失败 %s", key, exc_info=True)
                 continue
             self._watch_fail.pop(key, None)
             return
@@ -417,30 +519,33 @@ class JobManager:
                         self.db,
                         {"code": code, "dest": str(src)},
                     )
-            except ScrapeError:
+            except ScrapeError as exc:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                log.warning("监控归档失败 %s: %s", key, exc)
                 continue
             except Exception:
                 self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+                log.warning("监控归档失败 %s", key, exc_info=True)
                 continue
             self._watch_fail.pop(key, None)
             if self.library:
                 await self.library.upsert(result)
             return
 
-    async def public(self, job: dict) -> dict:
-        live = job.get("_live")
-        if live is None and job.get("gid") and job.get("status") not in ("cancelled",):
-            try:
-                live = await self._tell(job["gid"])
-            except BackendError:
-                live = {}
-        live = live or {}
-        total = int(live.get("totalLength") or 0)
-        done = int(live.get("completedLength") or 0)
-        speed = int(live.get("downloadSpeed") or 0)
-        pct = (done / total * 100) if total else 0.0
-        status = _map_status(live.get("status"), job.get("status") or "queued")
+    def _row(
+        self,
+        job: dict,
+        *,
+        status: str,
+        error: str | None,
+        progress: float,
+        downloaded: str,
+        total: str,
+        speed: str,
+        eta: str,
+        connections: int,
+        seeders: int,
+    ) -> dict:
         return {
             "id": job["id"],
             "code": job["code"],
@@ -448,64 +553,118 @@ class JobManager:
             "title": job["title"],
             "status": status,
             "dest": job["dest"],
-            "error": live.get("errorMessage") or job.get("error"),
-            "progress": round(pct, 1),
-            "downloaded": format_size(done) if done else "0 B",
-            "total": format_size(total) if total else "?",
-            "speed": f"{format_size(speed)}/s" if speed else "0 B/s",
-            "eta": _eta(total, done, speed),
-            "connections": int(live.get("connections") or 0),
-            "seeders": int(live.get("numSeeders") or 0),
+            "error": error,
+            "progress": progress,
+            "downloaded": downloaded,
+            "total": total,
+            "speed": speed,
+            "eta": eta,
+            "connections": connections,
+            "seeders": seeders,
             "created_at": job.get("created_at"),
             "scrape_status": job.get("scrape_status") or "",
             "scrape_error": job.get("scrape_error"),
             "archive_path": job.get("archive_path") or "",
         }
 
-    async def list_public(self) -> list[dict]:
-        out = []
-        for job in await self.db.list_jobs():
+    async def public(self, job: dict, snapshot: dict | None = None) -> dict:
+        live = job.get("_live")
+        if live is None and self._needs_tell(job):
             try:
-                job = await self.sync_one(job)
+                live, _stored = await self._fetch_status(job, snapshot)
+            except BackendError:
+                live = {}
+        if (live or {}).get("status") == "missing":
+            live = {}
+        live = live or {}
+        if not live and job.get("status") == "complete":
+            return self._row(
+                job,
+                status="complete",
+                error=None,
+                progress=100.0,
+                downloaded="—",
+                total="—",
+                speed="—",
+                eta="",
+                connections=0,
+                seeders=0,
+            )
+        total = int(live.get("totalLength") or 0)
+        done = int(live.get("completedLength") or 0)
+        speed = int(live.get("downloadSpeed") or 0)
+        pct = (done / total * 100) if total else 0.0
+        status = _map_status(live.get("status"), job.get("status") or "queued")
+        return self._row(
+            job,
+            status=status,
+            error=live.get("errorMessage") or job.get("error"),
+            progress=round(pct, 1),
+            downloaded=format_size(done) if done else "0 B",
+            total=format_size(total) if total else "?",
+            speed=f"{format_size(speed)}/s" if speed else "0 B/s",
+            eta=_eta(total, done, speed),
+            connections=int(live.get("connections") or 0),
+            seeders=int(live.get("numSeeders") or 0),
+        )
+
+    async def list_public(self) -> list[dict]:
+        jobs = await self.db.list_jobs()
+        snapshot = await self._xunlei_snapshot(jobs)
+        out = []
+        for job in jobs:
+            try:
+                job = await self.sync_one(job, snapshot)
             except Exception:
-                pass
-            out.append(await self.public(job))
+                log.warning("同步任务失败 id=%s", job.get("id"), exc_info=True)
+            out.append(await self.public(job, snapshot))
         return out
+
+    async def _control(self, job: dict, op: str) -> None:
+        if self._backend(job) == "xunlei":
+            action = {"pause": self.xunlei.pause, "resume": self.xunlei.resume, "remove": self.xunlei.remove}[op]
+            await action(str(job.get("gid") or ""))
+            return
+        if not job.get("gid"):
+            return
+        resolved = await self.aria2.resolve(str(job["gid"]))
+        if resolved.get("status") == "missing":
+            if op == "remove":
+                return
+            raise Aria2Error("aria2 里没有这个任务")
+        stored = str(resolved.get("stored") or job.get("gid"))
+        if stored != job.get("gid"):
+            await self.db.update_job(job["id"], gid=stored, cleaned=0)
+            job["gid"] = stored
+            log.info("aria2 任务 %s 从元数据跟到 %s", job["id"], stored)
+        for gid in resolved.get("gids") or []:
+            if op == "pause":
+                await self.aria2.pause(gid)
+            elif op == "resume":
+                await self.aria2.resume(gid)
+            else:
+                await self.aria2.remove(gid)
 
     async def pause(self, job_id: str) -> dict:
         job = await self._require(job_id)
-        if job.get("gid"):
-            if self._use_xunlei():
-                await self.xunlei.pause(job["gid"])
-            else:
-                await self.aria2.pause(job["gid"])
+        await self._control(job, "pause")
         await self.db.update_job(job_id, status="paused")
         job["status"] = "paused"
         return await self.public(job)
 
     async def resume(self, job_id: str) -> dict:
         job = await self._require(job_id)
-        if job.get("gid"):
-            if self._use_xunlei():
-                await self.xunlei.resume(job["gid"])
-            else:
-                await self.aria2.resume(job["gid"])
+        await self._control(job, "resume")
         await self.db.update_job(job_id, status="downloading")
         job["status"] = "downloading"
         return await self.public(job)
 
     async def cancel(self, job_id: str) -> dict:
         job = await self._require(job_id)
-        if job.get("gid"):
-            try:
-                if self._use_xunlei():
-                    await self.xunlei.remove(job["gid"])
-                else:
-                    await self.aria2.remove(job["gid"])
-            except BackendError:
-                pass
+        await self._control(job, "remove")
         await self.db.update_job(job_id, status="cancelled")
         job["status"] = "cancelled"
+        self._aria2_settled.add(job_id)
         return await self.public(job)
 
     async def _require(self, job_id: str) -> dict:

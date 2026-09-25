@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -11,7 +13,6 @@ from app.scrape import (
     ScrapeError,
     VIDEO_EXTS,
     fetch_cover_bytes,
-    has_incomplete_files,
     is_incomplete,
     is_video,
     iter_videos,
@@ -22,6 +23,8 @@ from app.scrape import (
 )
 from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail
 from app.western_magnets import is_western_release_name, release_text
+
+log = logging.getLogger("app.western_archive")
 
 SIDECAR = ".javdl.json"
 _UNSAFE = re.compile(r"[^\w.\- ]+", re.UNICODE)
@@ -152,7 +155,7 @@ def find_western_videos(
             if videos:
                 matches.append((child, videos))
         elif is_video(child) and child.stat().st_size >= min_bytes:
-            matches.append((child.parent, [child]))
+            matches.append((child, [child]))
     if not matches:
         raise ScrapeError("没有可归档的视频")
     matches.sort(key=lambda item: len(_norm_name(item[0].name)), reverse=True)
@@ -259,33 +262,36 @@ async def scrape_western_source(settings: Settings, src: Path) -> dict:
     return await scrape_western_job(settings, {"dest": str(src), "title": src.name}, info)
 
 
-async def scrape_western_job(settings: Settings, job: dict, info: dict) -> dict:
+def _discard_finished_dir(src: Path, download_root: Path) -> None:
+    if not src.is_dir():
+        return
+    if _videos_in(src, 0):
+        return
+    safe_rmtree(src, download_root)
+
+
+def _discard_slug(dest: Path, download_root: Path) -> None:
+    if not dest.is_dir() or dest.parent.name.lower() != "western":
+        return
+    if _videos_in(dest, 0):
+        return
+    safe_rmtree(dest, download_root)
+
+
+def _commit_western(
+    settings: Settings,
+    job: dict,
+    src: Path,
+    videos: list[Path],
+    meta: dict,
+    poster: bytes | None,
+) -> dict:
     root = settings.western_root
     if root is None:
         raise ScrapeError("未配置欧美归档目录")
-    dest = Path(job.get("dest") or "")
-    min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)
-    src, videos = find_western_videos(
-        settings.download_dir,
-        dest,
-        job.get("title") or info.get("title") or "",
-        min_bytes,
-    )
-    if any(is_incomplete(video) for video in videos):
-        raise ScrapeError("下载尚未完成")
-    if src.is_dir() and src.resolve() != settings.download_dir.resolve() and has_incomplete_files(src):
-        raise ScrapeError("下载尚未完成")
-    meta = await western_metadata(settings, info)
     folder = studio_dir(root, meta.get("studio") or "")
     folder.mkdir(parents=True, exist_ok=True)
     nfo_xml = build_nfo(meta)
-    poster = None
-    cover = (meta.get("cover") or "").strip()
-    if cover:
-        try:
-            poster = await fetch_cover_bytes(settings, cover, referer="https://theporndb.net/")
-        except ScrapeError:
-            poster = None
     written: list[Path] = []
     for video in videos:
         if video.suffix.lower() not in VIDEO_EXTS or is_incomplete(video):
@@ -302,10 +308,45 @@ async def scrape_western_job(settings: Settings, job: dict, info: dict) -> dict:
         written.append(target)
     if not written:
         raise ScrapeError("没有可归档的视频")
-    if src.is_dir():
-        safe_rmtree(src, settings.download_dir)
+    _discard_finished_dir(src, settings.download_dir)
+    _discard_slug(Path(job.get("dest") or ""), settings.download_dir)
     return {
         "path": str(folder),
         "videos": [str(path) for path in written],
         "title": meta.get("title") or "",
     }
+
+
+async def scrape_western_job(
+    settings: Settings,
+    job: dict,
+    info: dict,
+    found: tuple[Path, list[Path]] | None = None,
+) -> dict:
+    if settings.western_root is None:
+        raise ScrapeError("未配置欧美归档目录")
+    dest = Path(job.get("dest") or "")
+    min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)
+    if found is None:
+        src, videos = await asyncio.to_thread(
+            find_western_videos,
+            settings.download_dir,
+            dest,
+            job.get("title") or info.get("title") or "",
+            min_bytes,
+        )
+    else:
+        src, videos = found
+    if await asyncio.to_thread(source_incomplete, src):
+        raise ScrapeError("下载尚未完成")
+    meta = await western_metadata(settings, info)
+    poster = None
+    cover = (meta.get("cover") or "").strip()
+    if cover:
+        try:
+            poster = await fetch_cover_bytes(settings, cover, referer="https://theporndb.net/")
+        except ScrapeError:
+            poster = None
+    result = await asyncio.to_thread(_commit_western, settings, job, src, videos, meta, poster)
+    log.info("已归档欧美 %s -> %s", result.get("title") or job.get("title") or "", result["path"])
+    return result

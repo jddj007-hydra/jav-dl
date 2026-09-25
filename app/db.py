@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     cleaned INTEGER NOT NULL DEFAULT 0,
+    backend TEXT NOT NULL DEFAULT '',
     scrape_status TEXT NOT NULL DEFAULT '',
     scrape_error TEXT,
     archive_path TEXT
@@ -46,6 +47,7 @@ DOWNLOAD_COLUMNS = (
     ("scrape_status", "TEXT NOT NULL DEFAULT ''"),
     ("scrape_error", "TEXT"),
     ("archive_path", "TEXT"),
+    ("backend", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -98,12 +100,14 @@ class Database:
             await db.commit()
 
     async def insert_job(self, job: dict) -> None:
+        row = dict(job)
+        row.setdefault("backend", "")
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 """INSERT INTO downloads
-                   (id, code, info_hash, title, magnet, gid, status, dest, error, created_at, updated_at, cleaned)
-                   VALUES (:id,:code,:info_hash,:title,:magnet,:gid,:status,:dest,:error,:created_at,:updated_at,:cleaned)""",
-                job,
+                   (id, code, info_hash, title, magnet, gid, status, dest, error, created_at, updated_at, cleaned, backend)
+                   VALUES (:id,:code,:info_hash,:title,:magnet,:gid,:status,:dest,:error,:created_at,:updated_at,:cleaned,:backend)""",
+                row,
             )
             await db.commit()
 
