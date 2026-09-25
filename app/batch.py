@@ -100,7 +100,7 @@ async def enqueue_batch(jobs, rows: list[dict]) -> dict:
             skipped.append({"code": code, "reason": "没有磁链"})
             continue
         try:
-            job = await jobs.enqueue(code, info_hash, title)
+            job = await jobs.enqueue_filtered(code, info_hash, title)
         except BackendError as exc:
             skipped.append({"code": code, "reason": str(exc)})
             continue

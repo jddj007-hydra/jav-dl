@@ -220,15 +220,12 @@ async def fetch_list(
 
 def _exact_name(rows: list, name: str) -> dict | None:
     wanted = name.casefold()
-    exact = None
     for row in rows:
         if not isinstance(row, dict) or not row.get("id"):
             continue
         if str(row.get("name") or "").casefold() == wanted:
             return row
-        if exact is None:
-            exact = row
-    return exact
+    return None
 
 
 async def _named_id(settings: Settings, path: str, name: str) -> str:
@@ -240,18 +237,35 @@ async def _named_id(settings: Settings, path: str, name: str) -> str:
     return str(match["id"])
 
 
-async def scenes_for_performer(settings: Settings, name: str) -> list[dict]:
-    performer_id = await _named_id(settings, "/performers", name)
-    payload = await _get_json(settings, "/scenes", {**list_params(1), "performers": performer_id})
+async def catalog_id(settings: Settings, kind: str, name: str) -> str:
+    path = "/performers" if kind == "western_performer" else "/sites"
+    return await _named_id(settings, path, name)
+
+
+async def _scenes(settings: Settings, extra: dict, page: int) -> list[dict]:
+    payload = await _get_json(settings, "/scenes", {**list_params(page), **extra})
     rows = payload.get("data") if isinstance(payload.get("data"), list) else []
     return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
 
 
-async def scenes_for_site(settings: Settings, name: str) -> list[dict]:
-    site_id = await _named_id(settings, "/sites", name)
-    payload = await _get_json(settings, "/scenes", {**list_params(1), "sites": site_id})
-    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
-    return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
+async def scenes_for_performer(
+    settings: Settings,
+    name: str,
+    page: int = 1,
+    performer_id: str | None = None,
+) -> list[dict]:
+    performer_id = performer_id or await _named_id(settings, "/performers", name)
+    return await _scenes(settings, {"performers": performer_id}, page)
+
+
+async def scenes_for_site(
+    settings: Settings,
+    name: str,
+    page: int = 1,
+    site_id: str | None = None,
+) -> list[dict]:
+    site_id = site_id or await _named_id(settings, "/sites", name)
+    return await _scenes(settings, {"sites": site_id}, page)
 
 
 _VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".wmv", ".ts", ".mov", ".m4v", ".webm"}

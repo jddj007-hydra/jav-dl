@@ -403,6 +403,26 @@ class Database:
             )
             await db.commit()
 
+    async def find_hit(self, sub_id: str, code: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """SELECT * FROM subscription_hits
+                   WHERE sub_id = ? AND code = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (sub_id, code),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def update_hit(self, hit_id: str, *, status: str, detail: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE subscription_hits SET status = ?, detail = ?, seen = 0 WHERE id = ?",
+                (status, detail, hit_id),
+            )
+            await db.commit()
+
     async def list_hits(self, limit: int = 50) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row

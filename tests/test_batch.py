@@ -83,7 +83,7 @@ def test_enqueue_skips_one_failure_and_keeps_going():
     seen = []
 
     class Jobs:
-        async def enqueue(self, code, info_hash, title):
+        async def enqueue_filtered(self, code, info_hash, title):
             seen.append(code)
             if code == "MIDV-001":
                 raise Aria2Error("连不上 aria2")
@@ -123,7 +123,7 @@ def test_batch_routes_preview_then_enqueue(monkeypatch):
     queued = []
 
     class Jobs:
-        async def enqueue(self, code, info_hash, title):
+        async def enqueue_filtered(self, code, info_hash, title):
             queued.append((code, info_hash, title))
             return {"id": "job1", "code": code, "info_hash": info_hash, "title": title}
 

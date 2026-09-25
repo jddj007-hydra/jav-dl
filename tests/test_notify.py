@@ -228,3 +228,61 @@ def test_archive_success_and_failure_notify(tmp_path, monkeypatch):
     assert sent[0] == ("归档完成", "SSIS-001 title\n/media/202101/SSIS-001")
     assert sent[1][0] == "归档失败"
     assert "没有可归档的视频" in sent[1][1]
+
+
+def test_archive_failure_notifies_once_across_retries(tmp_path, monkeypatch):
+    settings, notes = _mgr(tmp_path, None, monkeypatch)
+    settings.scrape_enabled = True
+    settings.scrape_settle_seconds = 0
+    settings.scrape_min_mb = 0
+
+    def boom(*args, **kwargs):
+        raise ScrapeError("没有可归档的视频")
+
+    async def watch_boom(*args, **kwargs):
+        raise ScrapeError("元数据失败")
+
+    monkeypatch.setattr("app.downloader.jobs.find_code_videos", boom)
+    monkeypatch.setattr("app.downloader.jobs.scrape_job", watch_boom)
+    root = settings.download_dir
+    folder = root / "MIDV-002"
+    folder.mkdir(parents=True)
+    (folder / "a.mp4").write_bytes(b"x" * 80)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        now = 1.0
+        job = {
+            "id": "job1",
+            "code": "SSIS-001",
+            "info_hash": "a" * 40,
+            "title": "title",
+            "magnet": "m",
+            "gid": "meta",
+            "status": "complete",
+            "dest": str(root / "SSIS-001"),
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+            "cleaned": 1,
+            "backend": "aria2",
+            "scrape_status": "",
+        }
+        await db.insert_job(job)
+        mgr = JobManager(settings, db, _Aria({}))
+        await mgr.maybe_scrape(dict(job))
+        stored = await db.get_job("job1")
+        stored["updated_at"] = 1.0
+        await mgr.maybe_scrape(stored)
+        await mgr.watch_downloads()
+        for key in list(mgr._watch_fail):
+            mgr._watch_fail[key] = 0
+        await mgr.watch_downloads()
+        return notes
+
+    sent = asyncio.run(run())
+    failures = [item for item in sent if item[0] == "归档失败"]
+    assert len(failures) == 2
+    assert failures[0][1].startswith("SSIS-001 title")
+    assert failures[1][1].startswith("MIDV-002")

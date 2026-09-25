@@ -187,6 +187,38 @@ def test_multi_file_waits_for_a_choice_then_uses_select_file(tmp_path):
     assert len(stored) == 1
 
 
+def test_enqueue_filtered_drops_the_sample_without_asking(tmp_path):
+    settings = _settings(tmp_path)
+    video = str(settings.download_dir / "SSIS-001.mkv")
+    sample = str(settings.download_dir / "sample.mp4")
+    aria = _Aria({
+        "meta": {
+            "status": "complete",
+            "followedBy": ["content"],
+            "files": [{"index": "1", "path": "/dl/[METADATA]abc.torrent", "length": "20"}],
+        },
+        "content": {
+            "status": "active",
+            "files": [
+                {"index": "1", "path": video, "length": "2000"},
+                {"index": "2", "path": sample, "length": "30"},
+            ],
+        },
+    })
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, aria, _Panel([]))
+        job = await mgr.enqueue_filtered("SSIS-001", "b" * 40, "pack")
+        return job, await db.list_jobs()
+
+    job, stored = asyncio.run(run())
+    assert aria.options == [("content", {"select-file": "1"})]
+    assert job["code"] == "SSIS-001"
+    assert stored[0]["gid"] == "content"
+
+
 def test_cancel_and_timeout_remove_the_paused_torrent(tmp_path):
     settings = _settings(tmp_path)
     aria = _Aria({"meta": {

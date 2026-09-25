@@ -29,7 +29,7 @@ from app.western_archive import (
     scrape_western_source,
 )
 from app.notify import send_notice
-from app.pickfiles import format_select_file, format_sub_file_index, present_files
+from app.pickfiles import default_selected, format_select_file, format_sub_file_index, present_files
 from app.textutil import format_size
 from app.trackers import magnet_for
 
@@ -125,6 +125,8 @@ class JobManager:
         self._aria2_settled: set[str] = set()
         self._picks: dict[str, dict] = {}
         self._last_follow = 0.0
+        self._follow_task: asyncio.Task | None = None
+        self._follow_locks: dict[str, asyncio.Lock] = {}
         self._listeners: set[asyncio.Queue] = set()
 
     def _use_xunlei(self) -> bool:
@@ -204,6 +206,32 @@ class JobManager:
         magnet = magnet_for(info_hash, title or code)
         gid = await self._add_magnet(magnet, dest)
         return await self._remember(code, info_hash, title, dest, gid, magnet)
+
+    async def enqueue_filtered(
+        self,
+        code: str,
+        info_hash: str,
+        title: str,
+        *,
+        dest_rel: str | None = None,
+    ) -> dict:
+        """Enqueue like enqueue, but drop ads, samples, and tiny non-video files."""
+        prepared = await self.prepare_files(code, info_hash, title, dest_rel=dest_rel)
+        if prepared.get("mode") == "direct":
+            return prepared["job"]
+        token = prepared["token"]
+        pending = self._picks.get(token) or {}
+        flags = default_selected(pending.get("files") or [])
+        indexes = [
+            int(item["index"])
+            for item, keep in zip(pending.get("files") or [], flags)
+            if keep
+        ]
+        try:
+            return await self.confirm_files(token, indexes, info_hash)
+        except Exception:
+            await self.cancel_files(token)
+            raise
 
     async def _remember(self, code: str, info_hash: str, title: str, dest: str, gid: str, magnet: str) -> dict:
         now = time.time()
@@ -439,16 +467,30 @@ class JobManager:
                 await self.watch_downloads()
             except Exception:
                 log.warning("下载目录监控失败", exc_info=True)
-        try:
-            from app.follow import check_due
-
-            await check_due(self)
-        except Exception:
-            log.warning("追更检查失败", exc_info=True)
+        self.kick_follow()
         if self._listeners:
             items = [await self.public(job, snapshot) for job in visible]
             unread = await self.db.count_unread_hits()
             self._fanout({"items": items, "follow_unread": unread})
+
+    def kick_follow(self) -> None:
+        """Run a due follow check beside the download sync, not inside it."""
+        from app.follow import FOLLOW_EVERY
+
+        task = self._follow_task if hasattr(self, "_follow_task") else None
+        if task is not None and not task.done():
+            return
+        if time.time() - self._last_follow < FOLLOW_EVERY:
+            return
+        self._follow_task = asyncio.create_task(self._run_follow())
+
+    async def _run_follow(self) -> None:
+        from app.follow import check_due
+
+        try:
+            await check_due(self)
+        except Exception:
+            log.warning("追更检查失败", exc_info=True)
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
@@ -491,11 +533,19 @@ class JobManager:
         return job
 
     async def _record_scrape_error(self, job: dict, reason: str) -> dict:
+        repeat = job.get("scrape_status") == "error" and (job.get("scrape_error") or "") == reason
         await self.db.update_job(job["id"], scrape_status="error", scrape_error=reason)
         job["scrape_status"] = "error"
         job["scrape_error"] = reason
-        await send_notice(self.settings, "归档失败", f"{_job_label(job)}\n{reason}")
+        if not repeat:
+            await send_notice(self.settings, "归档失败", f"{_job_label(job)}\n{reason}")
         return job
+
+    def _watch_failed(self, key: str, now: float) -> bool:
+        """True the first time this path fails. Later retries stay quiet."""
+        first = key not in self._watch_fail
+        self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
+        return first
 
     async def maybe_scrape(self, job: dict) -> dict:
         status = job.get("scrape_status") or ""
@@ -654,14 +704,14 @@ class JobManager:
                 async with self._scrape_lock:
                     result = await scrape_western_source(self.settings, src)
             except ScrapeError as exc:
-                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s: %s", key, exc)
-                await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
+                if self._watch_failed(key, now):
+                    await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
                 continue
             except Exception as exc:
-                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s", key, exc_info=True)
-                await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
+                if self._watch_failed(key, now):
+                    await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
                 continue
             self._watch_fail.pop(key, None)
             if self.library and isinstance(result, dict):
@@ -700,14 +750,14 @@ class JobManager:
                         {"code": code, "dest": str(src)},
                     )
             except ScrapeError as exc:
-                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s: %s", key, exc)
-                await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
+                if self._watch_failed(key, now):
+                    await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
                 continue
             except Exception as exc:
-                self._watch_fail[key] = now + SCRAPE_RETRY_AFTER
                 log.warning("监控归档失败 %s", key, exc_info=True)
-                await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
+                if self._watch_failed(key, now):
+                    await send_notice(self.settings, "归档失败", f"{code}\n{exc}")
                 continue
             self._watch_fail.pop(key, None)
             if self.library:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -21,13 +22,14 @@ from app.sources.javbus import (
     parse_search,
     parse_star_links,
 )
-from app.sources.tpdb import TpdbError, scenes_for_performer, scenes_for_site
+from app.sources.tpdb import TpdbError, catalog_id, scenes_for_performer, scenes_for_site
 from app.western_archive import read_sidecar, write_sidecar
 
 log = logging.getLogger("app.follow")
 
 FOLLOW_EVERY = 3 * 60 * 60
 FOLLOW_LIMIT = 30
+FOLLOW_PAGE_CAP = 5
 KINDS = ("actress", "series", "studio", "western_performer", "western_studio")
 KIND_LABEL = {
     "actress": "女优",
@@ -74,7 +76,9 @@ async def resolve_target(settings: Settings, kind: str, name: str, target: str) 
         links = parse_star_links(html, settings.javbus_base)
         if not links:
             raise ValueError("没有找到这个女优")
-        picked = next((item for item in links if item["name"].casefold() == name.casefold()), links[0])
+        picked = next((item for item in links if item["name"].casefold() == name.casefold()), None)
+        if picked is None:
+            raise ValueError("没有找到这个女优")
         return picked["name"], picked["url"]
     if kind == "western_performer":
         return name, f"tpdb:performer:{name}"
@@ -96,40 +100,118 @@ def _resolve_url(kind: str, name: str, target: str) -> tuple[str, str]:
     raise ValueError("请粘贴 JavBus 的女优、系列或片商页面")
 
 
-async def list_works(settings: Settings, sub: dict) -> list[dict]:
-    kind = sub["kind"]
-    target = sub["target"]
-    if kind in ("actress", "series", "studio"):
-        html = await fetch_javbus_html(settings, target)
-        works = []
-        for item in parse_search(html, settings.javbus_base):
-            code = normalize_code(item.get("code") or "")
-            if not code:
+def javbus_page_url(target: str, page: int) -> str:
+    """JavBus star, series, and studio pages put the page number on the path."""
+    clean = (target or "").split("?")[0].rstrip("/")
+    if page <= 1:
+        return clean
+    tail = clean.rsplit("/", 1)[-1]
+    if tail.isdigit():
+        return f"{clean.rsplit('/', 1)[0]}/{int(page)}"
+    return f"{clean}/{int(page)}"
+
+
+def _walk_stop(page_codes: list[str], known: set[str], collected: set[str]) -> bool:
+    if not page_codes:
+        return True
+    if all(code in collected for code in page_codes):
+        return True
+    return bool(known) and all(code in known for code in page_codes)
+
+
+async def _walk_pages(fetch_page, known: set[str]) -> list[dict]:
+    """Read newer pages until one is already recorded, empty, or repeated."""
+    works: list[dict] = []
+    collected: set[str] = set()
+    for page in range(1, FOLLOW_PAGE_CAP + 1):
+        batch = await fetch_page(page)
+        page_codes = [str(item.get("code") or "") for item in batch if item.get("code")]
+        if _walk_stop(page_codes, known, collected):
+            fresh = [item for item in batch if item.get("code") and item["code"] not in collected]
+            if fresh and known and all(item["code"] in known for item in fresh):
+                works.extend(fresh)
+            break
+        for item in batch:
+            code = item.get("code")
+            if not code or code in collected:
                 continue
-            works.append({"code": code, "title": item.get("title") or code, "western": None})
-        return works
+            collected.add(code)
+            works.append(item)
+    return works
+
+
+def _jav_work(item: dict) -> dict | None:
+    code = normalize_code(item.get("code") or "")
+    if not code:
+        return None
+    return {"code": code, "title": item.get("title") or code, "western": None}
+
+
+def _western_work(scene: dict, sub: dict) -> dict | None:
+    scene_id = str(scene.get("id") or "").strip()
+    if not scene_id:
+        return None
+    return {
+        "code": scene_id,
+        "title": scene.get("title") or scene_id,
+        "western": {
+            "id": scene_id,
+            "kind": scene.get("kind") or "scene",
+            "site": scene.get("site") or sub["name"],
+            "title": scene.get("title") or scene_id,
+            "date": scene.get("date") or "",
+            "performers": scene.get("performers") or [],
+        },
+    }
+
+
+async def _jav_page(settings: Settings, target: str, page: int) -> list[dict]:
+    try:
+        html = await fetch_javbus_html(settings, javbus_page_url(target, page))
+    except MetadataError as exc:
+        if page > 1 and exc.status == 404:
+            return []
+        raise
+    works = []
+    for item in parse_search(html, settings.javbus_base):
+        work = _jav_work(item)
+        if work:
+            works.append(work)
+    return works
+
+
+async def _western_page(settings: Settings, sub: dict, ident: list[str], page: int) -> list[dict]:
+    kind = sub["kind"]
+    if not ident:
+        ident.append(await catalog_id(settings, kind, sub["name"]))
     if kind == "western_performer":
-        scenes = await scenes_for_performer(settings, sub["name"])
+        scenes = await scenes_for_performer(settings, sub["name"], page, performer_id=ident[0])
     else:
-        scenes = await scenes_for_site(settings, sub["name"])
+        scenes = await scenes_for_site(settings, sub["name"], page, site_id=ident[0])
     works = []
     for scene in scenes:
-        scene_id = str(scene.get("id") or "").strip()
-        if not scene_id:
-            continue
-        works.append({
-            "code": scene_id,
-            "title": scene.get("title") or scene_id,
-            "western": {
-                "id": scene_id,
-                "kind": scene.get("kind") or "scene",
-                "site": scene.get("site") or sub["name"],
-                "title": scene.get("title") or scene_id,
-                "date": scene.get("date") or "",
-                "performers": scene.get("performers") or [],
-            },
-        })
+        work = _western_work(scene, sub)
+        if work:
+            works.append(work)
     return works
+
+
+async def list_works(settings: Settings, sub: dict, known: set[str] | None = None) -> list[dict]:
+    seen = known or set()
+    kind = sub["kind"]
+    if kind in ("actress", "series", "studio"):
+        target = sub["target"]
+
+        async def fetch_page(page: int) -> list[dict]:
+            return await _jav_page(settings, target, page)
+
+        return await _walk_pages(fetch_page, seen)
+    ident: list[str] = []
+
+    async def fetch_western(page: int) -> list[dict]:
+        return await _western_page(settings, sub, ident, page)
+
+    return await _walk_pages(fetch_western, seen)
 
 
 async def _owned(db, library, work: dict) -> bool:
@@ -180,7 +262,7 @@ async def _download(manager, sub: dict, work: dict) -> tuple[str, str]:
     if work.get("western"):
         info = work["western"]
         slug = western_slug(info.get("site") or "", info.get("date") or "", info.get("title") or title, info.get("id") or "")
-        job = await manager.enqueue(slug, info_hash, title, dest_rel=f"western/{slug}")
+        job = await _enqueue(manager, slug, info_hash, title, dest_rel=f"western/{slug}")
         write_sidecar(Path(job["dest"]), {
             "kind": "western",
             "tpdb_id": info.get("id") or "",
@@ -191,29 +273,83 @@ async def _download(manager, sub: dict, work: dict) -> tuple[str, str]:
             "performers": info.get("performers") or [],
         })
     else:
-        await manager.enqueue(work["code"], info_hash, title)
+        await _enqueue(manager, work["code"], info_hash, title)
     return "queued", title
 
 
+async def _enqueue(manager, code: str, info_hash: str, title: str, dest_rel: str | None = None) -> dict:
+    """Batch and follow downloads drop ads without asking."""
+    filtered = getattr(manager, "enqueue_filtered", None)
+    if filtered is not None:
+        return await filtered(code, info_hash, title, dest_rel=dest_rel)
+    return await manager.enqueue(code, info_hash, title, dest_rel=dest_rel)
+
+
+def _sub_lock(manager, sub_id: str) -> asyncio.Lock:
+    locks = getattr(manager, "_follow_locks", None)
+    if locks is None:
+        locks = {}
+        manager._follow_locks = locks
+    lock = locks.get(sub_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[sub_id] = lock
+    return lock
+
+
+async def _store_hit(db, sub: dict, work: dict, status: str, detail: str) -> bool:
+    """Record a hit. The same status stays quiet so a later retry does not notify again."""
+    existing = await db.find_hit(sub["id"], work["code"])
+    if existing:
+        if existing.get("status") == status:
+            return False
+        await db.update_hit(existing["id"], status=status, detail=detail)
+        return True
+    await db.add_hit({
+        "id": _new_id(),
+        "sub_id": sub["id"],
+        "code": work["code"],
+        "title": work["title"],
+        "status": status,
+        "detail": detail,
+        "created_at": time.time(),
+    })
+    return True
+
+
+async def _notify_hit(settings: Settings, sub: dict, work: dict, status: str, detail: str) -> None:
+    label = f"{work['code']} {work['title']}".strip()
+    source = sub.get("name") or ""
+    if status == "queued":
+        await send_notice(settings, "追更已入队", f"{label}\n来自 {source}")
+    elif status == "no_magnet":
+        await send_notice(settings, "追更没有符合规则的磁链", f"{label}\n{detail}\n来自 {source}")
+    else:
+        await send_notice(settings, "追更新作", f"{label}\n来自 {source}")
+
+
 async def check_sub(manager, sub: dict) -> dict:
+    async with _sub_lock(manager, sub["id"]):
+        return await _check_sub(manager, sub)
+
+
+async def _check_sub(manager, sub: dict) -> dict:
     first = not sub.get("last_check")
+    seen = await manager.db.seen_codes(sub["id"])
     try:
-        works = await list_works(manager.settings, sub)
+        works = await list_works(manager.settings, sub, seen)
     except (MetadataError, TpdbError, ValueError) as exc:
         await manager.db.mark_subscription_checked(sub["id"], error=str(exc))
         return {"first": first, "added": 0, "error": str(exc)}
-    seen = await manager.db.seen_codes(sub["id"])
     library = manager.library
     added = 0
     for work in works:
         if work["code"] in seen:
             continue
-        await manager.db.mark_seen(sub["id"], work["code"])
-        if first:
+        if first or await _owned(manager.db, library, work):
+            await manager.db.mark_seen(sub["id"], work["code"])
+            seen.add(work["code"])
             continue
-        if await _owned(manager.db, library, work):
-            continue
-        added += 1
         status, detail = ("new", "")
         if sub.get("auto"):
             try:
@@ -221,23 +357,14 @@ async def check_sub(manager, sub: dict) -> dict:
             except Exception as exc:
                 log.warning("追更入队失败 %s", work["code"], exc_info=True)
                 status, detail = "no_magnet", str(exc)
-        await manager.db.add_hit({
-            "id": _new_id(),
-            "sub_id": sub["id"],
-            "code": work["code"],
-            "title": work["title"],
-            "status": status,
-            "detail": detail,
-            "created_at": time.time(),
-        })
-        label = f"{work['code']} {work['title']}".strip()
-        source = sub.get("name") or ""
-        if status == "queued":
-            await send_notice(manager.settings, "追更已入队", f"{label}\n来自 {source}")
-        elif status == "no_magnet":
-            await send_notice(manager.settings, "追更没有符合规则的磁链", f"{label}\n{detail}\n来自 {source}")
-        else:
-            await send_notice(manager.settings, "追更新作", f"{label}\n来自 {source}")
+        # A missing magnet can show up later. Remember it only after it is queued or only needs a reminder.
+        if status != "no_magnet":
+            await manager.db.mark_seen(sub["id"], work["code"])
+            seen.add(work["code"])
+        if not await _store_hit(manager.db, sub, work, status, detail):
+            continue
+        added += 1
+        await _notify_hit(manager.settings, sub, work, status, detail)
     await manager.db.mark_subscription_checked(sub["id"], error=None)
     return {"first": first, "added": added, "error": None, "known": len(works)}
 
