@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=16" />
+  <link rel="stylesheet" href="/static/style.css?v=17" />
 </head>
 <body>
   <header class="top">
@@ -28,6 +28,22 @@
                placeholder="番号或关键词，例如 SSIS-001 / 葵つかさ" />
         <button type="submit">查询</button>
       </form>
+      <details class="batch" id="batch-box">
+        <summary>一次贴多个番号</summary>
+        <form id="batch-form">
+          <textarea id="batch-input" rows="5" spellcheck="false" autocomplete="off"
+                    placeholder="一行一个，或用空格、逗号隔开。例如 SSIS-001"></textarea>
+          <div class="batch-actions">
+            <button type="submit">预览</button>
+          </div>
+        </form>
+        <p class="hint">按现在的排序预览每个番号会入队的那一条，确认后才入队。没有磁链的会跳过，不挡其他番号。</p>
+        <p id="batch-status" class="status" hidden></p>
+        <div id="batch-preview" hidden>
+          <ul id="batch-list" class="batch-list"></ul>
+          <button type="button" id="batch-confirm">确认入队</button>
+        </div>
+      </details>
       <div class="feed-bar" id="jav-feed">
         <div class="seg" id="jav-kind">
           <button type="button" data-kind="censored" class="on">有码</button>
@@ -223,6 +239,6 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=24"></script>
+  <script src="/static/app.js?v=25"></script>
 </body>
 </html>

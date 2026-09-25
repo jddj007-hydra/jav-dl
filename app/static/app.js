@@ -492,6 +492,95 @@ window.addEventListener("popstate", (e) => {
   }
 });
 
+let batchPreview = [];
+
+function renderBatch(items) {
+  batchPreview = items || [];
+  const box = $("batch-preview");
+  const list = $("batch-list");
+  const btn = $("batch-confirm");
+  if (!batchPreview.length) {
+    box.hidden = true;
+    list.innerHTML = "";
+    btn.disabled = true;
+    return;
+  }
+  box.hidden = false;
+  const ready = batchPreview.filter((row) => row.item && row.item.info_hash);
+  list.innerHTML = batchPreview.map((row) => {
+    const item = row.item;
+    if (!item) {
+      return `<li><span class="code">${escapeHtml(row.code)}</span><span class="miss">${escapeHtml(row.error || "没有磁链")}</span></li>`;
+    }
+    const tags = (item.tags || []).map((tag) => `<span class="tag ${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("");
+    return `<li>
+      <span class="code">${escapeHtml(row.code)}</span>
+      <span>
+        <span class="title">${escapeHtml(item.title || "")}</span>
+        <span class="res-meta">${escapeHtml(item.size || "")}${tags}</span>
+      </span>
+    </li>`;
+  }).join("");
+  btn.disabled = ready.length === 0;
+  btn.textContent = ready.length ? `确认入队（${ready.length}）` : "没有可入队的番号";
+}
+
+$("batch-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  setStatus($("batch-status"), "正在查磁链…");
+  try {
+    const data = await api("/api/downloads/batch/preview", {
+      method: "POST",
+      body: JSON.stringify({ text: $("batch-input").value }),
+    });
+    const items = data.items || [];
+    renderBatch(items);
+    const miss = items.filter((row) => !row.item).length;
+    const note = `识别 ${items.length} 个番号` + (miss ? `，${miss} 个没有磁链` : "");
+    setStatus($("batch-status"), note, miss ? "" : "good");
+  } catch (err) {
+    renderBatch([]);
+    setStatus($("batch-status"), err.message, "bad");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("batch-confirm").addEventListener("click", async () => {
+  const ready = batchPreview.filter((row) => row.item && row.item.info_hash);
+  const missed = batchPreview.filter((row) => !row.item);
+  if (!ready.length) return;
+  const btn = $("batch-confirm");
+  btn.disabled = true;
+  try {
+    const data = await api("/api/downloads/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        items: ready.map((row) => ({
+          code: row.code,
+          info_hash: row.item.info_hash,
+          title: row.item.title || "",
+        })),
+      }),
+    });
+    const skipped = [
+      ...missed.map((row) => `${row.code} ${row.error || "没有磁链"}`),
+      ...(data.skipped || []).map((row) => `${row.code} ${row.reason || "跳过"}`),
+    ];
+    const queued = (data.queued || []).length;
+    const lines = [`已入队 ${queued} 个`];
+    if (skipped.length) lines.push(`跳过：${skipped.join("；")}`);
+    setStatus($("batch-status"), lines.join("。"), queued ? "good" : "bad");
+  } catch (err) {
+    setStatus($("batch-status"), err.message, "bad");
+  } finally {
+    const still = batchPreview.filter((row) => row.item && row.item.info_hash).length;
+    btn.disabled = still === 0;
+  }
+});
+
 $("resource-list").addEventListener("click", async (e) => {
   const dl = e.target.closest("[data-dl]");
   const copy = e.target.closest("[data-copy]");

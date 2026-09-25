@@ -35,6 +35,20 @@ class ClearDownloads(BaseModel):
     status: str
 
 
+class BatchText(BaseModel):
+    text: str = ""
+
+
+class BatchEnqueueItem(BaseModel):
+    code: str = ""
+    info_hash: str = ""
+    title: str = ""
+
+
+class BatchEnqueue(BaseModel):
+    items: list[BatchEnqueueItem] = Field(default_factory=list)
+
+
 class DownloadRequest(BaseModel):
     code: str = ""
     info_hash: str

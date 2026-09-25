@@ -4,9 +4,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.batch import enqueue_batch, preview_batch
 from app.codes import normalize_code
 from app.downloader.jobs import BackendError
-from app.models import ClearDownloads, DownloadRequest
+from app.models import BatchEnqueue, BatchText, ClearDownloads, DownloadRequest
 from app.slug import western_slug
 from app.western_archive import write_sidecar
 
@@ -57,6 +58,24 @@ async def create_download(request: Request, body: DownloadRequest):
     except BackendError as e:
         raise HTTPException(503, str(e)) from e
     return job
+
+
+@router.post("/api/downloads/batch/preview")
+async def batch_preview(request: Request, body: BatchText):
+    try:
+        items = await preview_batch(request.app.state.settings, body.text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"items": items}
+
+
+@router.post("/api/downloads/batch")
+async def batch_enqueue(request: Request, body: BatchEnqueue):
+    rows = [item.model_dump() for item in body.items]
+    try:
+        return await enqueue_batch(request.app.state.jobs, rows)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/api/downloads/{job_id}/pause")
