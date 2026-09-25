@@ -50,6 +50,34 @@ CREATE TABLE IF NOT EXISTS western_library (
     has_poster INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    target TEXT NOT NULL,
+    auto INTEGER NOT NULL DEFAULT 0,
+    want_uc INTEGER NOT NULL DEFAULT 0,
+    want_c INTEGER NOT NULL DEFAULT 0,
+    max_gb INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    last_check REAL,
+    last_error TEXT
+);
+CREATE TABLE IF NOT EXISTS subscription_seen (
+    sub_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    PRIMARY KEY (sub_id, code)
+);
+CREATE TABLE IF NOT EXISTS subscription_hits (
+    id TEXT PRIMARY KEY,
+    sub_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT,
+    created_at REAL NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+);
 """
 
 DOWNLOAD_COLUMNS = (
@@ -311,3 +339,105 @@ class Database:
         for row in rows:
             found.setdefault(row["tpdb_id"], dict(row))
         return found
+
+    async def add_subscription(self, row: dict) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO subscriptions
+                   (id, kind, name, target, auto, want_uc, want_c, max_gb, created_at, last_check, last_error)
+                   VALUES (:id, :kind, :name, :target, :auto, :want_uc, :want_c, :max_gb, :created_at, :last_check, :last_error)""",
+                row,
+            )
+            await db.commit()
+
+    async def list_subscriptions(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM subscriptions ORDER BY created_at DESC")
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_subscription(self, sub_id: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM subscriptions WHERE id = ?", (sub_id,))
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def delete_subscription(self, sub_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM subscription_hits WHERE sub_id = ?", (sub_id,))
+            await db.execute("DELETE FROM subscription_seen WHERE sub_id = ?", (sub_id,))
+            await db.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
+            await db.commit()
+
+    async def mark_subscription_checked(self, sub_id: str, *, error: str | None) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE subscriptions SET last_check = ?, last_error = ? WHERE id = ?",
+                (time.time(), error, sub_id),
+            )
+            await db.commit()
+
+    async def seen_codes(self, sub_id: str) -> set[str]:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT code FROM subscription_seen WHERE sub_id = ?", (sub_id,))
+            rows = await cur.fetchall()
+        return {row[0] for row in rows}
+
+    async def mark_seen(self, sub_id: str, code: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO subscription_seen (sub_id, code) VALUES (?, ?)",
+                (sub_id, code),
+            )
+            await db.commit()
+
+    async def add_hit(self, row: dict) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO subscription_hits
+                   (id, sub_id, code, title, status, detail, created_at, seen)
+                   VALUES (:id, :sub_id, :code, :title, :status, :detail, :created_at, 0)""",
+                row,
+            )
+            await db.commit()
+
+    async def list_hits(self, limit: int = 50) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM subscription_hits ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def read_hit(self, hit_id: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE subscription_hits SET seen = 1 WHERE id = ?", (hit_id,))
+            await db.commit()
+
+    async def count_unread_hits(self) -> int:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM subscription_hits WHERE seen = 0")
+            row = await cur.fetchone()
+        return int(row[0] if row else 0)
+
+    async def code_in_queue(self, code: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM downloads WHERE code = ? AND status != 'cancelled' LIMIT 1",
+                (code,),
+            )
+            return await cur.fetchone() is not None
+
+    async def western_has_id(self, tpdb_id: str) -> bool:
+        if not tpdb_id:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM western_library WHERE tpdb_id = ? LIMIT 1",
+                (tpdb_id,),
+            )
+            return await cur.fetchone() is not None

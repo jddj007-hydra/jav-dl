@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=19" />
+  <link rel="stylesheet" href="/static/style.css?v=20" />
 </head>
 <body>
   <header class="top">
@@ -14,6 +14,7 @@
         <a href="#/" data-nav="search">JAV</a>
         <a href="#/western" data-nav="western">欧美</a>
         <a href="#/library" data-nav="library">媒体库</a>
+        <a href="#/follow" data-nav="follow">追更</a>
         <a href="#/queue" data-nav="queue">队列</a>
         <a href="#/settings" data-nav="settings">设置</a>
       </nav>
@@ -139,6 +140,52 @@
       <div id="library-list"></div>
     </section>
 
+    <section id="view-follow" class="view" hidden>
+      <div class="section-head">
+        <h2>追更</h2>
+        <button type="button" class="ghost" id="follow-check">马上检查</button>
+      </div>
+      <p class="hint">关注女优、系列、片商，或欧美演员、片商。大约每 3 小时看一次，也可以马上查。第一次只记下现有作品，之后的新作才提醒。默认不下载。勾了自动下载后，才按规则入队：无码破解和中字都选时，有其中一种即可；体积 0 表示不限。已经在库里或队列里的不会重复下。</p>
+      <form id="follow-form" class="settings">
+        <label>类型
+          <select name="kind" id="follow-kind">
+            <option value="actress">女优</option>
+            <option value="series">系列</option>
+            <option value="studio">片商</option>
+            <option value="western_performer">欧美演员</option>
+            <option value="western_studio">欧美片商</option>
+          </select>
+        </label>
+        <label>名字
+          <input name="name" placeholder="女优名，或欧美演员、片商" />
+        </label>
+        <label>页面链接
+          <input name="target" placeholder="系列和片商粘贴 JavBus 链接。女优可以只写名字" />
+        </label>
+        <label class="check">
+          <input type="checkbox" name="auto" />
+          自动下载符合规则的新作
+        </label>
+        <label class="check">
+          <input type="checkbox" name="want_uc" />
+          只要无码破解
+        </label>
+        <label class="check">
+          <input type="checkbox" name="want_c" />
+          只要中字
+        </label>
+        <label>体积不超过（GB）
+          <input name="max_gb" inputmode="numeric" value="0" />
+        </label>
+        <button type="submit">关注</button>
+        <p id="follow-status" class="status" hidden></p>
+      </form>
+      <div id="follow-list"></div>
+      <h2>新作</h2>
+      <p id="follow-empty" class="empty" hidden>还没有新作</p>
+      <ul id="follow-hits" class="follow-hits"></ul>
+    </section>
+
     <section id="view-queue" class="view" hidden>
       <div class="section-head">
         <h2>下载队列</h2>
@@ -158,6 +205,7 @@
         <button type="button" class="ghost" id="queue-rescan">重扫媒体库</button>
       </div>
       <p id="queue-note" class="status" hidden></p>
+      <p id="queue-follow" class="status" hidden></p>
       <div id="queue-empty" class="empty" hidden>还没有任务</div>
       <ul id="queue-list" class="queue"></ul>
     </section>
@@ -278,6 +326,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=27"></script>
+  <script src="/static/app.js?v=29"></script>
 </body>
 </html>

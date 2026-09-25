@@ -218,6 +218,42 @@ async def fetch_list(
     return {"items": items, "page": page, "last_page": max(last_page, page)}
 
 
+def _exact_name(rows: list, name: str) -> dict | None:
+    wanted = name.casefold()
+    exact = None
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        if str(row.get("name") or "").casefold() == wanted:
+            return row
+        if exact is None:
+            exact = row
+    return exact
+
+
+async def _named_id(settings: Settings, path: str, name: str) -> str:
+    payload = await _get_json(settings, path, {"q": name, "per_page": 20})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    match = _exact_name(rows, name)
+    if not match:
+        raise TpdbError(f"没有找到 {name}")
+    return str(match["id"])
+
+
+async def scenes_for_performer(settings: Settings, name: str) -> list[dict]:
+    performer_id = await _named_id(settings, "/performers", name)
+    payload = await _get_json(settings, "/scenes", {**list_params(1), "performers": performer_id})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
+
+
+async def scenes_for_site(settings: Settings, name: str) -> list[dict]:
+    site_id = await _named_id(settings, "/sites", name)
+    payload = await _get_json(settings, "/scenes", {**list_params(1), "sites": site_id})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
+
+
 _VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".wmv", ".ts", ".mov", ".m4v", ".webm"}
 _BRACKETS = re.compile(r"\[[^\]]*\]|\([^)]*\)")
 _JUNK = re.compile(

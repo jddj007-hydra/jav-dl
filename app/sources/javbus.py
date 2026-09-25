@@ -181,6 +181,57 @@ def parse_search(html: str, base: str) -> list[dict]:
     return items
 
 
+def javbus_page_kind(url: str) -> str | None:
+    path = urlparse(url).path
+    if "/star/" in path:
+        return "actress"
+    if "/series/" in path:
+        return "series"
+    if "/studio/" in path or "/label/" in path:
+        return "studio"
+    return None
+
+
+def parse_star_links(html: str, base: str) -> list[dict]:
+    soup = BeautifulSoup(html, "lxml")
+    found: list[dict] = []
+    seen: set[str] = set()
+    for link in soup.select("a[href*='/star/']"):
+        href = _abs(base, link.get("href") or "").split("?")[0].rstrip("/")
+        if "/star/" not in href or href in seen:
+            continue
+        image = link.select_one("img")
+        name = (image.get("title") if image else "") or ""
+        if not name:
+            span = link.select_one("span")
+            name = span.get_text(strip=True) if span else ""
+        if not name:
+            name = link.get_text(" ", strip=True)
+        name = name.strip()
+        if not name:
+            continue
+        seen.add(href)
+        found.append({"name": name, "url": href})
+    return found
+
+
+async def fetch_javbus_html(settings: Settings, url: str) -> str:
+    base = settings.javbus_base.rstrip("/")
+    allowed = (urlparse(base).hostname or "").lower()
+    host = (urlparse(url).hostname or "").lower()
+    if not allowed or not host or not (host == allowed or host.endswith("." + allowed)):
+        raise MetadataError("只能打开当前 JavBus 域名下的页面")
+    headers = {"Cookie": AGE_COOKIE, "Referer": base + "/"}
+    async with site_client(settings) as client:
+        try:
+            response = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+    if response.status_code >= 400:
+        raise MetadataError(f"JavBus HTTP {response.status_code}", response.status_code)
+    return response.text
+
+
 def latest_page_url(base: str, kind: str, page: int) -> str:
     root = base.rstrip("/")
     page = max(1, int(page))

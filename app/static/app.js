@@ -3,6 +3,7 @@ const views = {
   search: $("view-search"),
   western: $("view-western"),
   library: $("view-library"),
+  follow: $("view-follow"),
   queue: $("view-queue"),
   settings: $("view-settings"),
 };
@@ -73,16 +74,19 @@ function route() {
     ? "queue"
     : hash.startsWith("settings")
       ? "settings"
-      : hash.startsWith("library")
-        ? "library"
-        : hash.startsWith("western")
-          ? "western"
-          : "search";
+      : hash.startsWith("follow")
+        ? "follow"
+        : hash.startsWith("library")
+          ? "library"
+          : hash.startsWith("western")
+            ? "western"
+            : "search";
   Object.entries(views).forEach(([k, el]) => { el.hidden = k !== name; });
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === name);
   });
   if (name === "queue") refreshQueue();
+  if (name === "follow") loadFollow();
   if (name === "settings") loadSettings();
   if (name === "library") loadLibrary();
   if (name === "search") ensureJavLatest();
@@ -542,7 +546,7 @@ $("back-to-works").addEventListener("click", () => {
 
 window.addEventListener("popstate", (e) => {
   const hash = location.hash.replace("#/", "") || "";
-  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western") || hash.startsWith("library")) return;
+  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western") || hash.startsWith("library") || hash.startsWith("follow")) return;
   if (e.state && e.state.javdl === "code") {
     $("code-input").value = e.state.code || "";
     runCodeSearch(e.state.code, { fromList: true });
@@ -763,6 +767,15 @@ async function refreshQueue() {
     const data = await api("/api/downloads");
     queueItems = data.items || [];
     renderQueue();
+    const follow = $("queue-follow");
+    const unread = Number(data.follow_unread || 0);
+    if (unread > 0) {
+      follow.hidden = false;
+      follow.innerHTML = `<a href="#/follow">追更有 ${unread} 条新作</a>`;
+    } else {
+      follow.hidden = true;
+      follow.innerHTML = "";
+    }
   } catch (err) {
     $("queue-list").innerHTML = `<li class="status bad">${escapeHtml(err.message)}</li>`;
   }
@@ -827,6 +840,133 @@ $("queue-list").addEventListener("click", async (e) => {
     alert(err.message);
   } finally {
     btn.disabled = false;
+  }
+});
+
+const FOLLOW_KIND = {
+  actress: "女优",
+  series: "系列",
+  studio: "片商",
+  western_performer: "欧美演员",
+  western_studio: "欧美片商",
+};
+const HIT_STATUS = {
+  new: "新作",
+  queued: "已入队",
+  no_magnet: "没有符合规则的磁链",
+};
+
+function renderFollow(data) {
+  const items = data.items || [];
+  $("follow-list").innerHTML = items.map((sub) => `
+    <article class="follow-sub">
+      <div class="row">
+        <strong>${escapeHtml(FOLLOW_KIND[sub.kind] || sub.kind)} ${escapeHtml(sub.name)}</strong>
+        <span>${sub.auto ? "自动下载" : "只提醒"}</span>
+      </div>
+      <p class="hint">${escapeHtml(sub.target || "")}</p>
+      ${sub.last_error ? `<p class="status bad">${escapeHtml(sub.last_error)}</p>` : ""}
+      <div class="row-actions">
+        <button type="button" data-follow-check="${sub.id}">检查</button>
+        <button type="button" class="ghost" data-follow-del="${sub.id}">删除</button>
+      </div>
+    </article>`).join("");
+  const hits = data.hits || [];
+  $("follow-empty").hidden = hits.length > 0;
+  $("follow-hits").innerHTML = hits.map((hit) => `
+    <li>
+      <div class="row">
+        <span class="title"><span class="code">${escapeHtml(hit.code)}</span> ${escapeHtml(hit.title || "")}</span>
+        <span>${escapeHtml(HIT_STATUS[hit.status] || hit.status)}</span>
+      </div>
+      ${hit.detail ? `<p class="hint">${escapeHtml(hit.detail)}</p>` : ""}
+      ${hit.seen ? "" : `<button type="button" class="ghost" data-hit-read="${hit.id}">知道了</button>`}
+    </li>`).join("");
+}
+
+async function loadFollow() {
+  try {
+    renderFollow(await api("/api/subscriptions"));
+  } catch (err) {
+    setStatus($("follow-status"), err.message, "bad");
+  }
+}
+
+$("follow-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const btn = form.querySelector("button[type='submit']");
+  btn.disabled = true;
+  setStatus($("follow-status"), "正在记下现有作品…");
+  try {
+    const data = await api("/api/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: form.kind.value,
+        name: form.name.value.trim(),
+        target: form.target.value.trim(),
+        auto: form.auto.checked,
+        want_uc: form.want_uc.checked,
+        want_c: form.want_c.checked,
+        max_gb: Number(form.max_gb.value || 0),
+      }),
+    });
+    const check = data.check || {};
+    const note = check.error
+      ? check.error
+      : (check.first ? `已记下当前 ${check.known || 0} 部，之后的新作才会提醒` : `新增 ${check.added || 0} 条`);
+    setStatus($("follow-status"), note, check.error ? "bad" : "good");
+    form.name.value = "";
+    form.target.value = "";
+    await loadFollow();
+  } catch (err) {
+    setStatus($("follow-status"), err.message, "bad");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("follow-check").addEventListener("click", async () => {
+  setStatus($("follow-status"), "正在检查…");
+  try {
+    await api("/api/subscriptions/check", { method: "POST", body: JSON.stringify({ id: "" }) });
+    setStatus($("follow-status"), "检查完了", "good");
+    await loadFollow();
+  } catch (err) {
+    setStatus($("follow-status"), err.message, "bad");
+  }
+});
+
+$("follow-list").addEventListener("click", async (e) => {
+  const check = e.target.closest("[data-follow-check]");
+  const del = e.target.closest("[data-follow-del]");
+  try {
+    if (check) {
+      setStatus($("follow-status"), "正在检查…");
+      await api("/api/subscriptions/check", {
+        method: "POST",
+        body: JSON.stringify({ id: check.dataset.followCheck }),
+      });
+      setStatus($("follow-status"), "检查完了", "good");
+    } else if (del) {
+      await api(`/api/subscriptions/${del.dataset.followDel}`, { method: "DELETE" });
+    } else {
+      return;
+    }
+    await loadFollow();
+  } catch (err) {
+    setStatus($("follow-status"), err.message, "bad");
+  }
+});
+
+$("follow-hits").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-hit-read]");
+  if (!btn) return;
+  try {
+    await api(`/api/subscriptions/hits/${btn.dataset.hitRead}/read`, { method: "POST" });
+    await loadFollow();
+  } catch (err) {
+    setStatus($("follow-status"), err.message, "bad");
   }
 });
 

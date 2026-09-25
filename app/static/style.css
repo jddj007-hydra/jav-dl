@@ -250,6 +250,16 @@ h2 { font-size: 16px; font-weight: 650; margin: 0 0 8px; }
 .batch-list .title { overflow-wrap: anywhere; }
 .batch-list .miss { color: var(--bad); }
 .batch .hint { margin-top: 8px; }
+.follow-hits { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.follow-hits li, .follow-sub {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.follow-sub .row, .follow-hits .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.follow-hits .title, .follow-sub .title { overflow-wrap: anywhere; }
 
 .search-back { margin: 0 0 14px; }
 .search-back button { padding: 6px 12px; }

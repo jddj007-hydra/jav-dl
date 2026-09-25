@@ -17,7 +17,11 @@ router = APIRouter()
 @router.get("/api/downloads")
 async def list_downloads(request: Request):
     jobs = request.app.state.jobs
-    return {"items": await jobs.list_public()}
+    unread = 0
+    db = getattr(request.app.state, "db", None)
+    if db is not None and hasattr(db, "count_unread_hits"):
+        unread = await db.count_unread_hits()
+    return {"items": await jobs.list_public(), "follow_unread": unread}
 
 
 def _target(body: DownloadRequest) -> tuple[str, str | None, str]:

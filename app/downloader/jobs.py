@@ -124,6 +124,7 @@ class JobManager:
         self._scrape_lock = asyncio.Lock()
         self._aria2_settled: set[str] = set()
         self._picks: dict[str, dict] = {}
+        self._last_follow = 0.0
 
     def _use_xunlei(self) -> bool:
         return (self.settings.downloader or "aria2").strip().lower() == "xunlei"
@@ -437,6 +438,12 @@ class JobManager:
                 await self.watch_downloads()
             except Exception:
                 log.warning("下载目录监控失败", exc_info=True)
+        try:
+            from app.follow import check_due
+
+            await check_due(self)
+        except Exception:
+            log.warning("追更检查失败", exc_info=True)
 
     async def _mark_waiting(self, job: dict) -> dict:
         if job.get("scrape_status") != "waiting":

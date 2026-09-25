@@ -19,7 +19,7 @@ from app.downloader.aria2 import Aria2
 from app.downloader.jobs import JobManager
 from app.downloader.xunlei import Xunlei
 from app.library import Library
-from app.routers import downloads, health, images, library_page, resources, search, settings as settings_router, western
+from app.routers import downloads, follow, health, images, library_page, resources, search, settings as settings_router, western
 
 STATIC = Path(__file__).parent / "static"
 log = logging.getLogger("app")
@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(western.router)
     app.include_router(resources.router)
     app.include_router(downloads.router)
+    app.include_router(follow.router)
     app.include_router(library_page.router)
     app.include_router(settings_router.router)
     app.include_router(images.router)
