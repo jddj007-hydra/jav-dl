@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.batch import enqueue_batch, preview_batch
 from app.codes import normalize_code
@@ -22,6 +25,51 @@ async def list_downloads(request: Request):
     if db is not None and hasattr(db, "count_unread_hits"):
         unread = await db.count_unread_hits()
     return {"items": await jobs.list_public(), "follow_unread": unread}
+
+
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+async def _unread(db) -> int:
+    if db is None or not hasattr(db, "count_unread_hits"):
+        return 0
+    return await db.count_unread_hits()
+
+
+async def iter_download_events(jobs, db, disconnected):
+    queue = jobs.subscribe()
+    try:
+        yield _sse({"items": await jobs.list_public(), "follow_unread": await _unread(db)})
+        while True:
+            if await disconnected():
+                break
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=15)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
+            if "follow_unread" not in payload:
+                payload = dict(payload)
+                payload["follow_unread"] = await _unread(db)
+            yield _sse(payload)
+    finally:
+        jobs.unsubscribe(queue)
+
+
+@router.get("/api/downloads/events")
+async def download_events(request: Request):
+    jobs = request.app.state.jobs
+    db = getattr(request.app.state, "db", None)
+
+    async def disconnected() -> bool:
+        return await request.is_disconnected()
+
+    return StreamingResponse(
+        iter_download_events(jobs, db, disconnected),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _target(body: DownloadRequest) -> tuple[str, str | None, str]:

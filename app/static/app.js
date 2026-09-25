@@ -16,7 +16,10 @@ let detailCode = "";
 let libraryKind = "jav";
 let libraryPayload = null;
 let fromWorks = false;
-let pollTimer = null;
+let queueSource = null;
+let queueRetry = null;
+let queueSlow = null;
+let sseFailures = 0;
 let javKind = "censored";
 let javPage = 1;
 let javMode = "latest";
@@ -85,7 +88,12 @@ function route() {
   document.querySelectorAll("nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.nav === name);
   });
-  if (name === "queue") refreshQueue();
+  if (name === "queue") {
+    refreshQueue();
+    startQueueStream();
+  } else {
+    stopQueueStream();
+  }
   if (name === "follow") loadFollow();
   if (name === "settings") loadSettings();
   if (name === "library") loadLibrary();
@@ -762,23 +770,74 @@ function renderQueue() {
     </li>`).join("");
 }
 
+function applyQueuePayload(data) {
+  queueItems = data.items || [];
+  renderQueue();
+  const follow = $("queue-follow");
+  const unread = Number(data.follow_unread || 0);
+  if (unread > 0) {
+    follow.hidden = false;
+    follow.innerHTML = `<a href="#/follow">追更有 ${unread} 条新作</a>`;
+  } else {
+    follow.hidden = true;
+    follow.innerHTML = "";
+  }
+}
+
 async function refreshQueue() {
   try {
-    const data = await api("/api/downloads");
-    queueItems = data.items || [];
-    renderQueue();
-    const follow = $("queue-follow");
-    const unread = Number(data.follow_unread || 0);
-    if (unread > 0) {
-      follow.hidden = false;
-      follow.innerHTML = `<a href="#/follow">追更有 ${unread} 条新作</a>`;
-    } else {
-      follow.hidden = true;
-      follow.innerHTML = "";
-    }
+    applyQueuePayload(await api("/api/downloads"));
   } catch (err) {
     $("queue-list").innerHTML = `<li class="status bad">${escapeHtml(err.message)}</li>`;
   }
+}
+
+function stopQueueStream() {
+  const source = queueSource;
+  queueSource = null;
+  if (source) source.close();
+  clearTimeout(queueRetry);
+  queueRetry = null;
+  clearInterval(queueSlow);
+  queueSlow = null;
+}
+
+function startQueueSlow() {
+  if (queueSlow || document.hidden || views.queue.hidden) return;
+  queueSlow = setInterval(() => {
+    if (!views.queue.hidden && !document.hidden) refreshQueue();
+  }, 30000);
+}
+
+function startQueueStream() {
+  if (document.hidden || views.queue.hidden || queueSource) return;
+  clearTimeout(queueRetry);
+  queueRetry = null;
+  if (typeof EventSource === "undefined") {
+    startQueueSlow();
+    return;
+  }
+  const source = new EventSource("/api/downloads/events");
+  queueSource = source;
+  source.onmessage = (event) => {
+    sseFailures = 0;
+    clearInterval(queueSlow);
+    queueSlow = null;
+    try {
+      applyQueuePayload(JSON.parse(event.data));
+    } catch {
+      /* ignore a bad event */
+    }
+  };
+  source.onerror = () => {
+    if (queueSource !== source) return;
+    source.close();
+    queueSource = null;
+    if (document.hidden || views.queue.hidden) return;
+    sseFailures += 1;
+    if (sseFailures >= 2) startQueueSlow();
+    queueRetry = setTimeout(startQueueStream, sseFailures >= 2 ? 60000 : 5000);
+  };
 }
 
 $("queue-filter").addEventListener("click", (e) => {
@@ -1535,8 +1594,12 @@ $("library-list").addEventListener("click", async (e) => {
 });
 
 window.addEventListener("hashchange", route);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopQueueStream();
+    return;
+  }
+  if (!views.queue.hidden) startQueueStream();
+});
 route();
 loadPanelLinks();
-pollTimer = setInterval(() => {
-  if (!views.queue.hidden) refreshQueue();
-}, 2000);

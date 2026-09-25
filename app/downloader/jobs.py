@@ -125,6 +125,7 @@ class JobManager:
         self._aria2_settled: set[str] = set()
         self._picks: dict[str, dict] = {}
         self._last_follow = 0.0
+        self._listeners: set[asyncio.Queue] = set()
 
     def _use_xunlei(self) -> bool:
         return (self.settings.downloader or "aria2").strip().lower() == "xunlei"
@@ -411,22 +412,22 @@ class JobManager:
         await self._expire_picks()
         jobs = await self.db.list_jobs()
         snapshot = await self._xunlei_snapshot(jobs)
+        visible: list[dict] = []
         for job in jobs:
             try:
-                if job.get("status") == "cancelled":
-                    continue
-                if self._needs_tell(job):
-                    job = await self.sync_one(job, snapshot)
-                scrape_st = job.get("scrape_status") or ""
-                if (
-                    job.get("status") == "complete"
-                    and job.get("cleaned")
-                    and scrape_st not in SCRAPE_DONE
-                ):
-                    await self.maybe_scrape(job)
+                if job.get("status") != "cancelled":
+                    if self._needs_tell(job):
+                        job = await self.sync_one(job, snapshot)
+                    scrape_st = job.get("scrape_status") or ""
+                    if (
+                        job.get("status") == "complete"
+                        and job.get("cleaned")
+                        and scrape_st not in SCRAPE_DONE
+                    ):
+                        await self.maybe_scrape(job)
             except Exception:
                 log.warning("同步任务失败 id=%s", job.get("id"), exc_info=True)
-                continue
+            visible.append(job)
         now = time.time()
         if now - self._last_watch >= WATCH_EVERY:
             self._last_watch = now
@@ -444,6 +445,30 @@ class JobManager:
             await check_due(self)
         except Exception:
             log.warning("追更检查失败", exc_info=True)
+        if self._listeners:
+            items = [await self.public(job, snapshot) for job in visible]
+            unread = await self.db.count_unread_hits()
+            self._fanout({"items": items, "follow_unread": unread})
+
+    def subscribe(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        self._listeners.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue) -> None:
+        self._listeners.discard(queue)
+
+    def _fanout(self, payload: dict) -> None:
+        for queue in list(self._listeners):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass
 
     async def _mark_waiting(self, job: dict) -> dict:
         if job.get("scrape_status") != "waiting":
