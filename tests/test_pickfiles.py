@@ -219,6 +219,63 @@ def test_enqueue_filtered_drops_the_sample_without_asking(tmp_path):
     assert stored[0]["gid"] == "content"
 
 
+def test_enqueue_filtered_queues_whole_when_the_file_list_is_slow(tmp_path):
+    from app.downloader.aria2 import Aria2MetadataTimeout
+
+    settings = _settings(tmp_path)
+    aria = _Aria({})
+
+    async def slow_inspect(magnet, dest):
+        raise Aria2MetadataTimeout("暂时读不到种子里的文件")
+
+    aria.inspect_files = slow_inspect
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, aria, _Panel([]))
+        job = await mgr.enqueue_filtered("SSIS-001", "b" * 40, "cold")
+        return job, await db.list_jobs()
+
+    job, stored = asyncio.run(run())
+    assert job["code"] == "SSIS-001"
+    assert aria.added == 1
+    assert stored[0]["gid"] == "meta"
+
+
+def test_failed_confirm_keeps_the_pick_so_the_torrent_is_removed(tmp_path):
+    settings = _settings(tmp_path)
+    aria = _Aria({"meta": {
+        "status": "active",
+        "files": [
+            {"index": "1", "path": "/dl/a.mkv", "length": "10"},
+            {"index": "2", "path": "/dl/b.mkv", "length": "10"},
+        ],
+    }})
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, aria, _Panel([]))
+
+        async def broken_insert(job):
+            raise RuntimeError("disk full")
+
+        db.insert_job = broken_insert
+        try:
+            await mgr.enqueue_filtered("SSIS-001", "c" * 40, "two")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("expected the insert to fail")
+        return mgr._picks
+
+    picks = asyncio.run(run())
+    assert picks == {}
+    assert aria.resumed == ["meta"]
+    assert aria.removed == ["meta"]
+
+
 def test_cancel_and_timeout_remove_the_paused_torrent(tmp_path):
     settings = _settings(tmp_path)
     aria = _Aria({"meta": {

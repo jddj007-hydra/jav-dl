@@ -15,6 +15,10 @@ class Aria2Error(Exception):
     pass
 
 
+class Aria2MetadataTimeout(Aria2Error):
+    """The torrent file list did not arrive in time. The magnet itself may still be fine."""
+
+
 def gid_is_gone(exc: BaseException) -> bool:
     return "not found" in str(exc).lower()
 
@@ -160,7 +164,7 @@ class Aria2:
         await self._drop_gid(content)
         if content != meta:
             await self._drop_gid(meta)
-        raise Aria2Error("暂时读不到种子里的文件")
+        raise Aria2MetadataTimeout("暂时读不到种子里的文件")
 
     async def _drop_gid(self, gid: str) -> None:
         try:

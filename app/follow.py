@@ -30,6 +30,7 @@ log = logging.getLogger("app.follow")
 FOLLOW_EVERY = 3 * 60 * 60
 FOLLOW_LIMIT = 30
 FOLLOW_PAGE_CAP = 5
+FOLLOW_RETRY_FOR = 14 * 24 * 60 * 60
 KINDS = ("actress", "series", "studio", "western_performer", "western_studio")
 KIND_LABEL = {
     "actress": "女优",
@@ -95,41 +96,46 @@ def _resolve_url(kind: str, name: str, target: str) -> tuple[str, str]:
     if page_kind:
         if page_kind != kind:
             raise ValueError(f"这个链接不是{KIND_LABEL.get(kind, '该类型')}")
-        label = name or parsed.path.rstrip("/").split("/")[-1]
-        return label, target.split("?")[0].rstrip("/")
+        clean = javbus_list_url(target)
+        label = name or clean.rsplit("/", 1)[-1]
+        return label, clean
     raise ValueError("请粘贴 JavBus 的女优、系列或片商页面")
+
+
+_JAVBUS_LISTS = ("star", "series", "studio", "label")
+
+
+def javbus_list_url(target: str) -> str:
+    """The list URL without a page suffix. Ids can be all digits, so only the segment after the id is a page."""
+    clean = (target or "").split("?")[0].split("#")[0].rstrip("/")
+    parsed = urlparse(clean)
+    parts = [part for part in parsed.path.split("/") if part]
+    for i, part in enumerate(parts):
+        if part in _JAVBUS_LISTS and i + 1 < len(parts):
+            return parsed._replace(path="/" + "/".join(parts[: i + 2])).geturl()
+    return clean
 
 
 def javbus_page_url(target: str, page: int) -> str:
     """JavBus star, series, and studio pages put the page number on the path."""
-    clean = (target or "").split("?")[0].rstrip("/")
+    base = javbus_list_url(target)
     if page <= 1:
-        return clean
-    tail = clean.rsplit("/", 1)[-1]
-    if tail.isdigit():
-        return f"{clean.rsplit('/', 1)[0]}/{int(page)}"
-    return f"{clean}/{int(page)}"
+        return base
+    return f"{base}/{int(page)}"
 
 
-def _walk_stop(page_codes: list[str], known: set[str], collected: set[str]) -> bool:
-    if not page_codes:
-        return True
-    if all(code in collected for code in page_codes):
-        return True
-    return bool(known) and all(code in known for code in page_codes)
+async def _walk_pages(fetch_page, known: set[str], pending: set[str] | None = None) -> list[dict]:
+    """Read newer pages until one is already recorded, empty, or repeated.
 
-
-async def _walk_pages(fetch_page, known: set[str]) -> list[dict]:
-    """Read newer pages until one is already recorded, empty, or repeated."""
+    A recorded page only ends the walk once every pending retry code has been reached.
+    """
+    waiting = set(pending or ())
     works: list[dict] = []
     collected: set[str] = set()
     for page in range(1, FOLLOW_PAGE_CAP + 1):
         batch = await fetch_page(page)
         page_codes = [str(item.get("code") or "") for item in batch if item.get("code")]
-        if _walk_stop(page_codes, known, collected):
-            fresh = [item for item in batch if item.get("code") and item["code"] not in collected]
-            if fresh and known and all(item["code"] in known for item in fresh):
-                works.extend(fresh)
+        if not page_codes or all(code in collected for code in page_codes):
             break
         for item in batch:
             code = item.get("code")
@@ -137,6 +143,8 @@ async def _walk_pages(fetch_page, known: set[str]) -> list[dict]:
                 continue
             collected.add(code)
             works.append(item)
+        if known and all(code in known for code in page_codes) and waiting <= collected:
+            break
     return works
 
 
@@ -196,7 +204,12 @@ async def _western_page(settings: Settings, sub: dict, ident: list[str], page: i
     return works
 
 
-async def list_works(settings: Settings, sub: dict, known: set[str] | None = None) -> list[dict]:
+async def list_works(
+    settings: Settings,
+    sub: dict,
+    known: set[str] | None = None,
+    pending: set[str] | None = None,
+) -> list[dict]:
     seen = known or set()
     kind = sub["kind"]
     if kind in ("actress", "series", "studio"):
@@ -205,13 +218,13 @@ async def list_works(settings: Settings, sub: dict, known: set[str] | None = Non
         async def fetch_page(page: int) -> list[dict]:
             return await _jav_page(settings, target, page)
 
-        return await _walk_pages(fetch_page, seen)
+        return await _walk_pages(fetch_page, seen, pending)
     ident: list[str] = []
 
     async def fetch_western(page: int) -> list[dict]:
         return await _western_page(settings, sub, ident, page)
 
-    return await _walk_pages(fetch_western, seen)
+    return await _walk_pages(fetch_western, seen, pending)
 
 
 async def _owned(db, library, work: dict) -> bool:
@@ -333,13 +346,28 @@ async def check_sub(manager, sub: dict) -> dict:
         return await _check_sub(manager, sub)
 
 
+async def _retry_codes(db, sub_id: str, seen: set[str]) -> set[str]:
+    """Codes still waiting for a magnet. Past FOLLOW_RETRY_FOR they are given up on."""
+    cutoff = time.time() - FOLLOW_RETRY_FOR
+    pending: set[str] = set()
+    for hit in await db.pending_hits(sub_id):
+        code = hit["code"]
+        if float(hit.get("created_at") or 0) < cutoff:
+            await db.mark_seen(sub_id, code)
+            seen.add(code)
+        else:
+            pending.add(code)
+    return pending
+
+
 async def _check_sub(manager, sub: dict) -> dict:
     first = not sub.get("last_check")
     seen = await manager.db.seen_codes(sub["id"])
+    pending = await _retry_codes(manager.db, sub["id"], seen)
     try:
-        works = await list_works(manager.settings, sub, seen)
+        works = await list_works(manager.settings, sub, seen, pending)
     except (MetadataError, TpdbError, ValueError) as exc:
-        await manager.db.mark_subscription_checked(sub["id"], error=str(exc))
+        await manager.db.mark_subscription_checked(sub["id"], error=str(exc), stamp=not first)
         return {"first": first, "added": 0, "error": str(exc)}
     library = manager.library
     added = 0
@@ -365,7 +393,8 @@ async def _check_sub(manager, sub: dict) -> dict:
             continue
         added += 1
         await _notify_hit(manager.settings, sub, work, status, detail)
-    await manager.db.mark_subscription_checked(sub["id"], error=None)
+    # An empty first listing (a blocked or changed page) has recorded nothing yet.
+    await manager.db.mark_subscription_checked(sub["id"], error=None, stamp=not first or bool(works))
     return {"first": first, "added": added, "error": None, "known": len(works)}
 
 

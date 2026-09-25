@@ -100,6 +100,7 @@ async def lifespan(app: FastAPI):
         await task
     except asyncio.CancelledError:
         pass
+    await jobs.stop_follow()
     await close_clients()
 
 

@@ -371,12 +371,19 @@ class Database:
             await db.execute("DELETE FROM subscriptions WHERE id = ?", (sub_id,))
             await db.commit()
 
-    async def mark_subscription_checked(self, sub_id: str, *, error: str | None) -> None:
+    async def mark_subscription_checked(self, sub_id: str, *, error: str | None, stamp: bool = True) -> None:
+        """stamp=False keeps last_check, so a failed or empty first check stays a first check."""
         async with aiosqlite.connect(self.path) as db:
-            await db.execute(
-                "UPDATE subscriptions SET last_check = ?, last_error = ? WHERE id = ?",
-                (time.time(), error, sub_id),
-            )
+            if stamp:
+                await db.execute(
+                    "UPDATE subscriptions SET last_check = ?, last_error = ? WHERE id = ?",
+                    (time.time(), error, sub_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE subscriptions SET last_error = ? WHERE id = ?",
+                    (error, sub_id),
+                )
             await db.commit()
 
     async def seen_codes(self, sub_id: str) -> set[str]:
@@ -418,10 +425,27 @@ class Database:
     async def update_hit(self, hit_id: str, *, status: str, detail: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                "UPDATE subscription_hits SET status = ?, detail = ?, seen = 0 WHERE id = ?",
-                (status, detail, hit_id),
+                """UPDATE subscription_hits SET status = ?, detail = ?, seen = 0, created_at = ?
+                   WHERE id = ?""",
+                (status, detail, time.time(), hit_id),
             )
             await db.commit()
+
+    async def pending_hits(self, sub_id: str) -> list[dict]:
+        """no_magnet hits not yet remembered as seen, so a later check can retry them."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """SELECT h.code, MIN(h.created_at) AS created_at FROM subscription_hits h
+                   WHERE h.sub_id = ? AND h.status = 'no_magnet'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM subscription_seen s WHERE s.sub_id = h.sub_id AND s.code = h.code
+                     )
+                   GROUP BY h.code""",
+                (sub_id,),
+            )
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
 
     async def list_hits(self, limit: int = 50) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:

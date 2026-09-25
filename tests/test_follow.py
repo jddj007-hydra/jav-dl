@@ -75,7 +75,7 @@ def test_first_check_only_remembers_and_later_check_reminds(tmp_path, monkeypatc
 
     works = [{"code": "SSIS-001", "title": "one", "western": None}]
 
-    async def fake_list(settings, sub, known=None):
+    async def fake_list(settings, sub, known=None, pending=None):
         return list(works)
 
     monkeypatch.setattr("app.follow.send_notice", fake_notice)
@@ -108,7 +108,7 @@ def test_auto_download_uses_rules_and_skips_owned(tmp_path, monkeypatch):
     async def fake_notice(settings, title, body):
         return None
 
-    async def fake_list(settings, sub, known=None):
+    async def fake_list(settings, sub, known=None, pending=None):
         return [
             {"code": "SSIS-001", "title": "owned", "western": None},
             {"code": "SSIS-002", "title": "queued", "western": None},
@@ -183,7 +183,7 @@ def test_auto_retries_until_a_magnet_matches(tmp_path, monkeypatch):
     async def fake_notice(settings, title, body):
         notes.append(title)
 
-    async def fake_list(settings, sub, known=None):
+    async def fake_list(settings, sub, known=None, pending=None):
         return [{"code": "SSIS-009", "title": "later", "western": None}]
 
     async def fake_search(settings, code, pages=2):
@@ -313,6 +313,141 @@ def test_western_follow_stops_on_a_known_page(monkeypatch):
     works = asyncio.run(list_works(Settings(), sub, {"old-id"}))
     assert [item["code"] for item in works] == ["new-id", "old-id"]
     assert calls == [1, 2]
+
+
+def test_failed_or_empty_first_check_stays_a_first_check(tmp_path, monkeypatch):
+    notes = []
+    state = {"mode": "error"}
+
+    async def fake_notice(settings, title, body):
+        notes.append(title)
+
+    async def fake_list(settings, sub, known=None, pending=None):
+        if state["mode"] == "error":
+            raise ValueError("JavBus 403")
+        if state["mode"] == "empty":
+            return []
+        return [{"code": f"SSIS-{i:03}", "title": "t", "western": None} for i in range(40)]
+
+    monkeypatch.setattr("app.follow.send_notice", fake_notice)
+    monkeypatch.setattr("app.follow.list_works", fake_list)
+    settings = _settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        row = new_subscription("actress", "葵", "https://www.javbus.com/star/2xi", auto=True, want_uc=False, want_c=False, max_gb=0)
+        await db.add_subscription(row)
+        jobs = _Jobs(settings, db)
+        failed = await check_sub(jobs, await db.get_subscription(row["id"]))
+        state["mode"] = "empty"
+        empty = await check_sub(jobs, await db.get_subscription(row["id"]))
+        state["mode"] = "ok"
+        baseline = await check_sub(jobs, await db.get_subscription(row["id"]))
+        saved = await db.get_subscription(row["id"])
+        return failed, empty, baseline, saved, await db.list_hits(), jobs.calls
+
+    failed, empty, baseline, saved, hits, calls = asyncio.run(run())
+    assert failed["first"] is True and failed["error"] == "JavBus 403"
+    assert empty["first"] is True
+    assert baseline["first"] is True and baseline["added"] == 0
+    assert saved["last_check"] and saved["last_error"] is None
+    assert hits == [] and notes == [] and calls == []
+
+
+def test_javbus_page_url_keeps_numeric_ids_and_drops_a_pasted_page():
+    from app.follow import javbus_page_url
+
+    assert javbus_page_url("https://www.javbus.com/star/2xi/2", 1) == "https://www.javbus.com/star/2xi"
+    assert javbus_page_url("https://www.javbus.com/star/2xi/2", 2) == "https://www.javbus.com/star/2xi/2"
+    assert javbus_page_url("https://www.javbus.com/studio/1", 1) == "https://www.javbus.com/studio/1"
+    assert javbus_page_url("https://www.javbus.com/studio/1", 2) == "https://www.javbus.com/studio/1/2"
+    assert javbus_page_url("https://www.javbus.com/uncensored/star/9a/3", 2) == "https://www.javbus.com/uncensored/star/9a/2"
+
+    async def run():
+        return await resolve_target(Settings(), "actress", "", "https://www.javbus.com/star/2xi/2?x=1")
+
+    assert asyncio.run(run()) == ("2xi", "https://www.javbus.com/star/2xi")
+
+
+def test_walk_reaches_a_pending_retry_past_a_known_page(tmp_path, monkeypatch):
+    from app.follow import FOLLOW_RETRY_FOR, list_works
+
+    fetched = []
+
+    def card(code):
+        return (
+            f'<a class="movie-box" href="https://www.javbus.com/{code}">'
+            f"<date>{code}</date><date>2024-01-01</date></a>"
+        )
+
+    async def fake_fetch(settings, url):
+        fetched.append(url)
+        if url.endswith("/3"):
+            codes = ["SSIS-000"]
+        elif url.endswith("/2"):
+            codes = ["SSIS-002", "SSIS-001"]
+        else:
+            codes = ["SSIS-004", "SSIS-003"]
+        return "".join(card(code) for code in codes)
+
+    monkeypatch.setattr("app.follow.fetch_javbus_html", fake_fetch)
+    sub = {"kind": "actress", "name": "葵", "target": "https://www.javbus.com/star/2xi"}
+    known = {"SSIS-004", "SSIS-003", "SSIS-002", "SSIS-000"}
+    settings = Settings(javbus_base="https://www.javbus.com")
+    works = asyncio.run(list_works(settings, sub, known, {"SSIS-001"}))
+    assert "SSIS-001" in [item["code"] for item in works]
+    assert len(fetched) == 3
+    fetched.clear()
+    asyncio.run(list_works(settings, sub, known))
+    assert len(fetched) == 1
+
+    settings = _settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        row = new_subscription("actress", "葵", "https://www.javbus.com/star/2xi", auto=True, want_uc=False, want_c=False, max_gb=0)
+        await db.add_subscription(row)
+        now = time.time()
+        for code, age in (("SSIS-010", 60), ("SSIS-011", FOLLOW_RETRY_FOR + 60)):
+            await db.add_hit({
+                "id": code, "sub_id": row["id"], "code": code, "title": code,
+                "status": "no_magnet", "detail": "", "created_at": now - age,
+            })
+        from app.follow import _retry_codes
+
+        seen = set()
+        pending = await _retry_codes(db, row["id"], seen)
+        return pending, seen, await db.seen_codes(row["id"])
+
+    pending, seen, stored = asyncio.run(run())
+    assert pending == {"SSIS-010"}
+    assert seen == {"SSIS-011"} and stored == {"SSIS-011"}
+
+
+def test_shutdown_cancels_a_running_follow_check(tmp_path, monkeypatch):
+    from app.downloader.jobs import JobManager
+
+    started = asyncio.Event()
+
+    async def slow(manager):
+        started.set()
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr("app.follow.check_due", slow)
+    settings = _settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, object(), object())
+        mgr.kick_follow()
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(mgr.stop_follow(), 1)
+        return mgr._follow_task.cancelled()
+
+    assert asyncio.run(run()) is True
 
 
 def test_sync_does_not_wait_for_follow(tmp_path, monkeypatch):

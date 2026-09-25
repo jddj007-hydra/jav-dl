@@ -10,7 +10,7 @@ from pathlib import Path
 from app.codes import normalize_code
 from app.config import Settings
 from app.db import Database
-from app.downloader.aria2 import Aria2, Aria2Error
+from app.downloader.aria2 import Aria2, Aria2Error, Aria2MetadataTimeout
 from app.downloader.xunlei import Xunlei, XunleiError, view_task
 from app.scrape import (
     ScrapeError,
@@ -215,8 +215,15 @@ class JobManager:
         *,
         dest_rel: str | None = None,
     ) -> dict:
-        """Enqueue like enqueue, but drop ads, samples, and tiny non-video files."""
-        prepared = await self.prepare_files(code, info_hash, title, dest_rel=dest_rel)
+        """Enqueue like enqueue, but drop ads, samples, and tiny non-video files.
+
+        A torrent whose file list is slow to arrive is queued whole, as before.
+        """
+        try:
+            prepared = await self.prepare_files(code, info_hash, title, dest_rel=dest_rel)
+        except Aria2MetadataTimeout:
+            log.info("读不到种子文件列表，整包入队 code=%s", code)
+            return await self.enqueue(code, info_hash, title, dest_rel=dest_rel)
         if prepared.get("mode") == "direct":
             return prepared["job"]
         token = prepared["token"]
@@ -311,23 +318,29 @@ class JobManager:
         chosen = sorted({int(i) for i in indexes if int(i) in known})
         if not chosen:
             raise ValueError("没有选择文件")
-        if pending["backend"] == "aria2":
-            await self.aria2.change_option(pending["gid"], {"select-file": format_select_file(chosen)})
-            await self.aria2.resume(pending["gid"])
-            gid = pending["gid"]
-        else:
-            spec = format_sub_file_index(chosen, [int(item["index"]) for item in pending["files"]])
-            gid = await self.xunlei.add_magnet(pending["magnet"], pending["dest"], sub_file_index=spec)
+        # Held out of _picks while in flight so a double confirm cannot queue twice;
+        # put back on failure so cancel_files or the TTL can still remove the torrent.
         self._picks.pop(token, None)
-        log.info("只下载选中的文件 code=%s indexes=%s", pending["code"], ",".join(str(i) for i in chosen))
-        return await self._remember(
-            pending["code"],
-            pending["info_hash"],
-            pending["title"],
-            pending["dest"],
-            gid,
-            pending["magnet"],
-        )
+        try:
+            if pending["backend"] == "aria2":
+                await self.aria2.change_option(pending["gid"], {"select-file": format_select_file(chosen)})
+                await self.aria2.resume(pending["gid"])
+                gid = pending["gid"]
+            else:
+                spec = format_sub_file_index(chosen, [int(item["index"]) for item in pending["files"]])
+                gid = await self.xunlei.add_magnet(pending["magnet"], pending["dest"], sub_file_index=spec)
+            log.info("只下载选中的文件 code=%s indexes=%s", pending["code"], ",".join(str(i) for i in chosen))
+            return await self._remember(
+                pending["code"],
+                pending["info_hash"],
+                pending["title"],
+                pending["dest"],
+                gid,
+                pending["magnet"],
+            )
+        except Exception:
+            self._picks[token] = pending
+            raise
 
     async def cancel_files(self, token: str) -> None:
         pending = self._picks.pop(token, None)
@@ -491,6 +504,16 @@ class JobManager:
             await check_due(self)
         except Exception:
             log.warning("追更检查失败", exc_info=True)
+
+    async def stop_follow(self) -> None:
+        task = self._follow_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
