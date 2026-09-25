@@ -60,6 +60,8 @@ class DownloadRequest(BaseModel):
     work_title: str = ""
     tpdb_kind: str = ""
     performers: list[str] = []
+    pick_token: str = ""
+    file_indexes: list[int] | None = None
 
 
 class SettingsUpdate(BaseModel):

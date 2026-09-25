@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=17" />
+  <link rel="stylesheet" href="/static/style.css?v=18" />
 </head>
 <body>
   <header class="top">
@@ -239,6 +239,18 @@
   <div id="lightbox" class="lightbox" hidden>
     <img alt="" />
   </div>
-  <script src="/static/app.js?v=25"></script>
+  <div id="file-picker" class="picker" hidden>
+    <div class="picker-card" role="dialog" aria-modal="true" aria-labelledby="file-picker-title">
+      <h2 id="file-picker-title">选择要下载的文件</h2>
+      <p class="hint">已去掉广告、样片和很小的非视频文件，可以改勾选。只有一个文件时不会出现这个窗口。</p>
+      <ul id="file-picker-list" class="picker-list"></ul>
+      <p id="file-picker-note" class="status bad" hidden></p>
+      <div class="picker-actions">
+        <button type="button" id="file-picker-ok">下载所选</button>
+        <button type="button" class="ghost" id="file-picker-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+  <script src="/static/app.js?v=26"></script>
 </body>
 </html>

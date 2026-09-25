@@ -111,6 +111,67 @@ async function api(path, opts = {}) {
   return data;
 }
 
+let filePickResolve = null;
+
+function closeFilePicker(value) {
+  $("file-picker").hidden = true;
+  $("file-picker-note").hidden = true;
+  const resolve = filePickResolve;
+  filePickResolve = null;
+  if (resolve) resolve(value);
+}
+
+function askFiles(files) {
+  const list = $("file-picker-list");
+  list.innerHTML = (files || []).map((file) => `
+    <li>
+      <label>
+        <input type="checkbox" data-index="${file.index}" ${file.selected ? "checked" : ""} />
+        <span class="name">${escapeHtml(file.name || "")}</span>
+        <span class="num">${escapeHtml(file.size_text || "")}</span>
+      </label>
+    </li>`).join("");
+  $("file-picker-note").hidden = true;
+  $("file-picker").hidden = false;
+  return new Promise((resolve) => {
+    filePickResolve = resolve;
+  });
+}
+
+async function startDownload(payload, statusEl) {
+  setStatus(statusEl, "正在读取文件列表…");
+  const preview = await api("/api/downloads/files", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (preview.mode === "choose") {
+    const indexes = await askFiles(preview.files || []);
+    if (!indexes) {
+      await api(`/api/downloads/files/${encodeURIComponent(preview.token)}`, { method: "DELETE" }).catch(() => {});
+      setStatus(statusEl, "已取消");
+      return;
+    }
+    await api("/api/downloads", {
+      method: "POST",
+      body: JSON.stringify({ ...payload, pick_token: preview.token, file_indexes: indexes }),
+    });
+  }
+  location.hash = "#/queue";
+}
+
+$("file-picker-ok").addEventListener("click", () => {
+  const indexes = [...$("file-picker-list").querySelectorAll("input:checked")]
+    .map((el) => Number(el.dataset.index))
+    .filter((n) => Number.isInteger(n));
+  if (!indexes.length) {
+    setStatus($("file-picker-note"), "请至少选一个文件");
+    return;
+  }
+  closeFilePicker(indexes);
+});
+
+$("file-picker-cancel").addEventListener("click", () => closeFilePicker(null));
+
 function setStatus(el, msg, kind) {
   if (!msg) { el.hidden = true; el.textContent = ""; return; }
   el.hidden = false;
@@ -600,15 +661,11 @@ $("resource-list").addEventListener("click", async (e) => {
   }
   dl.disabled = true;
   try {
-    await api("/api/downloads", {
-      method: "POST",
-      body: JSON.stringify({
-        code: dl.dataset.code || detailCode,
-        info_hash: item.info_hash,
-        title: item.title,
-      }),
-    });
-    location.hash = "#/queue";
+    await startDownload({
+      code: dl.dataset.code || detailCode,
+      info_hash: item.info_hash,
+      title: item.title,
+    }, $("search-status"));
   } catch (err) {
     setStatus($("search-status"), err.message, "bad");
   } finally {
@@ -1219,21 +1276,17 @@ $("western-resources").addEventListener("click", async (e) => {
   const work = westernCurrent || {};
   dl.disabled = true;
   try {
-    await api("/api/downloads", {
-      method: "POST",
-      body: JSON.stringify({
-        kind: "western",
-        tpdb_id: work.id || "",
-        tpdb_kind: work.kind || "scene",
-        site: work.site || "",
-        date: work.date || "",
-        performers: work.performers || [],
-        work_title: work.title || item.title,
-        info_hash: item.info_hash,
-        title: item.title,
-      }),
-    });
-    location.hash = "#/queue";
+    await startDownload({
+      kind: "western",
+      tpdb_id: work.id || "",
+      tpdb_kind: work.kind || "scene",
+      site: work.site || "",
+      date: work.date || "",
+      performers: work.performers || [],
+      work_title: work.title || item.title,
+      info_hash: item.info_hash,
+      title: item.title,
+    }, $("western-status"));
   } catch (err) {
     setStatus($("western-status"), err.message, "bad");
   } finally {

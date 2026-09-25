@@ -6,6 +6,8 @@ import time
 from typing import Any
 from urllib.parse import quote, urljoin
 
+from app.pickfiles import flatten_xunlei_files
+
 UIAUTH_RE = re.compile(r'function uiauth\(value\)\{\s*return "([^"]+)"')
 
 
@@ -269,7 +271,36 @@ class Xunlei:
                 return fid
         raise XunleiError("找不到迅雷下载目录，先在迅雷面板里手动下过一次")
 
-    async def add_magnet(self, magnet: str, dest: str) -> str:
+    async def list_magnet_files(self, magnet: str) -> list[dict]:
+        token = await self.token()
+        listed = await self._json(
+            "POST",
+            "drive/v1/resource/list",
+            token=token,
+            json_body={"urls": magnet},
+            timeout=40.0,
+        )
+        resources = ((listed.get("list") or {}).get("resources") or [])
+        if not resources:
+            raise XunleiError("迅雷未能解析这个磁力")
+        res = resources[0]
+        meta = res.get("meta") or {}
+        err = meta.get("error") or ""
+        if err and not res.get("file_size"):
+            raise XunleiError(f"迅雷解析磁力失败：{err}")
+        files = flatten_xunlei_files(res)
+        if files:
+            return files
+        if int(res.get("file_count") or 1) <= 1:
+            return [{
+                "index": 0,
+                "name": str(res.get("name") or "video"),
+                "path": str(res.get("name") or "video"),
+                "size": int(res.get("file_size") or 0),
+            }]
+        return []
+
+    async def add_magnet(self, magnet: str, dest: str, *, sub_file_index: str | None = None) -> str:
         token = await self.token()
         listed = await self._json(
             "POST",
@@ -285,7 +316,7 @@ class Xunlei:
         name = str(res.get("name") or dest or "download")
         file_size = int(res.get("file_size") or 0)
         file_count = int(res.get("file_count") or 1)
-        index = file_index_from_list(listed)
+        index = sub_file_index or file_index_from_list(listed)
         device_id = await self._device_id(token)
         parent = await self._parent_folder_id(token)
         payload = {

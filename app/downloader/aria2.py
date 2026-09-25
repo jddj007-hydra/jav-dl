@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from typing import Any
 
 import httpx
 
 from app.config import Settings
+from app.pickfiles import aria_content_files
 
 
 class Aria2Error(Exception):
@@ -128,6 +131,45 @@ class Aria2:
         if not gid:
             raise Aria2Error("aria2 未返回 gid")
         return str(gid)
+
+    async def inspect_files(self, magnet: str, dest: str, *, timeout: float = 20.0) -> tuple[str, str, list[dict]]:
+        """Add the magnet and pause it once the real file list is known.
+
+        Returns (content gid, metadata gid, files). The caller resumes it,
+        or removes it if the user cancels.
+        """
+        meta = await self.add_magnet(magnet, dest)
+        content = meta
+        hops = 0
+        deadline = time.monotonic() + timeout
+        while True:
+            status = await self.tell(content)
+            followed = _gid_list(status.get("followedBy"))
+            nxt = followed[0] if followed else ""
+            if nxt and nxt != content and hops < 4:
+                content = nxt
+                hops += 1
+                continue
+            files = aria_content_files(status)
+            if files is not None:
+                await self.pause(content)
+                return content, meta, files
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.4)
+        await self._drop_gid(content)
+        if content != meta:
+            await self._drop_gid(meta)
+        raise Aria2Error("暂时读不到种子里的文件")
+
+    async def _drop_gid(self, gid: str) -> None:
+        try:
+            await self.remove(gid)
+        except Aria2Error:
+            pass
+
+    async def change_option(self, gid: str, options: dict) -> None:
+        await self.call("aria2.changeOption", [gid, options])
 
     async def tell(self, gid: str) -> dict:
         keys = [

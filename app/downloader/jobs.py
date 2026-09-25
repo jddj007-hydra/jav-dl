@@ -28,6 +28,7 @@ from app.western_archive import (
     scrape_western_job,
     scrape_western_source,
 )
+from app.pickfiles import format_select_file, format_sub_file_index, present_files
 from app.textutil import format_size
 from app.trackers import magnet_for
 
@@ -48,6 +49,7 @@ CLEARABLE = {
 }
 SCRAPE_RETRY_AFTER = 300
 WATCH_EVERY = 15
+PICK_TTL = 10 * 60
 
 
 def _new_id() -> str:
@@ -112,6 +114,7 @@ class JobManager:
         self._watch_fail: dict[str, float] = {}
         self._scrape_lock = asyncio.Lock()
         self._aria2_settled: set[str] = set()
+        self._picks: dict[str, dict] = {}
 
     def _use_xunlei(self) -> bool:
         return (self.settings.downloader or "aria2").strip().lower() == "xunlei"
@@ -189,6 +192,9 @@ class JobManager:
             dest_path.mkdir(parents=True, exist_ok=True)
         magnet = magnet_for(info_hash, title or code)
         gid = await self._add_magnet(magnet, dest)
+        return await self._remember(code, info_hash, title, dest, gid, magnet)
+
+    async def _remember(self, code: str, info_hash: str, title: str, dest: str, gid: str, magnet: str) -> dict:
         now = time.time()
         job = {
             "id": _new_id(),
@@ -207,6 +213,100 @@ class JobManager:
         }
         await self.db.insert_job(job)
         return await self.public(job)
+
+    async def prepare_files(
+        self,
+        code: str,
+        info_hash: str,
+        title: str,
+        *,
+        dest_rel: str | None = None,
+    ) -> dict:
+        """List torrent files before a multi-file download starts.
+
+        One file keeps the old enqueue path and returns mode=direct.
+        """
+        await self._expire_picks()
+        info_hash = info_hash.lower()
+        existing = await self.db.find_job_by_hash(info_hash)
+        if existing and existing["status"] not in ("error", "cancelled", "complete"):
+            return {"mode": "direct", "job": await self.public(existing)}
+
+        dest_path = self._dest_for(code, dest_rel)
+        dest = str(dest_path)
+        magnet = magnet_for(info_hash, title or code)
+        if self._use_xunlei():
+            files = await self.xunlei.list_magnet_files(magnet)
+            content, meta = "", ""
+        else:
+            dest_path.mkdir(parents=True, exist_ok=True)
+            content, meta, files = await self.aria2.inspect_files(magnet, dest)
+        if len(files) <= 1:
+            if self._use_xunlei():
+                job = await self.enqueue(code, info_hash, title, dest_rel=dest_rel)
+            else:
+                await self.aria2.resume(content)
+                job = await self._remember(code, info_hash, title, dest, content, magnet)
+            return {"mode": "direct", "job": job}
+        token = _new_id()
+        self._picks[token] = {
+            "at": time.monotonic(),
+            "backend": "xunlei" if self._use_xunlei() else "aria2",
+            "gid": content,
+            "meta": meta,
+            "code": code,
+            "info_hash": info_hash,
+            "title": title or code,
+            "dest": dest,
+            "dest_rel": dest_rel,
+            "magnet": magnet,
+            "files": files,
+        }
+        return {"mode": "choose", "token": token, "files": present_files(files)}
+
+    async def confirm_files(self, token: str, indexes: list[int], info_hash: str) -> dict:
+        pending = self._picks.get(token)
+        if not pending or pending["info_hash"] != (info_hash or "").lower():
+            raise KeyError(token)
+        known = {int(item["index"]) for item in pending["files"]}
+        chosen = sorted({int(i) for i in indexes if int(i) in known})
+        if not chosen:
+            raise ValueError("没有选择文件")
+        if pending["backend"] == "aria2":
+            await self.aria2.change_option(pending["gid"], {"select-file": format_select_file(chosen)})
+            await self.aria2.resume(pending["gid"])
+            gid = pending["gid"]
+        else:
+            spec = format_sub_file_index(chosen, [int(item["index"]) for item in pending["files"]])
+            gid = await self.xunlei.add_magnet(pending["magnet"], pending["dest"], sub_file_index=spec)
+        self._picks.pop(token, None)
+        log.info("只下载选中的文件 code=%s indexes=%s", pending["code"], ",".join(str(i) for i in chosen))
+        return await self._remember(
+            pending["code"],
+            pending["info_hash"],
+            pending["title"],
+            pending["dest"],
+            gid,
+            pending["magnet"],
+        )
+
+    async def cancel_files(self, token: str) -> None:
+        pending = self._picks.pop(token, None)
+        if not pending or pending.get("backend") != "aria2":
+            return
+        gid = str(pending.get("gid") or "")
+        meta = str(pending.get("meta") or "")
+        if gid:
+            await self.aria2._drop_gid(gid)
+        if meta and meta != gid:
+            await self.aria2._drop_gid(meta)
+
+    async def _expire_picks(self) -> None:
+        now = time.monotonic()
+        stale = [token for token, item in self._picks.items() if now - item["at"] > PICK_TTL]
+        for token in stale:
+            log.info("文件选择超时，取消未入队的种子 %s", token)
+            await self.cancel_files(token)
 
     async def sync_one(self, job: dict, snapshot: dict | None = None) -> dict:
         if not self._needs_tell(job):
@@ -284,6 +384,7 @@ class JobManager:
         return job
 
     async def sync_all(self) -> None:
+        await self._expire_picks()
         jobs = await self.db.list_jobs()
         snapshot = await self._xunlei_snapshot(jobs)
         for job in jobs:

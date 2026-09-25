@@ -83,7 +83,7 @@ FastAPI :8787
    ├── /api/western/search    ThePornDB 片名或演员
    ├── /api/western/{kind}/{id}
    ├── /api/resources         磁力猫：?code= 番号排序，?q= 关键词按热度
-   ├── /api/downloads         入队 / 暂停 / 继续 / 取消；可一次贴多个番号，预览后再入队
+   ├── /api/downloads         入队 / 暂停 / 继续 / 取消；可一次贴多个番号，预览后再入队。多文件种子先勾选文件
    ├── /api/library           媒体库：番号按月份，欧美按片商
    ├── /api/img               封面代理 + 磁盘缓存
    ├── /api/settings          代理、站点、ThePornDB token（写入 data/config.json）
