@@ -3,8 +3,20 @@ from types import SimpleNamespace
 
 from app.config import Settings
 from app.db import Database
-from app.library import Library, attach_library, attach_western, library_info, scan_media, scan_western
-from app.routers.library_page import library_page
+import pytest
+from fastapi import HTTPException
+
+from app.library import (
+    Library,
+    attach_library,
+    attach_western,
+    library_info,
+    poster_file,
+    scan_media,
+    scan_western,
+)
+from app.nfo import build_nfo
+from app.routers.library_page import library_page, library_poster
 
 
 def test_scan_media_indexes_code_folders(tmp_path):
@@ -23,6 +35,49 @@ def test_scan_media_indexes_code_folders(tmp_path):
     assert by_code["SSIS-001"]["has_nfo"] == 1
     assert by_code["SSIS-001"]["has_poster"] == 1
     assert "IPX-001" not in by_code
+
+
+def test_scan_media_reads_nfo_fields(tmp_path):
+    folder = tmp_path / "202102" / "SSIS-001"
+    folder.mkdir(parents=True)
+    video = folder / "SSIS-001.mp4"
+    video.write_bytes(b"x")
+    (folder / "SSIS-001.nfo").write_text(build_nfo({
+        "code": "SSIS-001",
+        "title": "Title",
+        "release_date": "2021-02-18",
+        "actors": [{"name": "葵つかさ"}, "乙白さやか"],
+    }), encoding="utf-8")
+    row = scan_media(tmp_path)[0]
+    assert row["title"] == "Title"
+    assert row["actors"] == ["葵つかさ", "乙白さやか"]
+    assert row["release_date"] == "2021-02-18"
+    assert row["added_at"] == video.stat().st_mtime
+
+
+def test_poster_file_stays_inside_root(tmp_path):
+    folder = tmp_path / "202102" / "SSIS-001"
+    folder.mkdir(parents=True)
+    (folder / "poster.jpg").write_bytes(b"jpg")
+    (tmp_path / "Studio").mkdir()
+    (tmp_path / "Studio" / "clip-poster.jpg").write_bytes(b"jpg")
+    (tmp_path.parent / "poster.jpg").write_bytes(b"secret")
+    assert poster_file(tmp_path, "202102/SSIS-001", "jav") == folder / "poster.jpg"
+    assert poster_file(tmp_path, "Studio/clip.mp4", "western") == tmp_path / "Studio" / "clip-poster.jpg"
+    assert poster_file(tmp_path, "..", "jav") is None
+    assert poster_file(tmp_path, "202102/../..", "jav") is None
+    assert poster_file(tmp_path, str(tmp_path.parent), "jav") is None
+    assert poster_file(tmp_path, "202102\\..\\..", "jav") is None
+    assert poster_file(None, "202102/SSIS-001", "jav") is None
+
+
+def test_library_poster_404_without_file(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", download_dir=tmp_path / "dl", media_dir=tmp_path / "media")
+    settings.ensure_dirs()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(library_poster(request, path="../data", kind="jav"))
+    assert exc.value.status_code == 404
 
 
 def test_scan_prefers_newer_month(tmp_path):
@@ -82,6 +137,7 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         lib = Library(settings, db)
         await db.upsert_library({
             "code": "SSIS-001", "month": "202102", "path": "202102/SSIS-001", "has_video": 1,
+            "title": "Title", "actors": [{"name": "葵つかさ"}], "release_date": "2021-02-18",
         })
         await db.upsert_library({
             "code": "IPX-001", "month": "202101", "path": "202101/IPX-001", "has_video": 1,
@@ -97,7 +153,12 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings, db=db)))
         body = await library_page(request)
         assert [group["month"] for group in body["jav"]] == ["202102", "202101"]
-        assert body["jav"][0]["items"][0]["full_path"].endswith("202102/SSIS-001")
+        first = body["jav"][0]["items"][0]
+        assert first["full_path"].endswith("202102/SSIS-001")
+        assert first["title"] == "Title"
+        assert first["actors"] == ["葵つかさ"]
+        assert first["release_date"] == "2021-02-18"
+        assert first["added_at"] > 0
         assert body["western"][0]["studio"] == "Brazzers"
         assert body["western"][0]["items"][0]["full_path"].endswith("Brazzers/a.mp4")
         assert (await db.western_by_ids(["abc"]))["abc"]["title"] == "Scene"

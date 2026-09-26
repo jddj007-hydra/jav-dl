@@ -13,8 +13,12 @@ let lastWorks = [];
 let lastWorksQuery = "";
 let lastLibrary = null;
 let detailCode = "";
+const LIB_PAGE = 120;
 let libraryKind = "jav";
 let libraryPayload = null;
+let libraryQuery = "";
+let librarySort = "group";
+let libraryLimit = LIB_PAGE;
 let fromWorks = false;
 let queueSource = null;
 let queueRetry = null;
@@ -61,6 +65,7 @@ function renderPanelLinks(settings) {
     box.innerHTML = html;
     box.hidden = !html;
   }
+  syncHeaderHeight();
 }
 
 async function loadPanelLinks() {
@@ -191,9 +196,50 @@ function setStatus(el, msg, kind) {
   el.className = "status" + (kind ? " " + kind : "");
 }
 
+function skeletonCards(n) {
+  return Array.from({ length: n }, () => (
+    '<div class="skeleton"><div class="sk-img"></div><div class="sk-line"></div><div class="sk-line short"></div></div>'
+  )).join("");
+}
+
+function showSkeleton(wrapId, listId) {
+  $(wrapId).hidden = false;
+  $(listId).innerHTML = skeletonCards(12);
+}
+
+const FALLBACK_COVER = "/static/placeholder.svg";
+
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  const raw = img.getAttribute("src") || "";
+  if (raw === FALLBACK_COVER || raw.endsWith("/placeholder.svg")) return;
+  img.dataset.fallback = "1";
+  img.classList.add("is-fallback");
+  if (raw && img.closest(".lib-cover")) {
+    const card = img.closest(".lib-card");
+    if (card) delete card.dataset.poster;
+  }
+  img.src = FALLBACK_COVER;
+}, true);
+
 function coverSrc(url) {
-  if (!url) return "";
+  if (!url) return FALLBACK_COVER;
   return "/api/img?url=" + encodeURIComponent(url);
+}
+
+function coverImage(url, opts = {}) {
+  const missing = !url;
+  const classes = [opts.className || "", missing ? "is-fallback" : ""].filter(Boolean);
+  const attrs = [
+    classes.length ? `class="${classes.join(" ")}"` : "",
+    missing ? `data-fallback="1"` : "",
+    `src="${coverSrc(url)}"`,
+    opts.lazy ? `loading="lazy"` : "",
+    opts.full ? `data-full="${escapeHtml(opts.full)}"` : "",
+    `alt="${escapeHtml(opts.alt || "")}"`,
+  ].filter(Boolean).join(" ");
+  return `<img ${attrs} />`;
 }
 
 function normalizeActors(actors) {
@@ -232,20 +278,20 @@ function renderMeta(payload) {
   const actorHtml = actors.length
     ? `<div class="actor-row">${actors.map((a) => `
         <div class="actor-card">
-          ${a.photo ? `<img src="${coverSrc(a.photo)}" alt="${escapeHtml(a.name)}" />` : `<div class="actor-ph"></div>`}
+          ${a.photo ? coverImage(a.photo, { alt: a.name }) : `<div class="actor-ph"></div>`}
           <span>${escapeHtml(a.name)}</span>
         </div>`).join("")}</div>`
     : "";
   const samples = meta.samples || [];
   const previewHtml = samples.length
     ? `<div class="preview-row">${samples.map((s) => `
-        <img src="${coverSrc(s.thumb || s.full)}" data-full="${escapeHtml(s.full || s.thumb || "")}" alt="预览" />
+        ${coverImage(s.thumb || s.full, { full: s.full || s.thumb || "", alt: "预览" })}
       `).join("")}</div>`
     : "";
   card.hidden = false;
   card.innerHTML = `
     <div class="meta-main">
-      <img class="cover" src="${coverSrc(meta.cover)}" data-full="${escapeHtml(meta.cover || "")}" alt="" />
+      ${coverImage(meta.cover, { className: "cover", full: meta.cover || "" })}
       <div>
         ${libraryFlag(lastLibrary)}
         <h1><span class="code">${payload.code}</span> ${escapeHtml(meta.title || "")}</h1>
@@ -282,8 +328,10 @@ function renderWorks(items) {
   wrap.hidden = false;
   list.innerHTML = items.map((it) => `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-code="${escapeHtml(it.code)}">
-      ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
-      <img src="${coverSrc(it.cover)}" alt="" />
+      <span class="work-cover">
+        ${coverImage(it.cover, { lazy: true })}
+        ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
+      </span>
       <span class="code">${escapeHtml(it.code)}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
       <span class="work-date">${escapeHtml(it.release_date || "")}</span>
@@ -400,7 +448,7 @@ async function loadJavFeed(page) {
   showBack(false);
   clearDetail();
   $("jav-feed").hidden = false;
-  clearWorksView();
+  showSkeleton("works-wrap", "works-list");
   setStatus($("search-status"), "加载最新…");
   try {
     const data = await api(`/api/jav/latest?kind=${encodeURIComponent(javKind)}&page=${page}`);
@@ -418,6 +466,7 @@ async function loadJavFeed(page) {
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
+    clearWorksView();
     setStatus($("search-status"), err.message, "bad");
   }
 }
@@ -754,7 +803,7 @@ function renderQueue() {
     <li>
       <div class="row">
         <strong><span class="code">${escapeHtml(j.code)}</span>${escapeHtml(j.title)}</strong>
-        <span>${escapeHtml(STATUS_LABEL[j.status] || j.status)}</span>
+        <span class="state s-${escapeHtml(j.status)}">${escapeHtml(STATUS_LABEL[j.status] || j.status)}</span>
       </div>
       <div class="bar"><span style="width:${Math.min(100, j.progress || 0)}%"></span></div>
       <div class="meta-line">
@@ -872,18 +921,6 @@ $("queue-clear-finished").addEventListener("click", () => {
   });
 });
 
-$("queue-rescan").addEventListener("click", async (e) => {
-  e.currentTarget.disabled = true;
-  try {
-    const data = await api("/api/library/refresh", { method: "POST" });
-    setStatus($("queue-note"), `媒体库已重扫，共 ${data.count} 部`, "good");
-  } catch (err) {
-    setStatus($("queue-note"), err.message, "bad");
-  } finally {
-    e.currentTarget.disabled = false;
-  }
-});
-
 $("queue-list").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
@@ -915,32 +952,64 @@ const HIT_STATUS = {
   no_magnet: "没有符合规则的磁链",
 };
 
+function timeAgo(ts) {
+  if (!ts) return "还没检查";
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+  if (mins < 1) return "刚刚检查";
+  if (mins < 60) return `${mins} 分钟前检查`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)} 小时前检查`;
+  return `${Math.round(mins / 60 / 24)} 天前检查`;
+}
+
+function followRules(sub) {
+  if (!sub.auto) return "只提醒";
+  const rules = [];
+  if (sub.want_uc) rules.push("无码破解");
+  if (sub.want_c) rules.push("中字");
+  if (sub.max_gb) rules.push(`≤ ${sub.max_gb} GB`);
+  return rules.length ? `自动下载 · ${rules.join(" / ")}` : "自动下载";
+}
+
 function renderFollow(data) {
   const items = data.items || [];
+  const kindOf = Object.fromEntries(items.map((sub) => [sub.id, sub.kind]));
+  $("follow-count").textContent = items.length ? `${items.length} 个` : "";
+  $("follow-none").hidden = items.length > 0;
   $("follow-list").innerHTML = items.map((sub) => `
     <article class="follow-sub">
       <div class="row">
-        <strong>${escapeHtml(FOLLOW_KIND[sub.kind] || sub.kind)} ${escapeHtml(sub.name)}</strong>
-        <span>${sub.auto ? "自动下载" : "只提醒"}</span>
+        <strong class="title"><span class="chip">${escapeHtml(FOLLOW_KIND[sub.kind] || sub.kind)}</span>${escapeHtml(sub.name)}</strong>
+        <span class="mode${sub.auto ? " on" : ""}">${escapeHtml(followRules(sub))}</span>
       </div>
-      <p class="hint">${escapeHtml(sub.target || "")}</p>
+      ${sub.target ? `<p class="path">${escapeHtml(sub.target)}</p>` : ""}
       ${sub.last_error ? `<p class="status bad">${escapeHtml(sub.last_error)}</p>` : ""}
-      <div class="row-actions">
-        <button type="button" data-follow-check="${sub.id}">检查</button>
-        <button type="button" class="ghost" data-follow-del="${sub.id}">删除</button>
+      <div class="row foot">
+        <span class="muted">${escapeHtml(timeAgo(sub.last_check))}</span>
+        <span class="row-actions">
+          <button type="button" class="ghost small" data-follow-check="${sub.id}">检查</button>
+          <button type="button" class="ghost small danger" data-follow-del="${sub.id}">删除</button>
+        </span>
       </div>
     </article>`).join("");
   const hits = data.hits || [];
+  const unread = hits.filter((hit) => !hit.seen).length;
+  $("follow-hit-count").textContent = hits.length ? (unread ? `${unread} 条未读` : `${hits.length} 条`) : "";
   $("follow-empty").hidden = hits.length > 0;
-  $("follow-hits").innerHTML = hits.map((hit) => `
-    <li>
+  $("follow-hits").innerHTML = hits.map((hit) => {
+    const jav = !String(kindOf[hit.sub_id] || "").startsWith("western");
+    const code = jav
+      ? `<a class="code" href="#/" data-hit-code="${escapeHtml(hit.code)}">${escapeHtml(hit.code)}</a>`
+      : `<span class="code">${escapeHtml(hit.code)}</span>`;
+    return `
+    <li class="${hit.seen ? "" : "unread"}">
       <div class="row">
-        <span class="title"><span class="code">${escapeHtml(hit.code)}</span> ${escapeHtml(hit.title || "")}</span>
-        <span>${escapeHtml(HIT_STATUS[hit.status] || hit.status)}</span>
+        <span class="title">${code} ${escapeHtml(hit.title || "")}</span>
+        <span class="state h-${escapeHtml(hit.status)}">${escapeHtml(HIT_STATUS[hit.status] || hit.status)}</span>
       </div>
       ${hit.detail ? `<p class="hint">${escapeHtml(hit.detail)}</p>` : ""}
-      ${hit.seen ? "" : `<button type="button" class="ghost" data-hit-read="${hit.id}">知道了</button>`}
-    </li>`).join("");
+      ${hit.seen ? "" : `<button type="button" class="ghost small" data-hit-read="${hit.id}">知道了</button>`}
+    </li>`;
+  }).join("");
 }
 
 async function loadFollow() {
@@ -977,6 +1046,7 @@ $("follow-form").addEventListener("submit", async (e) => {
     setStatus($("follow-status"), note, check.error ? "bad" : "good");
     form.name.value = "";
     form.target.value = "";
+    if (!check.error) $("follow-add").open = false;
     await loadFollow();
   } catch (err) {
     setStatus($("follow-status"), err.message, "bad");
@@ -1019,6 +1089,12 @@ $("follow-list").addEventListener("click", async (e) => {
 });
 
 $("follow-hits").addEventListener("click", async (e) => {
+  const link = e.target.closest("[data-hit-code]");
+  if (link) {
+    e.preventDefault();
+    openCodeDetail(link.dataset.hitCode);
+    return;
+  }
   const btn = e.target.closest("[data-hit-read]");
   if (!btn) return;
   try {
@@ -1157,12 +1233,15 @@ $("settings-form").addEventListener("submit", async (e) => {
   }
 });
 
-function openLightbox(url) {
-  if (!url) return;
+function showLightbox(src) {
+  if (!src) return;
   const box = $("lightbox");
-  const img = box.querySelector("img");
-  img.src = coverSrc(url);
+  box.querySelector("img").src = src;
   box.hidden = false;
+}
+
+function openLightbox(url) {
+  if (url) showLightbox(coverSrc(url));
 }
 
 $("meta-card").addEventListener("click", (e) => {
@@ -1195,9 +1274,11 @@ function renderWesternWorks(items) {
     const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
     return `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
-      ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
-      <img src="${coverSrc(it.cover)}" alt="" />
-      <span class="code">${escapeHtml(it.site || "")}</span>
+      <span class="work-cover">
+        ${coverImage(it.cover, { lazy: true })}
+        ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
+      </span>
+      <span class="work-site">${escapeHtml(it.site || "")}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
       <span class="work-people">${escapeHtml((it.performers || []).join("、"))}</span>
       <span class="work-date">${escapeHtml(when)}</span>
@@ -1218,7 +1299,7 @@ function renderWesternMeta(item) {
   card.hidden = false;
   card.innerHTML = `
     <div class="meta-main">
-      <img class="cover" src="${coverSrc(item.cover || item.background)}" data-full="${escapeHtml(item.background || item.cover || "")}" alt="" />
+      ${coverImage(item.cover || item.background, { className: "cover", full: item.background || item.cover || "" })}
       <div>
         ${libraryFlag(item.library)}
         <h1>${escapeHtml(item.title || "")}</h1>
@@ -1302,6 +1383,7 @@ async function loadWesternFeed(page) {
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
   $("western-themes").hidden = false;
+  showSkeleton("western-works-wrap", "western-works");
   setStatus($("western-status"), "加载最新…");
   try {
     const data = await api(`/api/western/latest?${westernParams(page)}`);
@@ -1315,6 +1397,7 @@ async function loadWesternFeed(page) {
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
+    $("western-works-wrap").hidden = true;
     setStatus($("western-status"), err.message, "bad");
   }
 }
@@ -1325,8 +1408,8 @@ function ensureWesternLatest() {
   loadWesternFeed(1);
 }
 
-async function openWestern(id, kind) {
-  const listed = westernItems.find((it) => String(it.id) === String(id)) || null;
+async function openWestern(id, kind, known = null) {
+  const listed = known || westernItems.find((it) => String(it.id) === String(id)) || null;
   westernCurrent = listed;
   $("western-works-wrap").hidden = true;
   $("western-feed").hidden = true;
@@ -1478,7 +1561,36 @@ $("western-works").addEventListener("click", (e) => {
   openWestern(card.dataset.id, card.dataset.kind || westernKind);
 });
 
-$("western-back-btn").addEventListener("click", showWesternList);
+$("western-back-btn").addEventListener("click", () => {
+  if (westernItems.length) showWesternList();
+  else loadWesternFeed(1);
+});
+
+async function openWesternById(id) {
+  westernBootstrapped = true;
+  location.hash = "#/western";
+  $("western-works-wrap").hidden = true;
+  $("western-feed").hidden = true;
+  $("western-themes").hidden = true;
+  $("western-back").hidden = false;
+  renderWesternMeta(null);
+  renderWesternResources([]);
+  setStatus($("western-status"), "查询详情…");
+  let error = "";
+  for (const kind of ["scene", "movie"]) {
+    try {
+      const data = await api(`/api/western/${kind}/${encodeURIComponent(id)}`);
+      if (data.item) {
+        await openWestern(id, kind, { ...data.item, kind });
+        return;
+      }
+      error = data.error || error;
+    } catch (err) {
+      error = err.message;
+    }
+  }
+  setStatus($("western-status"), error || "ThePornDB 里找不到这部", "bad");
+}
 
 $("western-resources").addEventListener("click", async (e) => {
   const dl = e.target.closest("[data-west-dl]");
@@ -1528,70 +1640,243 @@ function monthLabel(month) {
   return /^\d{6}$/.test(month) ? `${month.slice(0, 4)}-${month.slice(4)}` : (month || "未分月");
 }
 
+const LIB_SORTS = {
+  jav: [["group", "按月份"], ["added", "最近入库"], ["release", "发售日"], ["name", "番号"]],
+  western: [["group", "按片商"], ["added", "最近入库"], ["release", "发行日"], ["name", "片名"]],
+};
+
+function fillLibrarySort() {
+  const select = $("library-sort");
+  select.innerHTML = LIB_SORTS[libraryKind].map(([value, label]) => (
+    `<option value="${value}"${value === librarySort ? " selected" : ""}>${label}</option>`
+  )).join("");
+}
+
+function libraryItems() {
+  const data = libraryPayload || {};
+  const jav = libraryKind === "jav";
+  const groups = jav ? (data.jav || []) : (data.western || []);
+  return groups.flatMap((group) => (group.items || []).map((item) => ({
+    ...item,
+    group: jav ? monthLabel(group.month) : (group.studio || "未知片商"),
+  })));
+}
+
+function libraryMatches(item, words) {
+  if (!words.length) return true;
+  const hay = [item.code, item.title, item.group, ...(item.actors || [])].join(" ").toLowerCase();
+  return words.every((word) => hay.includes(word));
+}
+
+function sortLibrary(items) {
+  const name = (item) => item.code || item.title || "";
+  const byName = (a, b) => name(a).localeCompare(name(b), "zh-CN", { numeric: true });
+  if (librarySort === "added") return items.sort((a, b) => (b.added_at || 0) - (a.added_at || 0) || byName(a, b));
+  if (librarySort === "release") {
+    return items.sort((a, b) => (b.release_date || "").localeCompare(a.release_date || "") || byName(a, b));
+  }
+  if (librarySort === "name") return items.sort(byName);
+  return items;
+}
+
+function libraryCard(item) {
+  const jav = libraryKind === "jav";
+  const name = jav ? item.code : item.title;
+  const poster = item.has_poster
+    ? `/api/library/poster?kind=${libraryKind}&path=${encodeURIComponent(item.path)}`
+    : "";
+  const flags = [
+    item.has_poster ? "" : '<span class="flag">缺封面</span>',
+    item.has_nfo ? "" : '<span class="flag">缺 NFO</span>',
+  ].join("");
+  const actors = (item.actors || []).join("、");
+  const date = item.release_date || "";
+  const head = jav
+    ? `<span class="code">${escapeHtml(item.code)}</span><span class="work-date">${escapeHtml(date)}</span>`
+    : `<span class="work-site">${escapeHtml(item.group)}</span><span class="work-date">${escapeHtml(date)}</span>`;
+  const title = jav ? (item.title || "") : name;
+  return `
+    <article class="lib-card${jav ? "" : " wide"}" tabindex="0"
+      ${jav ? `data-code="${escapeHtml(item.code)}"` : ""}
+      ${!jav && item.tpdb_id ? `data-tpdb="${escapeHtml(item.tpdb_id)}"` : ""}
+      ${poster ? `data-poster="${escapeHtml(poster)}"` : ""}>
+      <div class="lib-cover">
+        ${poster ? `<img src="${poster}" loading="lazy" alt="" />` : `<div class="lib-ph">${escapeHtml(name)}</div>`}
+        ${flags ? `<div class="lib-flags">${flags}</div>` : ""}
+        <button type="button" class="lib-copy" data-copy-path="${escapeHtml(item.full_path || "")}">复制路径</button>
+      </div>
+      <div class="lib-info">
+        <div class="lib-line">${head}</div>
+        ${title ? `<div class="work-title">${escapeHtml(title)}</div>` : ""}
+        ${actors ? `<div class="work-people">${escapeHtml(actors)}</div>` : ""}
+      </div>
+    </article>`;
+}
+
 function renderLibrary() {
   const data = libraryPayload || { jav: [], western: [], jav_root: "", western_root: "" };
   const jav = libraryKind === "jav";
-  const groups = jav ? (data.jav || []) : (data.western || []);
-  const root = $("library-root");
-  root.textContent = jav
-    ? `番号目录：${data.jav_root || ""}`
-    : (data.western_root ? `片商目录：${data.western_root}` : "还没配置欧美归档目录");
+  $("library-root").textContent = jav
+    ? data.jav_root || ""
+    : (data.western_root || "还没配置欧美归档目录");
   const list = $("library-list");
   const status = $("library-status");
-  if (!groups.length) {
+  const more = $("library-more");
+  const all = libraryItems();
+  const words = libraryQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const items = sortLibrary(all.filter((item) => libraryMatches(item, words)));
+  $("library-count").textContent = words.length ? `${items.length} / ${all.length} 部` : (all.length ? `共 ${all.length} 部` : "");
+  if (!items.length) {
     list.innerHTML = "";
-    setStatus(status, jav ? "番号库是空的" : (data.western_root ? "还没有欧美片子" : "还没配置欧美归档目录"), "");
+    more.hidden = true;
+    const empty = all.length
+      ? "没有对得上的片子"
+      : (jav ? "番号库是空的" : (data.western_root ? "还没有欧美片子" : "还没配置欧美归档目录"));
+    list.innerHTML = `<p class="empty">${escapeHtml(empty)}</p>`;
+    setStatus(status, "", "");
     return;
   }
   setStatus(status, "", "");
-  list.innerHTML = groups.map((group) => {
-    const heading = jav ? monthLabel(group.month) : (group.studio || "未知片商");
-    const items = (group.items || []).map((item) => {
-      const name = jav ? item.code : item.title;
-      return `
-        <div class="lib-row">
-          <div class="lib-main">
-            <strong>${escapeHtml(name)}</strong>
-            <div class="path">${escapeHtml(item.full_path || item.path || "")}</div>
-          </div>
-          <button type="button" class="ghost" data-copy-path="${escapeHtml(item.full_path || "")}">复制路径</button>
-        </div>`;
-    }).join("");
-    return `<section class="lib-group"><h2>${escapeHtml(heading)}</h2>${items}</section>`;
-  }).join("");
+  const shown = items.slice(0, libraryLimit);
+  const gridClass = `lib-grid${jav ? "" : " wide"}`;
+  if (librarySort === "group") {
+    const counts = {};
+    for (const item of items) counts[item.group] = (counts[item.group] || 0) + 1;
+    const sections = [];
+    for (const item of shown) {
+      const last = sections[sections.length - 1];
+      if (last && last.group === item.group) last.items.push(item);
+      else sections.push({ group: item.group, items: [item] });
+    }
+    list.innerHTML = sections.map((section) => `
+      <section class="lib-group">
+        <h3 class="lib-group-head">${escapeHtml(section.group)}<span>${counts[section.group]}</span></h3>
+        <div class="${gridClass}">${section.items.map(libraryCard).join("")}</div>
+      </section>`).join("");
+  } else {
+    list.innerHTML = `<div class="${gridClass}">${shown.map(libraryCard).join("")}</div>`;
+  }
+  const rest = items.length - shown.length;
+  more.hidden = rest <= 0;
+  more.querySelector("button").textContent = `再显示 ${Math.min(LIB_PAGE, rest)} 部（还剩 ${rest}）`;
+}
+
+function showMoreLibrary() {
+  if ($("library-more").hidden) return;
+  libraryLimit += LIB_PAGE;
+  renderLibrary();
 }
 
 async function loadLibrary() {
+  if (!libraryPayload) {
+    fillLibrarySort();
+    $("library-list").innerHTML = `<div class="lib-grid">${skeletonCards(12)}</div>`;
+  }
   try {
     libraryPayload = await api("/api/library");
     renderLibrary();
   } catch (err) {
+    if (!libraryPayload) $("library-list").innerHTML = "";
     setStatus($("library-status"), err.message, "bad");
   }
+}
+
+function openCodeDetail(code) {
+  javBootstrapped = true;
+  javMode = "search";
+  $("jav-pager").innerHTML = "";
+  $("code-input").value = code;
+  fromWorks = false;
+  showBack(false);
+  clearDetail();
+  clearWorksView();
+  setStatus($("search-status"), "查询中…");
+  location.hash = "#/";
+  runCodeSearch(code).catch((err) => setStatus($("search-status"), err.message, "bad"));
 }
 
 $("library-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-lib]");
   if (!btn) return;
   libraryKind = btn.dataset.lib;
+  librarySort = "group";
+  libraryLimit = LIB_PAGE;
   for (const child of $("library-kind").querySelectorAll("button")) {
     child.classList.toggle("on", child === btn);
   }
+  fillLibrarySort();
   if (libraryPayload) renderLibrary();
+});
+
+let libraryTyping = null;
+$("library-q").addEventListener("input", (e) => {
+  clearTimeout(libraryTyping);
+  libraryTyping = setTimeout(() => {
+    libraryQuery = e.target.value;
+    libraryLimit = LIB_PAGE;
+    if (libraryPayload) renderLibrary();
+  }, 150);
+});
+
+$("library-sort").addEventListener("change", (e) => {
+  librarySort = e.target.value;
+  libraryLimit = LIB_PAGE;
+  if (libraryPayload) renderLibrary();
+});
+
+$("library-more").querySelector("button").addEventListener("click", showMoreLibrary);
+if ("IntersectionObserver" in window) {
+  new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting) && !views.library.hidden) showMoreLibrary();
+  }, { rootMargin: "600px 0px" }).observe($("library-more"));
+}
+
+$("library-rescan").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  setStatus($("library-status"), "正在重扫…");
+  try {
+    const data = await api("/api/library/refresh", { method: "POST" });
+    await loadLibrary();
+    setStatus($("library-status"), `已重扫，共 ${data.count} 部`, "good");
+  } catch (err) {
+    setStatus($("library-status"), err.message, "bad");
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 $("library-list").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-copy-path]");
-  if (!btn) return;
-  const path = btn.dataset.copyPath || "";
-  try {
-    await navigator.clipboard.writeText(path);
-    btn.textContent = "已复制";
-    setTimeout(() => { btn.textContent = "复制路径"; }, 1200);
-  } catch {
-    prompt("路径", path);
+  if (btn) {
+    const path = btn.dataset.copyPath || "";
+    try {
+      await navigator.clipboard.writeText(path);
+      btn.textContent = "已复制";
+      setTimeout(() => { btn.textContent = "复制路径"; }, 1200);
+    } catch {
+      prompt("路径", path);
+    }
+    return;
   }
+  const card = e.target.closest(".lib-card");
+  if (!card) return;
+  if (card.dataset.code) openCodeDetail(card.dataset.code);
+  else if (card.dataset.tpdb) openWesternById(card.dataset.tpdb);
+  else if (card.dataset.poster) showLightbox(card.dataset.poster);
 });
+
+$("library-list").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.target.classList.contains("lib-card")) return;
+  e.target.click();
+});
+
+function syncHeaderHeight() {
+  const header = document.querySelector("header.top");
+  if (header) document.documentElement.style.setProperty("--head-h", `${header.offsetHeight}px`);
+}
+window.addEventListener("resize", syncHeaderHeight);
+syncHeaderHeight();
 
 window.addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => {

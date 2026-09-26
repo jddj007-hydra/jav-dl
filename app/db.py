@@ -87,6 +87,62 @@ DOWNLOAD_COLUMNS = (
     ("backend", "TEXT NOT NULL DEFAULT ''"),
 )
 
+LIBRARY_COLUMNS = (
+    ("title", "TEXT NOT NULL DEFAULT ''"),
+    ("actors", "TEXT NOT NULL DEFAULT '[]'"),
+    ("release_date", "TEXT NOT NULL DEFAULT ''"),
+    ("added_at", "REAL NOT NULL DEFAULT 0"),
+)
+
+WESTERN_COLUMNS = (
+    ("actors", "TEXT NOT NULL DEFAULT '[]'"),
+    ("release_date", "TEXT NOT NULL DEFAULT ''"),
+    ("added_at", "REAL NOT NULL DEFAULT 0"),
+)
+
+
+def _actors_json(value) -> str:
+    if isinstance(value, str):
+        return value or "[]"
+    names = []
+    for item in value or []:
+        name = item.get("name") if isinstance(item, dict) else item
+        name = str(name or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return json.dumps(names, ensure_ascii=False)
+
+
+def _library_row(row: dict, now: float) -> dict:
+    return {
+        "code": row["code"],
+        "month": row["month"],
+        "path": row["path"],
+        "has_video": 1 if row.get("has_video", True) else 0,
+        "has_nfo": 1 if row.get("has_nfo") else 0,
+        "has_poster": 1 if row.get("has_poster") else 0,
+        "title": row.get("title") or "",
+        "actors": _actors_json(row.get("actors")),
+        "release_date": row.get("release_date") or "",
+        "added_at": float(row.get("added_at") or now),
+        "updated_at": now,
+    }
+
+
+def _western_row(row: dict, now: float) -> dict:
+    return {
+        "path": row["path"],
+        "tpdb_id": row.get("tpdb_id") or "",
+        "studio": row.get("studio") or "",
+        "title": row.get("title") or "",
+        "has_nfo": 1 if row.get("has_nfo") else 0,
+        "has_poster": 1 if row.get("has_poster") else 0,
+        "actors": _actors_json(row.get("actors")),
+        "release_date": row.get("release_date") or "",
+        "added_at": float(row.get("added_at") or now),
+        "updated_at": now,
+    }
+
 
 class Database:
     def __init__(self, settings: Settings):
@@ -95,11 +151,16 @@ class Database:
     async def init(self) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(SCHEMA)
-            cur = await db.execute("PRAGMA table_info(downloads)")
-            cols = {row[1] for row in await cur.fetchall()}
-            for name, ddl in DOWNLOAD_COLUMNS:
-                if name not in cols:
-                    await db.execute(f"ALTER TABLE downloads ADD COLUMN {name} {ddl}")
+            for table, columns in (
+                ("downloads", DOWNLOAD_COLUMNS),
+                ("library", LIBRARY_COLUMNS),
+                ("western_library", WESTERN_COLUMNS),
+            ):
+                cur = await db.execute(f"PRAGMA table_info({table})")
+                cols = {row[1] for row in await cur.fetchall()}
+                for name, ddl in columns:
+                    if name not in cols:
+                        await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
             await db.commit()
 
     async def get_metadata_any(self, code: str) -> dict | None:
@@ -207,33 +268,33 @@ class Database:
             await db.execute("DELETE FROM library")
             await db.executemany(
                 """INSERT INTO library
-                   (code, month, path, has_video, has_nfo, has_poster, updated_at)
-                   VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster, :updated_at)""",
-                [{**row, "updated_at": now} for row in rows],
+                   (code, month, path, has_video, has_nfo, has_poster,
+                    title, actors, release_date, added_at, updated_at)
+                   VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster,
+                    :title, :actors, :release_date, :added_at, :updated_at)""",
+                [_library_row(row, now) for row in rows],
             )
             await db.commit()
 
     async def upsert_library(self, row: dict) -> None:
-        payload = {
-            "code": row["code"],
-            "month": row["month"],
-            "path": row["path"],
-            "has_video": 1 if row.get("has_video", True) else 0,
-            "has_nfo": 1 if row.get("has_nfo") else 0,
-            "has_poster": 1 if row.get("has_poster") else 0,
-            "updated_at": time.time(),
-        }
+        payload = _library_row(row, time.time())
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 """INSERT INTO library
-                   (code, month, path, has_video, has_nfo, has_poster, updated_at)
-                   VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster, :updated_at)
+                   (code, month, path, has_video, has_nfo, has_poster,
+                    title, actors, release_date, added_at, updated_at)
+                   VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster,
+                    :title, :actors, :release_date, :added_at, :updated_at)
                    ON CONFLICT(code) DO UPDATE SET
                      month=excluded.month,
                      path=excluded.path,
                      has_video=excluded.has_video,
                      has_nfo=excluded.has_nfo,
                      has_poster=excluded.has_poster,
+                     title=excluded.title,
+                     actors=excluded.actors,
+                     release_date=excluded.release_date,
+                     added_at=excluded.added_at,
                      updated_at=excluded.updated_at""",
                 payload,
             )
@@ -274,41 +335,32 @@ class Database:
             if rows:
                 await db.executemany(
                     """INSERT INTO western_library
-                       (path, tpdb_id, studio, title, has_nfo, has_poster, updated_at)
-                       VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster, :updated_at)""",
-                    [{
-                        "path": row["path"],
-                        "tpdb_id": row.get("tpdb_id") or "",
-                        "studio": row.get("studio") or "",
-                        "title": row.get("title") or "",
-                        "has_nfo": 1 if row.get("has_nfo") else 0,
-                        "has_poster": 1 if row.get("has_poster") else 0,
-                        "updated_at": now,
-                    } for row in rows],
+                       (path, tpdb_id, studio, title, has_nfo, has_poster,
+                        actors, release_date, added_at, updated_at)
+                       VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
+                        :actors, :release_date, :added_at, :updated_at)""",
+                    [_western_row(row, now) for row in rows],
                 )
             await db.commit()
 
     async def upsert_western(self, row: dict) -> None:
-        payload = {
-            "path": row["path"],
-            "tpdb_id": row.get("tpdb_id") or "",
-            "studio": row.get("studio") or "",
-            "title": row.get("title") or "",
-            "has_nfo": 1 if row.get("has_nfo") else 0,
-            "has_poster": 1 if row.get("has_poster") else 0,
-            "updated_at": time.time(),
-        }
+        payload = _western_row(row, time.time())
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
                 """INSERT INTO western_library
-                   (path, tpdb_id, studio, title, has_nfo, has_poster, updated_at)
-                   VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster, :updated_at)
+                   (path, tpdb_id, studio, title, has_nfo, has_poster,
+                    actors, release_date, added_at, updated_at)
+                   VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
+                    :actors, :release_date, :added_at, :updated_at)
                    ON CONFLICT(path) DO UPDATE SET
                      tpdb_id=excluded.tpdb_id,
                      studio=excluded.studio,
                      title=excluded.title,
                      has_nfo=excluded.has_nfo,
                      has_poster=excluded.has_poster,
+                     actors=excluded.actors,
+                     release_date=excluded.release_date,
+                     added_at=excluded.added_at,
                      updated_at=excluded.updated_at""",
                 payload,
             )

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=20" />
+  <link rel="stylesheet" href="/static/style.css?v=23" />
 </head>
 <body>
   <header class="top">
@@ -127,25 +127,38 @@
 
     <section id="view-library" class="view" hidden>
       <div class="section-head">
-        <h2>媒体库</h2>
+        <div>
+          <h2>媒体库</h2>
+          <p class="sub" id="library-root"></p>
+        </div>
+        <button type="button" class="ghost" id="library-rescan">重扫</button>
       </div>
-      <div class="feed-bar">
+      <div class="lib-tools">
         <div class="seg" id="library-kind">
           <button type="button" data-lib="jav" class="on">番号</button>
           <button type="button" data-lib="western">欧美</button>
         </div>
+        <input id="library-q" type="search" autocomplete="off" spellcheck="false" placeholder="搜番号、标题或演员" />
+        <select id="library-sort" aria-label="排序"></select>
+        <span class="lib-count" id="library-count"></span>
       </div>
-      <p class="hint" id="library-root"></p>
       <p id="library-status" class="status" hidden></p>
       <div id="library-list"></div>
+      <div id="library-more" class="lib-more" hidden>
+        <button type="button" class="ghost">显示更多</button>
+      </div>
     </section>
 
     <section id="view-follow" class="view" hidden>
       <div class="section-head">
-        <h2>追更</h2>
+        <div>
+          <h2>追更</h2>
+          <p class="sub">大约每 3 小时查一次。第一次只记下现有作品，之后的新作才提醒。</p>
+        </div>
         <button type="button" class="ghost" id="follow-check">马上检查</button>
       </div>
-      <p class="hint">关注女优、系列、片商，或欧美演员、片商。大约每 3 小时看一次，也可以马上查。第一次只记下现有作品，之后的新作才提醒。默认不下载。勾了自动下载后，才按规则入队：无码破解和中字都选时，有其中一种即可；体积 0 表示不限。已经在库里或队列里的不会重复下。还没有符合规则的磁链时，之后的检查会再试，最多两周。名字必须完全一致。</p>
+      <details class="fold" id="follow-add">
+        <summary>添加关注</summary>
       <form id="follow-form" class="settings">
         <label>类型
           <select name="kind" id="follow-kind">
@@ -177,21 +190,30 @@
         <label>体积不超过（GB）
           <input name="max_gb" inputmode="numeric" value="0" />
         </label>
+        <details class="help">
+          <summary>自动下载规则</summary>
+          <p>默认只提醒。勾了自动下载才按规则入队：无码破解和中字都勾时，有其中一种即可；体积 0 表示不限。已经在库里或队列里的不会重复下。暂时没有符合规则的磁链时，之后的检查会再试，最多两周。名字必须和站上完全一致。</p>
+        </details>
         <button type="submit">关注</button>
-        <p id="follow-status" class="status" hidden></p>
       </form>
-      <div id="follow-list"></div>
-      <h2>新作</h2>
-      <p id="follow-empty" class="empty" hidden>还没有新作</p>
+      </details>
+      <p id="follow-status" class="status" hidden></p>
+      <div class="sub-head"><h3>关注</h3><span class="lib-count" id="follow-count"></span></div>
+      <p id="follow-none" class="empty small" hidden>还没有关注，点上面的「添加关注」</p>
+      <div id="follow-list" class="follow-grid"></div>
+      <div class="sub-head"><h3>新作</h3><span class="lib-count" id="follow-hit-count"></span></div>
+      <p id="follow-empty" class="empty small" hidden>还没有新作</p>
       <ul id="follow-hits" class="follow-hits"></ul>
     </section>
 
     <section id="view-queue" class="view" hidden>
       <div class="section-head">
-        <h2>下载队列</h2>
+        <div>
+          <h2>下载队列</h2>
+          <p class="sub">关掉浏览器不影响任务。磁链走 DHT，刚开始可能要等一会儿。</p>
+        </div>
         <div id="queue-panels" class="panel-links" hidden></div>
       </div>
-      <p class="hint">关掉浏览器不影响任务。磁链走 DHT，刚开始可能要等一会儿。</p>
       <div class="feed-bar" id="queue-tools">
         <div class="seg" id="queue-filter">
           <button type="button" data-filter="all" class="on">全部</button>
@@ -202,7 +224,6 @@
         </div>
         <button type="button" class="ghost" id="queue-clear-complete">清空已完成</button>
         <button type="button" class="ghost" id="queue-clear-finished">清空已结束</button>
-        <button type="button" class="ghost" id="queue-rescan">重扫媒体库</button>
       </div>
       <p id="queue-note" class="status" hidden></p>
       <p id="queue-follow" class="status" hidden></p>
@@ -211,104 +232,138 @@
     </section>
 
     <section id="view-settings" class="view" hidden>
-      <h2>设置</h2>
+      <div class="section-head">
+        <h2>设置</h2>
+      </div>
+      <div class="settings-layout">
       <form id="settings-form" class="settings">
-        <label class="check">
-          <input type="checkbox" name="proxy_enabled" />
-          启用 HTTP 代理（只用于查站，BT 不走代理）
-        </label>
-        <label>代理地址
-          <input name="proxy_url" placeholder="http://127.0.0.1:7890" />
-        </label>
-        <label>JavBus
-          <input name="javbus_base" />
-        </label>
-        <label>磁力猫首页
-          <input name="clm_home" />
-        </label>
-        <label>磁力猫搜索域
-          <input name="clm_search" />
-        </label>
-        <label>备用搜索域
-          <input name="clm_search_backup" placeholder="主域失败或没结果时再用，留空则关掉" />
-        </label>
-        <p class="hint">同一个番号或同一组欧美关键词，十分钟内直接用上次的磁链。主搜索域打不开或没有结果时，再试备用搜索域。留空保存会清掉备用域。</p>
-        <label>ThePornDB token
-          <input name="tpdb_api_key" type="password" autocomplete="off" />
-        </label>
-        <p class="hint">欧美页用这个 token 拉场景和电影。留空表示不修改已保存的 token。</p>
-        <label>下载器
-          <select name="downloader" id="downloader-select">
-            <option value="aria2">aria2</option>
-            <option value="xunlei">群晖迅雷</option>
-          </select>
-        </label>
-        <div id="xunlei-fields" class="xunlei-fields" hidden>
-          <label>迅雷面板
-            <input name="xunlei_url" placeholder="http://127.0.0.1:2345" />
+        <fieldset class="group">
+          <legend>网络与站点</legend>
+          <label class="check">
+            <input type="checkbox" name="proxy_enabled" />
+            启用 HTTP 代理（只用于查站，BT 不走代理）
           </label>
-          <label>面板用户
-            <input name="xunlei_username" autocomplete="username" />
+          <label>代理地址
+            <input name="proxy_url" placeholder="http://127.0.0.1:7890" />
           </label>
-          <label>面板密码
-            <input name="xunlei_password" type="password" autocomplete="current-password" />
+          <div class="field-row">
+            <label>JavBus
+              <input name="javbus_base" />
+            </label>
+            <label>磁力猫首页
+              <input name="clm_home" />
+            </label>
+          </div>
+          <div class="field-row">
+            <label>磁力猫搜索域
+              <input name="clm_search" />
+            </label>
+            <label>备用搜索域
+              <input name="clm_search_backup" placeholder="留空则关掉" />
+            </label>
+          </div>
+          <p class="hint">主搜索域打不开或没结果时再试备用域。同一个番号或关键词，十分钟内直接用上次的磁链。</p>
+          <label>ThePornDB token
+            <input name="tpdb_api_key" type="password" autocomplete="off" />
           </label>
-          <label>设备名
-            <input name="xunlei_device_name" placeholder="群晖-xunlei" />
+          <p class="hint">欧美页靠它拉场景和电影，留空不改。</p>
+          <p class="hint" id="tls-status"></p>
+        </fieldset>
+        <fieldset class="group">
+          <legend>下载器</legend>
+          <label>下载器
+            <select name="downloader" id="downloader-select">
+              <option value="aria2">aria2</option>
+              <option value="xunlei">群晖迅雷</option>
+            </select>
           </label>
-          <p class="hint">面板要已登录迅雷账号，并且手动下过一次，才能识别下载目录。已在跑的任务不会换后端。</p>
+          <div id="xunlei-fields" class="xunlei-fields" hidden>
+            <label>迅雷面板
+              <input name="xunlei_url" placeholder="http://127.0.0.1:2345" />
+            </label>
+            <div class="field-row">
+              <label>面板用户
+                <input name="xunlei_username" autocomplete="username" />
+              </label>
+              <label>面板密码
+                <input name="xunlei_password" type="password" autocomplete="current-password" />
+              </label>
+            </div>
+            <label>设备名
+              <input name="xunlei_device_name" placeholder="群晖-xunlei" />
+            </label>
+            <p class="hint">面板要已登录迅雷账号，并且手动下过一次，才能识别下载目录。已在跑的任务不会换后端。</p>
+          </div>
+          <p class="hint" id="download-dir"></p>
+        </fieldset>
+        <fieldset class="group">
+          <legend>刮削与归档</legend>
+          <label class="check">
+            <input type="checkbox" name="scrape_enabled" />
+            下载完成后刮削并归档（网页点的和迅雷目录里下完的都会刮）
+          </label>
+          <div class="field-row">
+            <label>归档目录
+              <input name="media_dir" placeholder="./media" />
+            </label>
+            <label>欧美归档目录
+              <input name="western_media_dir" placeholder="留空表示不改" />
+            </label>
+          </div>
+          <div class="field-row">
+            <label>完成后静置（秒）
+              <input name="scrape_settle_seconds" inputmode="numeric" />
+            </label>
+            <label>最小体积（MB）
+              <input name="scrape_min_mb" inputmode="numeric" />
+            </label>
+          </div>
+          <details class="help">
+            <summary>归档怎么做</summary>
+            <p>监控下载目录，文件静置够久后按番号写 NFO、poster.jpg、fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
+            <p>小于最小体积的文件不当正片。静置、最小体积和两个归档目录留空保存会保留原值。</p>
+          </details>
+        </fieldset>
+        <fieldset class="group">
+          <legend>通知</legend>
+          <label>渠道
+            <select name="notify_channel" id="notify-channel">
+              <option value="">不通知</option>
+              <option value="telegram">Telegram</option>
+              <option value="bark">Bark</option>
+              <option value="serverchan">Server酱</option>
+            </select>
+          </label>
+          <div id="notify-telegram" class="field-row" hidden>
+            <label>Bot Token
+              <input name="notify_telegram_token" type="password" autocomplete="off" />
+            </label>
+            <label>Chat ID
+              <input name="notify_telegram_chat" autocomplete="off" />
+            </label>
+          </div>
+          <div id="notify-bark" class="xunlei-fields" hidden>
+            <label>Bark 地址或 Key
+              <input name="notify_bark_url" type="password" autocomplete="off" placeholder="https://api.day.app/你的key" />
+            </label>
+          </div>
+          <div id="notify-serverchan" class="xunlei-fields" hidden>
+            <label>SendKey
+              <input name="notify_serverchan_key" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <p class="hint">下载完成、归档完成、失败各发一条，失败带原因。发不出去只记日志，不影响下载。密钥留空不改。</p>
+        </fieldset>
+        <div class="save-bar">
+          <button type="submit">保存</button>
+          <p id="settings-status" class="status" hidden></p>
         </div>
-        <label class="check">
-          <input type="checkbox" name="scrape_enabled" />
-          下载完成后刮削并归档（网页点的和迅雷目录里下完的都会刮）
-        </label>
-        <label>归档目录
-          <input name="media_dir" placeholder="./media" />
-        </label>
-        <label>欧美归档目录
-          <input name="western_media_dir" placeholder="留空表示不改" />
-        </label>
-        <label>完成后静置（秒）
-          <input name="scrape_settle_seconds" inputmode="numeric" />
-        </label>
-        <label>最小体积（MB）
-          <input name="scrape_min_mb" inputmode="numeric" />
-        </label>
-        <p class="hint">静置是下完后再等多久才搬文件。小于最小体积的文件不当成正片。这三项和欧美目录留空保存会保留原来的值。</p>
-        <p class="hint">监控下载目录，文件静置完成后按番号写 NFO / poster.jpg / fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
-        <label>通知
-          <select name="notify_channel" id="notify-channel">
-            <option value="">不通知</option>
-            <option value="telegram">Telegram</option>
-            <option value="bark">Bark</option>
-            <option value="serverchan">Server酱</option>
-          </select>
-        </label>
-        <div id="notify-telegram" class="xunlei-fields" hidden>
-          <label>Bot Token
-            <input name="notify_telegram_token" type="password" autocomplete="off" />
-          </label>
-          <label>Chat ID
-            <input name="notify_telegram_chat" autocomplete="off" />
-          </label>
-        </div>
-        <div id="notify-bark" class="xunlei-fields" hidden>
-          <label>Bark 地址或 Key
-            <input name="notify_bark_url" type="password" autocomplete="off" placeholder="https://api.day.app/你的key" />
-          </label>
-        </div>
-        <div id="notify-serverchan" class="xunlei-fields" hidden>
-          <label>SendKey
-            <input name="notify_serverchan_key" type="password" autocomplete="off" />
-          </label>
-        </div>
-        <p class="hint">下载完成、归档完成、失败各发一条，带番号或片名。失败会带上原因。通知发不出去只记日志，不影响下载和归档。密钥留空表示不修改。</p>
-        <p class="hint" id="download-dir"></p>
-        <p class="hint" id="tls-status"></p>
-        <button type="submit">保存</button>
-        <p id="settings-status" class="status" hidden></p>
       </form>
-      <div id="health-box" class="health"></div>
+      <aside class="side">
+        <h3>连接状态</h3>
+        <div id="health-box" class="health"></div>
+      </aside>
+      </div>
     </section>
   </main>
   <div id="lightbox" class="lightbox" hidden>
@@ -326,6 +381,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=30"></script>
+  <script src="/static/app.js?v=33"></script>
 </body>
 </html>

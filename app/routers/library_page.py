@@ -1,8 +1,21 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import json
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+
+from app.library import poster_file
 
 router = APIRouter()
+
+
+def _actors(raw) -> list[str]:
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [str(name) for name in value if name] if isinstance(value, list) else []
 
 
 @router.get("/api/library")
@@ -19,6 +32,10 @@ async def library_page(request: Request):
             "full_path": str(settings.media_dir / rel) if rel else str(settings.media_dir),
             "has_nfo": bool(row.get("has_nfo")),
             "has_poster": bool(row.get("has_poster")),
+            "title": row.get("title") or "",
+            "actors": _actors(row.get("actors")),
+            "release_date": row.get("release_date") or "",
+            "added_at": row.get("added_at") or 0,
         })
     jav_groups = []
     for month in sorted(months, reverse=True):
@@ -37,6 +54,9 @@ async def library_page(request: Request):
             "full_path": str(root / rel) if root and rel else rel,
             "has_nfo": bool(row.get("has_nfo")),
             "has_poster": bool(row.get("has_poster")),
+            "actors": _actors(row.get("actors")),
+            "release_date": row.get("release_date") or "",
+            "added_at": row.get("added_at") or 0,
         })
     western_groups = []
     for studio in sorted(studios):
@@ -50,3 +70,13 @@ async def library_page(request: Request):
         "jav_root": str(settings.media_dir),
         "western_root": str(root) if root else "",
     }
+
+
+@router.get("/api/library/poster")
+async def library_poster(request: Request, path: str = Query(...), kind: str = Query("jav")):
+    settings = request.app.state.settings
+    root = settings.western_root if kind == "western" else settings.media_dir
+    found = poster_file(root, path, "western" if kind == "western" else "jav")
+    if found is None:
+        raise HTTPException(404, "没有封面")
+    return FileResponse(found, headers={"Cache-Control": "private, max-age=86400"})

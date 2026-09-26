@@ -332,6 +332,8 @@ def _commit_western(
             "title": title or path.stem,
             "has_nfo": 1,
             "has_poster": 1 if poster else 0,
+            "actors": meta.get("actors") or [],
+            "release_date": (meta.get("release_date") or "").strip(),
         } for path in written],
     }
 

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 720" role="img">
+  <title>暂无图片</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a211c"/>
+      <stop offset="58%" stop-color="#1f2128"/>
+      <stop offset="100%" stop-color="#17191e"/>
+    </linearGradient>
+    <pattern id="stripes" width="28" height="28" patternUnits="userSpaceOnUse" patternTransform="rotate(135)">
+      <rect width="14" height="28" fill="#ffffff" fill-opacity="0.025"/>
+    </pattern>
+  </defs>
+  <rect width="480" height="720" fill="url(#bg)"/>
+  <rect width="480" height="720" fill="url(#stripes)"/>
+  <g transform="translate(240 328)" fill="none" stroke="#e8b089" stroke-width="8" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="-86" y="-64" width="172" height="128" rx="18"/>
+    <circle cx="-40" cy="-20" r="14" fill="#e8b089" stroke="none"/>
+    <path d="M-86 32 L-34 -6 L6 26 L34 6 L86 42"/>
+  </g>
+  <text x="240" y="438" text-anchor="middle" fill="#8e8b84" font-family="PingFang SC, Noto Sans SC, sans-serif" font-size="32" letter-spacing="6">无封面</text>
+</svg>

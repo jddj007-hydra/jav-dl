@@ -475,4 +475,7 @@ async def scrape_job(
         "has_video": True,
         "has_nfo": True,
         "has_poster": has_poster,
+        "title": (meta.get("title") or "").strip(),
+        "actors": meta.get("actors") or [],
+        "release_date": (meta.get("release_date") or "").strip(),
     }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.codes import normalize_code
 from app.config import Settings
@@ -38,15 +38,72 @@ def tpdb_id_from_nfo(text: str) -> str:
 
 
 def nfo_title(text: str) -> str:
+    return nfo_fields(text)["title"]
+
+
+def nfo_fields(text: str) -> dict:
+    empty = {"title": "", "actors": [], "release_date": ""}
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
-        return ""
+        return empty
+    title = ""
     for tag in ("originaltitle", "title"):
         value = (root.findtext(tag) or "").strip()
         if value:
-            return value
-    return ""
+            title = value
+            break
+    actors = []
+    for el in root.iter("actor"):
+        name = (el.findtext("name") or "").strip()
+        if name and name not in actors:
+            actors.append(name)
+    release = ""
+    for tag in ("premiered", "releasedate"):
+        value = (root.findtext(tag) or "").strip()
+        if value:
+            release = value
+            break
+    return {"title": title, "actors": actors, "release_date": release}
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _read_text(path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _safe_join(root: Path | None, rel: str) -> Path | None:
+    if root is None or not rel or "\\" in rel or "\x00" in rel:
+        return None
+    parts = PurePosixPath(rel).parts
+    if not parts or PurePosixPath(rel).is_absolute() or any(p in ("", ".", "..") for p in parts):
+        return None
+    return root.joinpath(*parts)
+
+
+def poster_file(root: Path | None, rel: str, kind: str) -> Path | None:
+    target = _safe_join(root, rel)
+    if target is None:
+        return None
+    if kind == "western":
+        candidates = [target.with_name(f"{target.stem}-poster.jpg")]
+    else:
+        candidates = [target / name for name in ("poster.jpg", "poster.png", "poster.jpeg")]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
 
 
 def attach_western(items: list[dict], hits: dict[str, dict]) -> list[dict]:
@@ -85,8 +142,8 @@ def scan_media(media_dir: Path) -> list[dict]:
             code = normalize_code(code_dir.name) or code_dir.name.strip().upper()
             if not code:
                 continue
-            has_video = False
-            has_nfo = False
+            added_at = 0.0
+            nfo: Path | None = None
             has_poster = False
             try:
                 files = list(code_dir.iterdir())
@@ -97,24 +154,29 @@ def scan_media(media_dir: Path) -> list[dict]:
                     continue
                 name = path.name.lower()
                 if is_video(path):
-                    has_video = True
+                    added_at = max(added_at, _mtime(path) or 1.0)
                 elif path.suffix.lower() == ".nfo":
-                    has_nfo = True
+                    nfo = nfo or path
                 elif name in POSTER_NAMES:
                     has_poster = True
-            if not has_video:
+            if not added_at:
                 continue
             rel = f"{month_dir.name}/{code_dir.name}"
             prev = found.get(code)
             if prev and prev["month"] > month_dir.name:
                 continue
+            fields = nfo_fields(_read_text(nfo)) if nfo else {}
             found[code] = {
                 "code": code,
                 "month": month_dir.name,
                 "path": rel,
                 "has_video": 1,
-                "has_nfo": 1 if has_nfo else 0,
+                "has_nfo": 1 if nfo else 0,
                 "has_poster": 1 if has_poster else 0,
+                "title": fields.get("title") or "",
+                "actors": fields.get("actors") or [],
+                "release_date": fields.get("release_date") or "",
+                "added_at": added_at,
             }
     return list(found.values())
 
@@ -132,20 +194,18 @@ def scan_western(root: Path | None) -> list[dict]:
         for video in sorted(path for path in files if is_video(path)):
             nfo = by_name.get(f"{video.stem.lower()}.nfo")
             poster = by_name.get(f"{video.stem.lower()}-poster.jpg")
-            text = ""
-            if nfo:
-                try:
-                    text = nfo.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    text = ""
-            title = nfo_title(text) or video.stem
+            text = _read_text(nfo)
+            fields = nfo_fields(text)
             rows.append({
                 "path": f"{studio.name}/{video.name}",
                 "tpdb_id": tpdb_id_from_nfo(text),
                 "studio": studio.name,
-                "title": title,
+                "title": fields["title"] or video.stem,
                 "has_nfo": 1 if nfo else 0,
                 "has_poster": 1 if poster else 0,
+                "actors": fields["actors"],
+                "release_date": fields["release_date"],
+                "added_at": _mtime(video),
             })
     return rows
 
