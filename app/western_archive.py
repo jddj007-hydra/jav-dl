@@ -198,6 +198,29 @@ def _place_name(dest_dir: Path, stem: str, ext: str) -> str:
     return f"{stem}-{index}{ext}"
 
 
+def _same_size_release(folder: Path, stem: str, ext: str, video: Path) -> bool:
+    """The studio folder already has this release name at the same size."""
+    try:
+        size = video.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    want = f"{stem}{ext}".lower()
+    try:
+        names = list(folder.iterdir())
+    except OSError:
+        return False
+    for path in names:
+        if path.name.lower() != want or not path.is_file():
+            continue
+        try:
+            return path.stat().st_size == size
+        except OSError:
+            return False
+    return False
+
+
 async def western_metadata(settings: Settings, info: dict) -> dict:
     meta = {
         "code": "",
@@ -302,10 +325,16 @@ def _commit_western(
     folder.mkdir(parents=True, exist_ok=True)
     nfo_xml = build_nfo(meta)
     written: list[Path] = []
+    duplicates: list[Path] = []
     for video in videos:
         if video.suffix.lower() not in VIDEO_EXTS or is_incomplete(video):
             continue
-        name = _place_name(folder, _archive_stem(video.name), video.suffix.lower() or ".mp4")
+        stem = _archive_stem(video.name)
+        ext = video.suffix.lower() or ".mp4"
+        if _same_size_release(folder, stem, ext, video):
+            duplicates.append(video)
+            continue
+        name = _place_name(folder, stem, ext)
         target = folder / name
         shutil.move(str(video), str(target))
         target.chmod(0o644)
@@ -315,8 +344,23 @@ def _commit_western(
             poster_path.write_bytes(poster)
             poster_path.chmod(0o644)
         written.append(target)
+    for video in duplicates:
+        try:
+            video.unlink()
+        except OSError:
+            log.warning("重复文件删不掉 %s", video)
     if not written:
-        raise ScrapeError("没有可归档的视频")
+        if not duplicates:
+            raise ScrapeError("没有可归档的视频")
+        _discard_finished_dir(src, settings.download_dir)
+        _discard_slug(Path(job.get("dest") or ""), settings.download_dir)
+        return {
+            "path": str(folder),
+            "videos": [],
+            "duplicate": True,
+            "title": meta.get("title") or "",
+            "entries": [],
+        }
     _discard_finished_dir(src, settings.download_dir)
     _discard_slug(Path(job.get("dest") or ""), settings.download_dir)
     title = meta.get("title") or ""
@@ -369,5 +413,8 @@ async def scrape_western_job(
         except ScrapeError:
             poster = None
     result = await asyncio.to_thread(_commit_western, settings, job, src, videos, meta, poster)
-    log.info("已归档欧美 %s -> %s", result.get("title") or job.get("title") or "", result["path"])
+    if result.get("duplicate"):
+        log.info("欧美已在库里 %s", result.get("title") or job.get("title") or "")
+    else:
+        log.info("已归档欧美 %s -> %s", result.get("title") or job.get("title") or "", result["path"])
     return result

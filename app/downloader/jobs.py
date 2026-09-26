@@ -737,6 +737,9 @@ class JobManager:
                     await send_notice(self.settings, "归档失败", f"{src.name}\n{exc}")
                 continue
             self._watch_fail.pop(key, None)
+            if isinstance(result, dict) and result.get("duplicate"):
+                log.info("欧美已在库里，去掉重复下载 %s", src.name)
+                return
             if self.library and isinstance(result, dict):
                 await self.library.remember_western(result)
             path = result.get("path") if isinstance(result, dict) else ""

@@ -338,6 +338,86 @@ def test_western_slug_dir_is_removed_after_a_loose_file_is_archived(tmp_path):
     assert list((tmp_path / "欧美" / "Brazzers").glob("*.mp4"))
 
 
+def _western_settings(tmp_path: Path, download: Path) -> Settings:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=download,
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "欧美"),
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+    return settings
+
+
+def test_same_size_release_is_not_copied_again(tmp_path):
+    from app.western_archive import scrape_western_job
+
+    name = "sexart.26.09.13.anabel.busty.look.after.me.mp4"
+    download = tmp_path / "dl"
+    download.mkdir()
+    settings = _western_settings(tmp_path, download)
+    folder = settings.western_root / "SexArt"
+    folder.mkdir(parents=True)
+    payload = b"x" * 80
+    kept = folder / name
+    kept.write_bytes(payload)
+    incoming = download / name
+    incoming.write_bytes(payload)
+
+    async def run():
+        return await scrape_western_job(
+            settings,
+            {"dest": str(download / "western" / "slug"), "title": name},
+            {
+                "kind": "western",
+                "site": "SexArt",
+                "title": "Look After Me",
+                "date": "2026-09-13",
+                "performers": [],
+            },
+        )
+
+    result = asyncio.run(run())
+    assert result["duplicate"] is True
+    assert result["videos"] == []
+    assert not incoming.exists()
+    assert [path.name for path in folder.glob("*.mp4")] == [name]
+    assert kept.read_bytes() == payload
+
+
+def test_different_size_release_keeps_a_second_file(tmp_path):
+    from app.western_archive import scrape_western_job
+
+    name = "sexart.26.09.13.anabel.busty.look.after.me.mp4"
+    download = tmp_path / "dl"
+    download.mkdir()
+    settings = _western_settings(tmp_path, download)
+    folder = settings.western_root / "SexArt"
+    folder.mkdir(parents=True)
+    (folder / name).write_bytes(b"x" * 80)
+    (download / name).write_bytes(b"y" * 120)
+
+    async def run():
+        await scrape_western_job(
+            settings,
+            {"dest": str(download), "title": name},
+            {
+                "kind": "western",
+                "site": "SexArt",
+                "title": "Look After Me",
+                "date": "2026-09-13",
+                "performers": [],
+            },
+        )
+
+    asyncio.run(run())
+    assert sorted(path.name for path in folder.glob("*.mp4")) == [
+        "sexart.26.09.13.anabel.busty.look.after.me-2.mp4",
+        name,
+    ]
+
+
 def test_western_slug_is_not_a_code():
     slug = western_slug("AB", "", "123", "id")
     assert normalize_code(slug) is None
