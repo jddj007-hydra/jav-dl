@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS subscription_hits (
     created_at REAL NOT NULL,
     seen INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS suck (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 """
 
 DOWNLOAD_COLUMNS = (
@@ -391,6 +398,75 @@ class Database:
         for row in rows:
             found.setdefault(row["tpdb_id"], dict(row))
         return found
+
+    async def mark_suck(self, kind: str, key: str, title: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO suck (kind, key, title, created_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(kind, key) DO UPDATE SET
+                     title = CASE WHEN excluded.title != '' THEN excluded.title ELSE suck.title END""",
+                (kind, key, title or "", time.time()),
+            )
+            await db.commit()
+
+    async def clear_suck(self, kind: str, key: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "DELETE FROM suck WHERE kind = ? AND key = ?",
+                (kind, key),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def is_suck(self, kind: str, key: str) -> bool:
+        if not kind or not key:
+            return False
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM suck WHERE kind = ? AND key = ? LIMIT 1",
+                (kind, key),
+            )
+            return await cur.fetchone() is not None
+
+    async def suck_keys(self, kind: str, keys: list[str]) -> set[str]:
+        uniq = [item for item in dict.fromkeys(keys) if item]
+        if not kind or not uniq:
+            return set()
+        placeholders = ",".join("?" * len(uniq))
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                f"SELECT key FROM suck WHERE kind = ? AND key IN ({placeholders})",
+                [kind, *uniq],
+            )
+            rows = await cur.fetchall()
+        return {row[0] for row in rows}
+
+    async def get_suck(self, kind: str, key: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM suck WHERE kind = ? AND key = ?",
+                (kind, key),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def list_suck(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM suck ORDER BY created_at DESC, key")
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def delete_library(self, code: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM library WHERE code = ?", (code,))
+            await db.commit()
+
+    async def delete_western(self, path: str) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("DELETE FROM western_library WHERE path = ?", (path,))
+            await db.commit()
 
     async def add_subscription(self, row: dict) -> None:
         async with aiosqlite.connect(self.path) as db:

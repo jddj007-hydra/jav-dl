@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.codes import normalize_code
-from app.library import attach_library
+from app.library import attach_library, item_code
 from app.sources.javbus import CACHE_VER, MetadataError, fetch_latest, fetch_metadata, search_works
 from app.sources.tpdb import is_excluded_orientation
 
@@ -33,10 +33,11 @@ async def jav_latest(
         await db.put_metadata(key, {"kind": kind, "page": page, "items": items})
     items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
+    marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {
         "kind": kind,
         "page": page,
-        "items": attach_library(items, hits),
+        "items": attach_library(items, hits, marked),
         "error": None,
     }
 
@@ -49,22 +50,24 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
     normalized = normalize_code(raw)
     settings = request.app.state.settings
     library = request.app.state.library
+    db = request.app.state.db
     if not normalized:
         try:
             items = await search_works(settings, raw)
         except MetadataError as e:
             return {"mode": "keyword", "query": raw, "items": [], "error": str(e)}
         hits = await library.get_many([it["code"] for it in items])
+        marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
         return {
             "mode": "keyword",
             "query": raw,
-            "items": attach_library(items, hits),
+            "items": attach_library(items, hits, marked),
             "error": None if items else "没有搜到作品",
         }
 
-    db = request.app.state.db
     cache_key = f"{CACHE_VER}:{normalized}"
     lib = await library.info_for(normalized)
+    suck = await db.is_suck("jav", normalized)
     cached = await db.get_metadata(cache_key, settings.metadata_ttl)
     if cached:
         return {
@@ -74,6 +77,7 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
             "error": None,
             "cached": True,
             "library": lib,
+            "suck": suck,
         }
     try:
         meta = await fetch_metadata(settings, normalized)
@@ -85,6 +89,7 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
             "error": str(e),
             "cached": False,
             "library": lib,
+            "suck": suck,
         }
     await db.put_metadata(cache_key, meta)
     return {
@@ -94,4 +99,5 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
         "error": None,
         "cached": False,
         "library": lib,
+        "suck": suck,
     }

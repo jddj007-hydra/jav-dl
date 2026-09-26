@@ -49,6 +49,13 @@ class BatchEnqueue(BaseModel):
     items: list[BatchEnqueueItem] = Field(default_factory=list)
 
 
+class SuckMark(BaseModel):
+    kind: str = ""
+    key: str = ""
+    title: str = ""
+    remove: bool = False
+
+
 class DownloadRequest(BaseModel):
     code: str = ""
     info_hash: str

@@ -6,6 +6,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.library import poster_file
+from app.models import SuckMark
+from app.suck import mark_work, parse_suck
 
 router = APIRouter()
 
@@ -64,12 +66,49 @@ async def library_page(request: Request):
             "studio": studio,
             "items": sorted(studios[studio], key=lambda item: item["title"].lower()),
         })
+    suck = [
+        {
+            "kind": row.get("kind") or "",
+            "key": row.get("key") or "",
+            "title": row.get("title") or "",
+            "created_at": row.get("created_at") or 0,
+        }
+        for row in await request.app.state.db.list_suck()
+    ]
     return {
         "jav": jav_groups,
         "western": western_groups,
+        "suck": suck,
         "jav_root": str(settings.media_dir),
         "western_root": str(root) if root else "",
     }
+
+
+@router.post("/api/suck")
+async def mark_suck(request: Request, body: SuckMark):
+    try:
+        item = await mark_work(
+            request.app.state.db,
+            request.app.state.settings,
+            kind=body.kind,
+            key=body.key,
+            title=body.title,
+            remove=body.remove,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"item": item}
+
+
+@router.delete("/api/suck")
+async def clear_suck(request: Request, body: SuckMark):
+    try:
+        kind, key = parse_suck(body.kind, body.key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not await request.app.state.db.clear_suck(kind, key):
+        raise HTTPException(404, "没有这个标记")
+    return {"ok": True}
 
 
 @router.get("/api/library/poster")

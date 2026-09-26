@@ -229,6 +229,8 @@ async def list_works(
 
 async def _owned(db, library, work: dict) -> bool:
     code = work["code"]
+    if await db.is_suck("western" if work.get("western") else "jav", code):
+        return True
     if work.get("western"):
         if await db.western_has_id(code):
             return True

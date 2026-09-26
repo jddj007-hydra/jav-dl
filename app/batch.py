@@ -99,6 +99,10 @@ async def enqueue_batch(jobs, rows: list[dict]) -> dict:
         if len(info_hash) != 40 or any(ch not in "0123456789abcdef" for ch in info_hash):
             skipped.append({"code": code, "reason": "没有磁链"})
             continue
+        db = getattr(jobs, "db", None)
+        if db is not None and await db.is_suck("jav", code):
+            skipped.append({"code": code, "reason": "已标 suck"})
+            continue
         try:
             job = await jobs.enqueue_filtered(code, info_hash, title)
         except BackendError as exc:

@@ -93,7 +93,8 @@ async def _cached_list(
 async def _mark_library(request: Request, items: list[dict]) -> list[dict]:
     ids = [str(item.get("id") or "") for item in items]
     hits = await request.app.state.library.western_many(ids)
-    return attach_western(items, hits)
+    marked = await request.app.state.db.suck_keys("western", ids)
+    return attach_western(items, hits, marked)
 
 
 @router.get("/api/western/latest")
@@ -149,4 +150,5 @@ async def _with_library(request: Request, item: dict) -> dict:
     if hit is not None:
         hit = {**hit, "has_video": 1}
     row["library"] = library_info(hit)
+    row["suck"] = await request.app.state.db.is_suck("western", str(row.get("id") or ""))
     return row

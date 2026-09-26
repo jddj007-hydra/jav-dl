@@ -12,6 +12,8 @@ let lastResources = [];
 let lastWorks = [];
 let lastWorksQuery = "";
 let lastLibrary = null;
+let lastSuck = false;
+let lastMeta = null;
 let detailCode = "";
 const LIB_PAGE = 120;
 let libraryKind = "jav";
@@ -253,21 +255,55 @@ function dlRow(label, value) {
   return `<dt>${label}</dt><dd>${value}</dd>`;
 }
 
-function libraryFlag(lib) {
-  if (!lib || !lib.present) return "";
-  const path = lib.path ? ` · ${escapeHtml(lib.path)}` : "";
-  return `<p class="lib-flag">库里已有${path}</p>`;
+function libraryFlag(lib, suck) {
+  const parts = [];
+  if (suck) parts.push('<p class="lib-flag suck">suck · 不会再下载</p>');
+  if (lib && lib.present) {
+    const path = lib.path ? ` · ${escapeHtml(lib.path)}` : "";
+    parts.push(`<p class="lib-flag">库里已有${path}</p>`);
+  }
+  return parts.join("");
+}
+
+function downloadLabel(present, suck) {
+  if (suck) return "已标 suck";
+  if (present) return "下载（库里已有）";
+  return "下载";
+}
+
+function coverBadge(item) {
+  if (item && item.suck) return '<span class="lib-badge suck">suck</span>';
+  if (item && item.library && item.library.present) return '<span class="lib-badge">已有</span>';
+  return "";
+}
+
+function suckActions(kind, key, title, present, suck) {
+  if (!key) return "";
+  if (suck) {
+    return `<p class="suck-actions"><button type="button" class="ghost small" data-suck-clear="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title || key)}">取消 suck</button></p>`;
+  }
+  const label = present ? "删掉并标 suck" : "标 suck";
+  return `<p class="suck-actions"><button type="button" class="ghost small danger" data-suck-mark="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title || key)}" data-remove="${present ? "1" : "0"}">${label}</button></p>`;
 }
 
 function renderMeta(payload) {
   const card = $("meta-card");
   const meta = payload.metadata;
+  lastMeta = payload;
   lastLibrary = payload.library || null;
+  lastSuck = !!payload.suck;
   detailCode = payload.code || "";
+  const actions = suckActions(
+    "jav",
+    detailCode,
+    (meta && meta.title) || detailCode,
+    !!(lastLibrary && lastLibrary.present),
+    lastSuck,
+  );
   if (!meta) {
-    if (lastLibrary && lastLibrary.present) {
+    if ((lastLibrary && lastLibrary.present) || lastSuck) {
       card.hidden = false;
-      card.innerHTML = libraryFlag(lastLibrary);
+      card.innerHTML = libraryFlag(lastLibrary, lastSuck) + actions;
       return;
     }
     card.hidden = true;
@@ -293,7 +329,8 @@ function renderMeta(payload) {
     <div class="meta-main">
       ${coverImage(meta.cover, { className: "cover", full: meta.cover || "" })}
       <div>
-        ${libraryFlag(lastLibrary)}
+        ${libraryFlag(lastLibrary, lastSuck)}
+        ${actions}
         <h1><span class="code">${payload.code}</span> ${escapeHtml(meta.title || "")}</h1>
         <dl>
           ${dlRow("发售", escapeHtml(meta.release_date || ""))}
@@ -327,10 +364,10 @@ function renderWorks(items) {
   }
   wrap.hidden = false;
   list.innerHTML = items.map((it) => `
-    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-code="${escapeHtml(it.code)}">
+    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-code="${escapeHtml(it.code)}">
       <span class="work-cover">
         ${coverImage(it.cover, { lazy: true })}
-        ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
+        ${coverBadge(it)}
       </span>
       <span class="code">${escapeHtml(it.code)}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
@@ -361,7 +398,7 @@ function renderResources(items) {
         </div>
       </div>
       <div class="res-actions">
-        <button type="button" data-dl="${it.info_hash}" data-code="${escapeHtml(detailCode)}">${lastLibrary && lastLibrary.present ? "下载（库里已有）" : "下载"}</button>
+        <button type="button" data-dl="${it.info_hash}" data-code="${escapeHtml(detailCode)}"${lastSuck ? " disabled" : ""}>${downloadLabel(lastLibrary && lastLibrary.present, lastSuck)}</button>
         <button type="button" class="ghost" data-copy="${it.info_hash}">复制</button>
       </div>
     </article>`).join("");
@@ -388,6 +425,8 @@ function clearDetail() {
   $("resource-list").innerHTML = "";
   lastResources = [];
   lastLibrary = null;
+  lastSuck = false;
+  lastMeta = null;
 }
 
 function clearWorksView() {
@@ -718,6 +757,10 @@ $("resource-list").addEventListener("click", async (e) => {
     } catch {
       prompt("磁链", item.magnet);
     }
+    return;
+  }
+  if (lastSuck) {
+    setStatus($("search-status"), "已标 suck，不会再下载", "bad");
     return;
   }
   dl.disabled = true;
@@ -1245,6 +1288,11 @@ function openLightbox(url) {
 }
 
 $("meta-card").addEventListener("click", (e) => {
+  const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
+  if (suck) {
+    commitSuck(suck);
+    return;
+  }
   const img = e.target.closest("img[data-full]");
   if (!img) return;
   openLightbox(img.dataset.full || img.getAttribute("data-full"));
@@ -1273,10 +1321,10 @@ function renderWesternWorks(items) {
   list.innerHTML = westernItems.map((it) => {
     const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
     return `
-    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
+    <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
       <span class="work-cover">
         ${coverImage(it.cover, { lazy: true })}
-        ${it.library && it.library.present ? '<span class="lib-badge">已有</span>' : ""}
+        ${coverBadge(it)}
       </span>
       <span class="work-site">${escapeHtml(it.site || "")}</span>
       <span class="work-title">${escapeHtml(it.title || "")}</span>
@@ -1301,7 +1349,8 @@ function renderWesternMeta(item) {
     <div class="meta-main">
       ${coverImage(item.cover || item.background, { className: "cover", full: item.background || item.cover || "" })}
       <div>
-        ${libraryFlag(item.library)}
+        ${libraryFlag(item.library, item.suck)}
+        ${suckActions("western", item.id || "", item.title || "", !!(item.library && item.library.present), !!item.suck)}
         <h1>${escapeHtml(item.title || "")}</h1>
         <dl>
           ${dlRow("片商", escapeHtml(item.site || ""))}
@@ -1338,7 +1387,7 @@ function renderWesternResources(items) {
         </div>
       </div>
       <div class="res-actions">
-        <button type="button" data-west-dl="${it.info_hash}">${westernCurrent && westernCurrent.library && westernCurrent.library.present ? "下载（库里已有）" : "下载"}</button>
+        <button type="button" data-west-dl="${it.info_hash}"${westernCurrent && westernCurrent.suck ? " disabled" : ""}>${downloadLabel(westernCurrent && westernCurrent.library && westernCurrent.library.present, westernCurrent && westernCurrent.suck)}</button>
         <button type="button" class="ghost" data-west-copy="${it.info_hash}">复制</button>
       </div>
     </article>`).join("");
@@ -1439,6 +1488,7 @@ async function openWestern(id, kind, known = null) {
         ...listed,
         ...item,
         library: item.library || (listed && listed.library) || null,
+        suck: !!item.suck,
         kind,
       });
     }
@@ -1609,6 +1659,10 @@ $("western-resources").addEventListener("click", async (e) => {
     }
     return;
   }
+  if (westernCurrent && westernCurrent.suck) {
+    setStatus($("western-status"), "已标 suck，不会再下载", "bad");
+    return;
+  }
   const work = westernCurrent || {};
   dl.disabled = true;
   try {
@@ -1631,6 +1685,11 @@ $("western-resources").addEventListener("click", async (e) => {
 });
 
 $("western-meta").addEventListener("click", (e) => {
+  const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
+  if (suck) {
+    commitSuck(suck);
+    return;
+  }
   const img = e.target.closest("img[data-full]");
   if (!img) return;
   openLightbox(img.dataset.full || img.getAttribute("data-full"));
@@ -1709,11 +1768,60 @@ function libraryCard(item) {
         <div class="lib-line">${head}</div>
         ${title ? `<div class="work-title">${escapeHtml(title)}</div>` : ""}
         ${actors ? `<div class="work-people">${escapeHtml(actors)}</div>` : ""}
+        ${librarySuckButton(item)}
       </div>
     </article>`;
 }
 
+function librarySuckButton(item) {
+  const jav = libraryKind === "jav";
+  const key = jav ? item.code : item.tpdb_id;
+  if (!key) return "";
+  const title = item.title || key;
+  return `<button type="button" class="ghost small danger lib-suck" data-suck-mark="${jav ? "jav" : "western"}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}" data-remove="1">标 suck</button>`;
+}
+
+function renderSuck() {
+  const data = libraryPayload || {};
+  $("library-root").textContent = "标过 suck 的片子不会再下载";
+  const list = $("library-list");
+  const more = $("library-more");
+  const words = libraryQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const all = data.suck || [];
+  const items = all.filter((item) => {
+    if (!words.length) return true;
+    const hay = [item.key, item.title, item.kind].join(" ").toLowerCase();
+    return words.every((word) => hay.includes(word));
+  });
+  $("library-count").textContent = words.length ? `${items.length} / ${all.length} 部` : (all.length ? `共 ${all.length} 部` : "");
+  if (!items.length) {
+    more.hidden = true;
+    list.innerHTML = `<p class="empty">${all.length ? "没有对得上的片子" : "还没有标 suck 的片子"}</p>`;
+    setStatus($("library-status"), "", "");
+    return;
+  }
+  setStatus($("library-status"), "", "");
+  const shown = items.slice(0, libraryLimit);
+  list.innerHTML = `<div class="suck-list">${shown.map((item) => `
+    <article class="suck-item">
+      <div>
+        <span class="suck-pill">suck</span>
+        <strong>${escapeHtml(item.key)}</strong>
+        ${item.title && item.title !== item.key ? `<span class="suck-title">${escapeHtml(item.title)}</span>` : ""}
+        <span class="suck-kind">${item.kind === "western" ? "欧美" : "番号"}</span>
+      </div>
+      <button type="button" class="ghost small" data-suck-clear="${escapeHtml(item.kind)}" data-key="${escapeHtml(item.key)}" data-title="${escapeHtml(item.title || item.key)}">取消</button>
+    </article>`).join("")}</div>`;
+  const rest = items.length - shown.length;
+  more.hidden = rest <= 0;
+  more.querySelector("button").textContent = `再显示 ${Math.min(LIB_PAGE, rest)} 部（还剩 ${rest}）`;
+}
+
 function renderLibrary() {
+  if (libraryKind === "suck") {
+    renderSuck();
+    return;
+  }
   const data = libraryPayload || { jav: [], western: [], jav_root: "", western_root: "" };
   const jav = libraryKind === "jav";
   $("library-root").textContent = jav
@@ -1769,8 +1877,8 @@ function showMoreLibrary() {
 
 async function loadLibrary() {
   if (!libraryPayload) {
-    fillLibrarySort();
-    $("library-list").innerHTML = `<div class="lib-grid">${skeletonCards(12)}</div>`;
+    if (libraryKind !== "suck") fillLibrarySort();
+    $("library-list").innerHTML = libraryKind === "suck" ? "" : `<div class="lib-grid">${skeletonCards(12)}</div>`;
   }
   try {
     libraryPayload = await api("/api/library");
@@ -1804,7 +1912,9 @@ $("library-kind").addEventListener("click", (e) => {
   for (const child of $("library-kind").querySelectorAll("button")) {
     child.classList.toggle("on", child === btn);
   }
-  fillLibrarySort();
+  $("library-sort").hidden = libraryKind === "suck";
+  $("library-q").placeholder = libraryKind === "suck" ? "搜番号或标题" : "搜番号、标题或演员";
+  if (libraryKind !== "suck") fillLibrarySort();
   if (libraryPayload) renderLibrary();
 });
 
@@ -1846,7 +1956,72 @@ $("library-rescan").addEventListener("click", async (e) => {
   }
 });
 
+function visibleStatus() {
+  if (!views.library.hidden) return $("library-status");
+  if (!views.western.hidden) return $("western-status");
+  return $("search-status");
+}
+
+function refreshSuckOnScreen(kind, key, on, removed) {
+  const clearLibrary = on && removed;
+  if (kind === "jav") {
+    for (const it of lastWorks || []) {
+      if (it.code === key) it.suck = on;
+    }
+    if (!$("works-wrap").hidden) renderWorks(lastWorks);
+    if (detailCode === key && lastMeta) {
+      const library = clearLibrary ? { present: false } : lastMeta.library;
+      renderMeta({ ...lastMeta, suck: on, library });
+      renderResources(lastResources);
+    }
+    return;
+  }
+  for (const it of westernItems || []) {
+    if (String(it.id) === String(key)) it.suck = on;
+  }
+  if (!$("western-works-wrap").hidden) renderWesternWorks(westernItems);
+  if (westernCurrent && String(westernCurrent.id) === String(key)) {
+    const library = clearLibrary ? { present: false } : westernCurrent.library;
+    westernCurrent = { ...westernCurrent, suck: on, library };
+    renderWesternMeta(westernCurrent);
+    renderWesternResources(westernResources);
+  }
+}
+
+async function commitSuck(el) {
+  const clearing = el.dataset.suckClear != null;
+  const kind = clearing ? el.dataset.suckClear : el.dataset.suckMark;
+  const key = el.dataset.key || "";
+  const title = el.dataset.title || key;
+  const remove = el.dataset.remove === "1";
+  const question = clearing
+    ? `取消 ${title} 的 suck 标记？`
+    : (remove ? `删掉 ${title} 并标 suck？文件会删掉，以后不会再下载。` : `把 ${title} 标 suck？以后不会再下载。`);
+  if (!window.confirm(question)) return;
+  el.disabled = true;
+  const status = visibleStatus();
+  try {
+    if (clearing) {
+      await api("/api/suck", { method: "DELETE", body: JSON.stringify({ kind, key }) });
+    } else {
+      await api("/api/suck", { method: "POST", body: JSON.stringify({ kind, key, title, remove }) });
+    }
+    if (libraryPayload || !views.library.hidden) await loadLibrary();
+    refreshSuckOnScreen(kind, key, !clearing, remove);
+    setStatus(status, clearing ? "已取消 suck" : "已标 suck", "good");
+  } catch (err) {
+    setStatus(status, err.message, "bad");
+  } finally {
+    el.disabled = false;
+  }
+}
+
 $("library-list").addEventListener("click", async (e) => {
+  const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
+  if (suck) {
+    commitSuck(suck);
+    return;
+  }
   const btn = e.target.closest("[data-copy-path]");
   if (btn) {
     const path = btn.dataset.copyPath || "";

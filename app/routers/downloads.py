@@ -104,6 +104,25 @@ def _remember_western(body: DownloadRequest, dest: str) -> None:
     })
 
 
+async def _reject_suck(request: Request, body: DownloadRequest) -> None:
+    db = getattr(request.app.state, "db", None)
+    if db is None or not hasattr(db, "is_suck"):
+        return
+    kind = (body.kind or "").strip().lower()
+    if kind == "western":
+        key = (body.tpdb_id or "").strip()
+        marked = bool(key) and await db.is_suck("western", key)
+    else:
+        code = normalize_code(body.code)
+        marked = bool(code) and await db.is_suck("jav", code)
+    if not marked:
+        return
+    token = (body.pick_token or "").strip()
+    if token:
+        await request.app.state.jobs.cancel_files(token)
+    raise HTTPException(409, "已标 suck，不会再下载")
+
+
 def _hash(body: DownloadRequest) -> str:
     info_hash = (body.info_hash or "").strip().lower()
     if len(info_hash) != 40 or any(ch not in "0123456789abcdef" for ch in info_hash):
@@ -113,6 +132,7 @@ def _hash(body: DownloadRequest) -> str:
 
 @router.post("/api/downloads")
 async def create_download(request: Request, body: DownloadRequest):
+    await _reject_suck(request, body)
     info_hash = _hash(body)
     jobs = request.app.state.jobs
     if (body.pick_token or "").strip():
@@ -137,6 +157,7 @@ async def create_download(request: Request, body: DownloadRequest):
 
 @router.post("/api/downloads/files")
 async def preview_files(request: Request, body: DownloadRequest):
+    await _reject_suck(request, body)
     info_hash = _hash(body)
     code, dest_rel, title = _target(body)
     try:

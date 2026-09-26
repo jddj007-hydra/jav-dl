@@ -382,7 +382,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .preview-row img:hover { filter: brightness(1.12); }
 .lib-flag {
   display: inline-block;
-  margin: 0 0 10px;
+  margin: 0 8px 10px 0;
   padding: 4px 10px;
   border-radius: 999px;
   background: var(--good-soft);
@@ -390,6 +390,11 @@ button:disabled { opacity: 0.5; cursor: wait; }
   font-size: 13px;
   font-weight: 650;
 }
+.lib-flag.suck {
+  background: rgba(210, 102, 102, 0.16);
+  color: var(--bad);
+}
+.suck-actions { margin: 0 0 10px; }
 .lightbox {
   position: fixed;
   inset: 0;
@@ -469,6 +474,36 @@ button:disabled { opacity: 0.5; cursor: wait; }
   border-radius: 999px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
+.lib-badge.suck {
+  background: #8a3d32;
+  color: #fff8f5;
+}
+.work-card.is-suck .work-cover { box-shadow: 0 0 0 1px rgba(210, 102, 102, 0.55); }
+.suck-list { display: flex; flex-direction: column; gap: 8px; }
+.suck-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.suck-item .suck-title, .suck-kind { color: var(--muted); margin-left: 8px; font-size: 13px; }
+.suck-item > div { min-width: 0; }
+.suck-pill {
+  display: inline-block;
+  margin-right: 8px;
+  background: #8a3d32;
+  color: #fff8f5;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  vertical-align: 1px;
+}
+.lib-suck { margin-top: 8px; }
 .work-card .code, .lib-line .code { font-size: 12px; margin: 0; }
 .work-site {
   font-size: 12px;
@@ -915,6 +950,7 @@ img.is-fallback,
   .works-grid, .lib-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 16px 10px; }
   .lib-grid.wide { grid-template-columns: 1fr; }
   .lib-copy { opacity: 1; }
+  .suck-item { align-items: flex-start; flex-direction: column; }
   .res-item { grid-template-columns: 32px minmax(0, 1fr); }
   .res-actions { grid-column: 2; justify-content: flex-start; }
   .batch-list li { grid-template-columns: 1fr; }

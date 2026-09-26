@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
@@ -106,27 +107,85 @@ def poster_file(root: Path | None, rel: str, kind: str) -> Path | None:
     return None
 
 
-def attach_western(items: list[dict], hits: dict[str, dict]) -> list[dict]:
+def attach_western(items: list[dict], hits: dict[str, dict], suck: set[str] | None = None) -> list[dict]:
+    marked = suck or set()
     out = []
     for item in items:
         row = dict(item)
-        hit = hits.get(str(row.get("id") or ""))
+        item_id = str(row.get("id") or "")
+        hit = hits.get(item_id)
         if hit is not None:
             hit = {**hit, "has_video": 1}
         row["library"] = library_info(hit)
+        row["suck"] = item_id in marked
         out.append(row)
     return out
 
 
-def attach_library(items: list[dict], hits: dict[str, dict]) -> list[dict]:
+def item_code(code: str) -> str:
+    return normalize_code(code or "") or (code or "").strip().upper()
+
+
+def attach_library(items: list[dict], hits: dict[str, dict], suck: set[str] | None = None) -> list[dict]:
+    marked = suck or set()
     out = []
     for item in items:
         row = dict(item)
-        code = row.get("code") or ""
-        key = normalize_code(code) or code.strip().upper()
+        key = item_code(row.get("code") or "")
         row["library"] = library_info(hits.get(key))
+        row["suck"] = bool(key) and key in marked
         out.append(row)
     return out
+
+
+def _inside(root: Path, path: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+        base = root.resolve()
+    except OSError:
+        return None
+    if resolved == base or not resolved.is_relative_to(base):
+        return None
+    return resolved
+
+
+def _drop_empty_dir(directory: Path, root: Path) -> None:
+    if directory == root or directory.parent != root:
+        return
+    try:
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+    except OSError:
+        return
+
+
+def remove_archived(root: Path | None, rel: str, kind: str) -> bool:
+    """Delete one archived work. The path has to stay inside that library root."""
+    target = _safe_join(root, rel)
+    if target is None or root is None:
+        return False
+    resolved = _inside(root, target)
+    if resolved is None:
+        return False
+    if kind == "western":
+        if not resolved.is_file():
+            return False
+        parent = resolved.parent
+        stem = resolved.stem
+        resolved.unlink()
+        for name in (f"{stem}.nfo", f"{stem}-poster.jpg"):
+            extra = parent / name
+            kept = _inside(root, extra)
+            if kept is not None and kept.is_file() and kept.parent == parent:
+                kept.unlink()
+        _drop_empty_dir(parent, root.resolve())
+        return True
+    if not resolved.is_dir() or resolved.parent.parent != root.resolve():
+        return False
+    month = resolved.parent
+    shutil.rmtree(resolved)
+    _drop_empty_dir(month, root.resolve())
+    return True
 
 
 def scan_media(media_dir: Path) -> list[dict]:
