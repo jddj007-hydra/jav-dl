@@ -101,9 +101,12 @@ def flatten_xunlei_files(resource: dict) -> list[dict]:
     if resource.get("is_dir"):
         return []
     name = str(resource.get("name") or "")
-    index = resource.get("file_index")
-    if not name or index is None:
+    if not name:
         return []
+    # Protobuf JSON omits the default. The first file is index 0 and has no file_index.
+    index = resource.get("file_index")
+    if index is None:
+        index = 0
     try:
         size = int(resource.get("file_size") or 0)
         number = int(index)

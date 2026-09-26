@@ -34,6 +34,29 @@ def test_default_selection_keeps_the_largest_when_everything_looks_like_junk():
     assert default_selected(files) == [False, True]
 
 
+def test_xunlei_first_file_has_no_file_index():
+    resource = {
+        "name": "ssis-001-C",
+        "is_dir": True,
+        "file_count": 4,
+        "dir": {"resources": [
+            {"name": "ssis-001-C.mp4", "file_size": 6_834_984_408},
+            {"name": "qr.png", "file_index": 1, "file_size": 23_947},
+            {"name": "addr.txt", "file_index": 2, "file_size": 460},
+            {"name": "ad.mp4", "file_index": 3, "file_size": 64_435_696},
+        ]},
+    }
+    files = flatten_xunlei_files(resource)
+    assert [(item["index"], item["name"]) for item in files] == [
+        (0, "ssis-001-C.mp4"),
+        (1, "qr.png"),
+        (2, "addr.txt"),
+        (3, "ad.mp4"),
+    ]
+    picked = [files[i]["name"] for i, keep in enumerate(default_selected(files)) if keep]
+    assert picked == ["ssis-001-C.mp4", "ad.mp4"]
+
+
 def test_xunlei_index_and_nested_names():
     resource = {
         "name": "pack",
