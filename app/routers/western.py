@@ -6,6 +6,7 @@ from app.library import attach_western, library_info
 from app.sources.tpdb import (
     TpdbError,
     fetch_detail,
+    fetch_facet,
     fetch_list,
     is_excluded_orientation,
     is_too_short,
@@ -105,6 +106,50 @@ async def western_latest(
     theme: str = Query(""),
 ):
     return await _cached_list(request, _kind(kind), page, None, _theme(theme), latest=True)
+
+
+@router.get("/api/western/browse")
+async def western_browse(
+    request: Request,
+    facet: str = Query(""),
+    name: str = Query(""),
+    kind: str = Query("scene"),
+    page: int = Query(1, ge=1, le=50),
+):
+    kind = _kind(kind)
+    facet = facet.strip().lower()
+    if facet not in ("performer", "site"):
+        raise HTTPException(400, "类型无效")
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "请填写名字")
+    settings = request.app.state.settings
+    if not (settings.tpdb_api_key or "").strip():
+        return {
+            "kind": kind,
+            "page": page,
+            "last_page": page,
+            "items": [],
+            "error": "请先在设置里填写 ThePornDB token",
+        }
+    try:
+        payload = await fetch_facet(settings, kind, facet, name, page)
+    except TpdbError as exc:
+        return {
+            "kind": kind,
+            "page": page,
+            "last_page": page,
+            "items": [],
+            "error": str(exc),
+        }
+    visible = _visible(payload["items"], latest=False)
+    return {
+        "kind": kind,
+        "page": payload["page"],
+        "last_page": payload["last_page"],
+        "items": await _mark_library(request, visible),
+        "error": None,
+    }
 
 
 @router.get("/api/western/search")

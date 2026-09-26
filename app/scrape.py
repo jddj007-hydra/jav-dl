@@ -467,15 +467,29 @@ async def scrape_job(
     )
     log.info("已归档 %s -> %s", code, f"{month}/{code}")
 
+    from app.library import index_code_dir
+
+    indexed = index_code_dir(dest_dir, month) or {}
     return {
         "code": code,
         "month": month,
-        "path": f"{month}/{code}",
+        "path": indexed.get("path") or f"{month}/{code}",
         "archive_dir": str(dest_dir),
         "has_video": True,
         "has_nfo": True,
         "has_poster": has_poster,
-        "title": (meta.get("title") or "").strip(),
-        "actors": meta.get("actors") or [],
-        "release_date": (meta.get("release_date") or "").strip(),
+        "title": indexed.get("title") or (meta.get("title") or "").strip(),
+        "actors": indexed.get("actors") or meta.get("actors") or [],
+        "release_date": indexed.get("release_date") or (meta.get("release_date") or "").strip(),
+        "studio": indexed.get("studio") or "",
+        "genres": indexed.get("genres") or [],
+        "outline": indexed.get("outline") or "",
+        "runtime_min": indexed.get("runtime_min") or 0,
+        "has_sub": indexed.get("has_sub") or 0,
+        "has_uncensored": indexed.get("has_uncensored") or 0,
+        "has_cracked": indexed.get("has_cracked") or 0,
+        "video": indexed.get("video") or "",
+        "video_count": indexed.get("video_count") or 0,
+        "video_size": indexed.get("video_size") or 0,
+        "poster": indexed.get("poster") or "",
     }

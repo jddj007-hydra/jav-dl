@@ -14,6 +14,9 @@ def test_parse_ssis001():
     names = [a["name"] if isinstance(a, dict) else a for a in meta["actors"]]
     assert "葵つかさ" in names
     assert meta["actors"][0]["photo"]
+    assert "/star/" in meta["actors"][0]["url"]
+    assert "/studio/" in meta["studio_url"]
+    assert "/label/" in meta["label_url"]
     assert meta["release_date"] == "2021-02-18"
     assert meta["cover"]
     assert "javbus.com" in meta["cover"]
@@ -63,4 +66,6 @@ def test_parse_series_field():
     """
     meta = parse_javbus(html, "https://www.javbus.com", "IPX-001")
     assert meta["series"] == "某系列"
+    assert meta["series_url"] == "https://www.javbus.com/series/9"
     assert meta["studio"] == "Studio A"
+    assert meta["studio_url"] == "https://www.javbus.com/studio/1"

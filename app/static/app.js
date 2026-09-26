@@ -30,11 +30,17 @@ let javKind = "censored";
 let javPage = 1;
 let javMode = "latest";
 let javBootstrapped = false;
+let javBrowse = null;
+let javTrail = [];
+let javView = 0;
 let westernKind = "scene";
 let westernPage = 1;
 let westernMode = "latest";
 let westernTheme = "";
 let westernBootstrapped = false;
+let westernBrowse = null;
+let westernTrail = [];
+let westernView = 0;
 let westernItems = [];
 let westernResources = [];
 let westernCurrent = null;
@@ -255,6 +261,16 @@ function dlRow(label, value) {
   return `<dt>${label}</dt><dd>${value}</dd>`;
 }
 
+function browseButton(name, extra) {
+  const label = String(name || "").trim();
+  if (!label) return "";
+  const attrs = [`data-browse-name="${escapeHtml(label)}"`];
+  if (extra.url) attrs.push(`data-browse-url="${escapeHtml(extra.url)}"`);
+  if (extra.facet) attrs.push(`data-browse-facet="${escapeHtml(extra.facet)}"`);
+  if (!extra.url && !extra.facet) return escapeHtml(label);
+  return `<button type="button" class="text-link" ${attrs.join(" ")}>${escapeHtml(label)}</button>`;
+}
+
 function libraryFlag(lib, suck) {
   const parts = [];
   if (suck) parts.push('<p class="lib-flag suck">suck · 不会再下载</p>');
@@ -312,11 +328,13 @@ function renderMeta(payload) {
   const actors = normalizeActors(meta.actors);
   const genres = (meta.genres || []).map((g) => `<span class="tag">${escapeHtml(g)}</span>`).join("");
   const actorHtml = actors.length
-    ? `<div class="actor-row">${actors.map((a) => `
-        <div class="actor-card">
+    ? `<div class="actor-row">${actors.map((a) => {
+        const body = `
           ${a.photo ? coverImage(a.photo, { alt: a.name }) : `<div class="actor-ph"></div>`}
-          <span>${escapeHtml(a.name)}</span>
-        </div>`).join("")}</div>`
+          <span>${escapeHtml(a.name)}</span>`;
+        if (!a.url) return `<div class="actor-card">${body}</div>`;
+        return `<button type="button" class="actor-card" data-browse-url="${escapeHtml(a.url)}" data-browse-name="${escapeHtml(a.name)}">${body}</button>`;
+      }).join("")}</div>`
     : "";
   const samples = meta.samples || [];
   const previewHtml = samples.length
@@ -336,9 +354,9 @@ function renderMeta(payload) {
           ${dlRow("发售", escapeHtml(meta.release_date || ""))}
           ${dlRow("时长", escapeHtml(meta.runtime || ""))}
           ${dlRow("导演", escapeHtml(meta.director || ""))}
-          ${dlRow("厂家", escapeHtml(meta.studio || ""))}
-          ${dlRow("发行", escapeHtml(meta.label || ""))}
-          ${dlRow("系列", escapeHtml(meta.series || ""))}
+          ${dlRow("厂家", browseButton(meta.studio, { url: meta.studio_url }))}
+          ${dlRow("发行", browseButton(meta.label, { url: meta.label_url }))}
+          ${dlRow("系列", browseButton(meta.series, { url: meta.series_url }))}
         </dl>
         ${genres ? `<div class="genre-row">${genres}</div>` : ""}
       </div>
@@ -443,6 +461,7 @@ function showWorksList() {
   showBack(false);
   clearDetail();
   $("jav-feed").hidden = false;
+  $("works-heading").textContent = "作品";
   $("code-input").value = lastWorksQuery;
   renderWorks(lastWorks);
   const n = lastWorks.length;
@@ -480,7 +499,126 @@ function renderPager(el, page, lastPage, onPick) {
   el.append(make("下一页", page + 1, next));
 }
 
+function javListFrame() {
+  return {
+    type: "list",
+    items: lastWorks,
+    query: lastWorksQuery,
+    mode: javMode,
+    page: javPage,
+    browse: javBrowse ? { ...javBrowse } : null,
+    kind: javKind,
+  };
+}
+
+function javDetailFrame() {
+  return {
+    type: "detail",
+    meta: lastMeta,
+    resources: lastResources,
+    fromWorks,
+    list: javListFrame(),
+  };
+}
+
+function leaveJavBrowse() {
+  javTrail = [];
+  javBrowse = null;
+  $("works-heading").textContent = "作品";
+}
+
+function restoreJavFrame(frame) {
+  javView += 1;
+  if (frame.type === "detail") {
+    const list = frame.list || {};
+    lastWorks = list.items || [];
+    lastWorksQuery = list.query || "";
+    javMode = list.mode || "latest";
+    javPage = list.page || 1;
+    javBrowse = list.browse || null;
+    javKind = list.kind || javKind;
+    fromWorks = frame.fromWorks;
+    renderMeta(frame.meta);
+    renderResources(frame.resources || []);
+    $("works-wrap").hidden = true;
+    $("jav-feed").hidden = true;
+    showBack(javTrail.length > 0 || frame.fromWorks);
+    setStatus($("search-status"), "");
+    return;
+  }
+  lastWorks = frame.items || [];
+  lastWorksQuery = frame.query || "";
+  javMode = frame.mode || "latest";
+  javPage = frame.page || 1;
+  javBrowse = frame.browse || null;
+  javKind = frame.kind || javKind;
+  markSeg("jav-kind", javKind);
+  fromWorks = false;
+  showBack(javTrail.length > 0);
+  clearDetail();
+  $("jav-feed").hidden = false;
+  $("works-heading").textContent = javMode === "browse" && javBrowse ? javBrowse.name : "作品";
+  $("code-input").value = lastWorksQuery;
+  renderWorks(lastWorks);
+  if (javMode === "browse" && javBrowse) {
+    const target = javBrowse;
+    renderPager($("jav-pager"), javPage, null, (next) => loadJavBrowse(target.url, target.name, next));
+    setStatus($("search-status"), `${target.name} 的作品`, "good");
+    return;
+  }
+  if (javMode === "latest") {
+    renderPager($("jav-pager"), javPage, null, (next) => loadJavFeed(next));
+  } else {
+    $("jav-pager").innerHTML = "";
+  }
+  const n = lastWorks.length;
+  const latest = javMode === "latest";
+  setStatus(
+    $("search-status"),
+    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部作品，点一张看磁链`) : (latest ? "没有更多了" : "没有搜到作品"),
+    n ? "good" : "bad",
+  );
+}
+
+async function loadJavBrowse(url, name, page) {
+  const view = ++javView;
+  javMode = "browse";
+  javBrowse = { url, name, page };
+  javPage = page;
+  showBack(true);
+  clearDetail();
+  $("jav-feed").hidden = false;
+  $("works-heading").textContent = name;
+  showSkeleton("works-wrap", "works-list");
+  setStatus($("search-status"), `正在列 ${name} 的作品…`);
+  try {
+    const params = new URLSearchParams({ url, page: String(page) });
+    const data = await api("/api/jav/browse?" + params.toString());
+    if (view !== javView) return;
+    const items = data.items || [];
+    rememberWorks(name, items);
+    renderWorks(items);
+    renderPager($("jav-pager"), page, null, (next) => loadJavBrowse(url, name, next));
+    if (!items.length) {
+      const buttons = $("jav-pager").querySelectorAll("button");
+      if (buttons[1]) buttons[1].disabled = true;
+    }
+    const n = items.length;
+    setStatus(
+      $("search-status"),
+      data.error || (n ? `${name} 的作品 · ${n} 部` : (page > 1 ? "没有更多了" : `${name} 没有作品`)),
+      n && !data.error ? "good" : "bad",
+    );
+  } catch (err) {
+    if (view !== javView) return;
+    clearWorksView();
+    setStatus($("search-status"), err.message, "bad");
+  }
+}
+
 async function loadJavFeed(page) {
+  const view = ++javView;
+  leaveJavBrowse();
   javMode = "latest";
   javPage = page;
   fromWorks = false;
@@ -491,6 +629,7 @@ async function loadJavFeed(page) {
   setStatus($("search-status"), "加载最新…");
   try {
     const data = await api(`/api/jav/latest?kind=${encodeURIComponent(javKind)}&page=${page}`);
+    if (view !== javView) return;
     const items = data.items || [];
     rememberWorks("", items);
     renderWorks(items);
@@ -505,6 +644,7 @@ async function loadJavFeed(page) {
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
+    if (view !== javView) return;
     clearWorksView();
     setStatus($("search-status"), err.message, "bad");
   }
@@ -517,6 +657,7 @@ function ensureJavLatest() {
 }
 
 async function runCodeSearch(code, { fromList = false } = {}) {
+  const view = ++javView;
   fromWorks = fromList;
   showBack(fromList && lastWorks.length > 0);
   if (fromList) $("jav-feed").hidden = true;
@@ -529,6 +670,7 @@ async function runCodeSearch(code, { fromList = false } = {}) {
     api("/api/search?q=" + encodeURIComponent(code)),
     api("/api/resources?code=" + encodeURIComponent(code)),
   ]);
+  if (view !== javView) return;
   let msg = "";
   let kind = "";
   if (meta.status === "fulfilled") {
@@ -580,6 +722,7 @@ $("search-form").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button");
   btn.disabled = true;
   setStatus($("search-status"), "查询中…");
+  leaveJavBrowse();
   javMode = "search";
   $("jav-pager").innerHTML = "";
   fromWorks = false;
@@ -598,6 +741,7 @@ $("search-form").addEventListener("submit", async (e) => {
     }
     const items = data.items || [];
     rememberWorks(q, items);
+    leaveJavBrowse();
     javMode = "search";
     history.replaceState({ javdl: "works", q }, "", location.hash || "#/");
     renderWorks(items);
@@ -628,11 +772,24 @@ $("works-list").addEventListener("click", (e) => {
   if (!card) return;
   const code = card.dataset.code;
   $("code-input").value = code;
+  if (javMode === "browse") {
+    javTrail.push(javListFrame());
+    runCodeSearch(code, { fromList: true });
+    return;
+  }
   history.pushState({ javdl: "code", code, q: lastWorksQuery }, "", location.hash || "#/");
   runCodeSearch(code, { fromList: true });
 });
 
 $("back-to-works").addEventListener("click", () => {
+  if (javTrail.length) {
+    restoreJavFrame(javTrail.pop());
+    return;
+  }
+  if (fromWorks && lastWorks.length) {
+    showWorksList();
+    return;
+  }
   if (history.state && history.state.javdl === "code") {
     history.back();
     return;
@@ -1293,6 +1450,12 @@ $("meta-card").addEventListener("click", (e) => {
     commitSuck(suck);
     return;
   }
+  const browse = e.target.closest("[data-browse-url]");
+  if (browse && browse.dataset.browseUrl) {
+    javTrail.push(javDetailFrame());
+    loadJavBrowse(browse.dataset.browseUrl, browse.dataset.browseName || "", 1);
+    return;
+  }
   const img = e.target.closest("img[data-full]");
   if (!img) return;
   openLightbox(img.dataset.full || img.getAttribute("data-full"));
@@ -1343,7 +1506,7 @@ function renderWesternMeta(item) {
     return;
   }
   const tags = (item.tags || []).map((g) => `<span class="tag">${escapeHtml(g)}</span>`).join("");
-  const people = (item.performers || []).join("、");
+  const people = (item.performers || []).map((name) => browseButton(name, { facet: "performer" })).filter(Boolean).join("、");
   card.hidden = false;
   card.innerHTML = `
     <div class="meta-main">
@@ -1353,10 +1516,10 @@ function renderWesternMeta(item) {
         ${suckActions("western", item.id || "", item.title || "", !!(item.library && item.library.present), !!item.suck)}
         <h1>${escapeHtml(item.title || "")}</h1>
         <dl>
-          ${dlRow("片商", escapeHtml(item.site || ""))}
+          ${dlRow("片商", browseButton(item.site, { facet: "site" }))}
           ${dlRow("日期", escapeHtml(item.date || ""))}
           ${dlRow("时长", item.duration ? escapeHtml(item.duration + " 分钟") : "")}
-          ${dlRow("演员", escapeHtml(people))}
+          ${dlRow("演员", people)}
         </dl>
         ${tags ? `<div class="genre-row">${tags}</div>` : ""}
         ${item.description ? `<p class="summary">${escapeHtml(item.description)}</p>` : ""}
@@ -1393,12 +1556,148 @@ function renderWesternResources(items) {
     </article>`).join("");
 }
 
+function westernListFrame() {
+  return {
+    type: "list",
+    items: westernItems,
+    mode: westernMode,
+    page: westernPage,
+    theme: westernTheme,
+    kind: westernKind,
+    query: $("western-input").value.trim(),
+    browse: westernBrowse ? { ...westernBrowse } : null,
+  };
+}
+
+function westernDetailFrame() {
+  return {
+    type: "detail",
+    item: westernCurrent,
+    resources: westernResources,
+    list: westernListFrame(),
+  };
+}
+
+function leaveWesternBrowse() {
+  westernTrail = [];
+  westernBrowse = null;
+  $("western-heading").textContent = "作品";
+}
+
+function restoreWestern(frame) {
+  westernView += 1;
+  if (frame.type === "detail") {
+    const list = frame.list || {};
+    westernItems = list.items || [];
+    westernMode = list.mode || "latest";
+    westernPage = list.page || 1;
+    westernTheme = list.theme || "";
+    westernKind = list.kind || westernKind;
+    westernBrowse = list.browse || null;
+    markSeg("western-kind", westernKind);
+    markThemes();
+    renderWesternMeta(frame.item);
+    renderWesternResources(frame.resources || []);
+    $("western-works-wrap").hidden = true;
+    $("western-feed").hidden = true;
+    $("western-themes").hidden = true;
+    $("western-back").hidden = false;
+    setStatus($("western-status"), "");
+    return;
+  }
+  westernItems = frame.items || [];
+  westernMode = frame.mode || "latest";
+  westernPage = frame.page || 1;
+  westernTheme = frame.theme || "";
+  westernKind = frame.kind || westernKind;
+  westernBrowse = frame.browse || null;
+  markSeg("western-kind", westernKind);
+  markThemes();
+  $("western-input").value = frame.query || "";
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-back").hidden = westernTrail.length > 0;
+  $("western-feed").hidden = false;
+  $("western-themes").hidden = westernMode === "browse";
+  $("western-heading").textContent = westernMode === "browse" && westernBrowse ? westernBrowse.name : "作品";
+  renderWesternWorks(westernItems);
+  if (westernMode === "browse" && westernBrowse) {
+    const target = westernBrowse;
+    renderPager($("western-pager"), westernPage, null, (next) => {
+      loadWesternBrowse(target.facet, target.name, next).catch((err) => {
+        setStatus($("western-status"), err.message, "bad");
+      });
+    });
+    setStatus($("western-status"), `${target.name} 的作品`, "good");
+    return;
+  }
+  if (westernMode === "search") {
+    renderPager($("western-pager"), westernPage, null, (next) => {
+      loadWesternSearch(frame.query || "", next).catch((err) => {
+        setStatus($("western-status"), err.message, "bad");
+      });
+    });
+  } else {
+    renderPager($("western-pager"), westernPage, null, (next) => loadWesternFeed(next));
+  }
+  const n = westernItems.length;
+  const latest = westernMode === "latest";
+  setStatus(
+    $("western-status"),
+    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部`) : (latest ? "没有更多了" : "没有搜到作品"),
+    n ? "good" : "bad",
+  );
+}
+
+async function loadWesternBrowse(facet, name, page) {
+  const view = ++westernView;
+  westernMode = "browse";
+  westernBrowse = { facet, name, page };
+  westernPage = page;
+  $("western-back").hidden = false;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  $("western-themes").hidden = true;
+  $("western-heading").textContent = name;
+  showSkeleton("western-works-wrap", "western-works");
+  setStatus($("western-status"), `正在列 ${name} 的作品…`);
+  try {
+    const params = new URLSearchParams({
+      facet,
+      name,
+      kind: westernKind,
+      page: String(page),
+    });
+    const data = await api("/api/western/browse?" + params.toString());
+    if (view !== westernView) return;
+    westernItems = data.items || [];
+    renderWesternWorks(westernItems);
+    renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => {
+      loadWesternBrowse(facet, name, next).catch((err) => {
+        setStatus($("western-status"), err.message, "bad");
+      });
+    });
+    const n = westernItems.length;
+    setStatus(
+      $("western-status"),
+      data.error || (n ? `${name} 的作品 · ${n} 部` : `${name} 没有作品`),
+      n && !data.error ? "good" : "bad",
+    );
+  } catch (err) {
+    if (view !== westernView) return;
+    $("western-works-wrap").hidden = true;
+    setStatus($("western-status"), err.message, "bad");
+  }
+}
+
 function showWesternList() {
   $("western-back").hidden = true;
   $("western-meta").hidden = true;
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
-  $("western-themes").hidden = false;
+  $("western-themes").hidden = westernMode === "browse";
+  $("western-heading").textContent = westernMode === "browse" && westernBrowse ? westernBrowse.name : "作品";
   renderWesternWorks(westernItems);
   const n = westernItems.length;
   const latest = westernMode === "latest";
@@ -1425,6 +1724,8 @@ function markThemes() {
 }
 
 async function loadWesternFeed(page) {
+  const view = ++westernView;
+  leaveWesternBrowse();
   westernMode = "latest";
   westernPage = page;
   $("western-back").hidden = true;
@@ -1436,6 +1737,7 @@ async function loadWesternFeed(page) {
   setStatus($("western-status"), "加载最新…");
   try {
     const data = await api(`/api/western/latest?${westernParams(page)}`);
+    if (view !== westernView) return;
     westernItems = data.items || [];
     renderWesternWorks(westernItems);
     renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => loadWesternFeed(next));
@@ -1446,6 +1748,7 @@ async function loadWesternFeed(page) {
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
+    if (view !== westernView) return;
     $("western-works-wrap").hidden = true;
     setStatus($("western-status"), err.message, "bad");
   }
@@ -1458,6 +1761,7 @@ function ensureWesternLatest() {
 }
 
 async function openWestern(id, kind, known = null) {
+  const view = ++westernView;
   const listed = known || westernItems.find((it) => String(it.id) === String(id)) || null;
   westernCurrent = listed;
   $("western-works-wrap").hidden = true;
@@ -1479,6 +1783,7 @@ async function openWestern(id, kind, known = null) {
     api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
     magnetPath ? api("/api/resources?" + magnetPath) : Promise.resolve({ items: [] }),
   ]);
+  if (view !== westernView) return;
   let msg = "";
   let tone = "";
   if (detail.status === "fulfilled") {
@@ -1531,6 +1836,8 @@ async function openWestern(id, kind, known = null) {
 }
 
 async function loadWesternSearch(q, page) {
+  const view = ++westernView;
+  leaveWesternBrowse();
   westernMode = "search";
   westernPage = page;
   $("western-back").hidden = true;
@@ -1540,6 +1847,7 @@ async function loadWesternSearch(q, page) {
   $("western-themes").hidden = false;
   setStatus($("western-status"), "查询中…");
   const data = await api(`/api/western/search?${westernParams(page, q)}`);
+  if (view !== westernView) return;
   westernItems = data.items || [];
   renderWesternWorks(westernItems);
   renderPager(
@@ -1562,6 +1870,12 @@ $("western-kind").addEventListener("click", (e) => {
   if (!btn) return;
   westernKind = btn.dataset.kind;
   markSeg("western-kind", westernKind);
+  if (westernMode === "browse" && westernBrowse) {
+    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1).catch((err) => {
+      setStatus($("western-status"), err.message, "bad");
+    });
+    return;
+  }
   if (westernMode === "search") {
     $("western-form").requestSubmit();
     return;
@@ -1608,16 +1922,22 @@ $("western-form").addEventListener("submit", async (e) => {
 $("western-works").addEventListener("click", (e) => {
   const card = e.target.closest("[data-id]");
   if (!card) return;
+  if (westernMode === "browse") westernTrail.push(westernListFrame());
   openWestern(card.dataset.id, card.dataset.kind || westernKind);
 });
 
 $("western-back-btn").addEventListener("click", () => {
+  if (westernTrail.length) {
+    restoreWestern(westernTrail.pop());
+    return;
+  }
   if (westernItems.length) showWesternList();
   else loadWesternFeed(1);
 });
 
 async function openWesternById(id) {
   westernBootstrapped = true;
+  leaveWesternBrowse();
   location.hash = "#/western";
   $("western-works-wrap").hidden = true;
   $("western-feed").hidden = true;
@@ -1688,6 +2008,14 @@ $("western-meta").addEventListener("click", (e) => {
   const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
   if (suck) {
     commitSuck(suck);
+    return;
+  }
+  const browse = e.target.closest("[data-browse-facet]");
+  if (browse && browse.dataset.browseName) {
+    westernTrail.push(westernDetailFrame());
+    loadWesternBrowse(browse.dataset.browseFacet, browse.dataset.browseName, 1).catch((err) => {
+      setStatus($("western-status"), err.message, "bad");
+    });
     return;
   }
   const img = e.target.closest("img[data-full]");
@@ -1891,6 +2219,7 @@ async function loadLibrary() {
 
 function openCodeDetail(code) {
   javBootstrapped = true;
+  leaveJavBrowse();
   javMode = "search";
   $("jav-pager").innerHTML = "";
   $("code-input").value = code;

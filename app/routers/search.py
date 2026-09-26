@@ -3,8 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.codes import normalize_code
+from app.follow import javbus_list_url, javbus_page_kind, javbus_page_url
 from app.library import attach_library, item_code
-from app.sources.javbus import CACHE_VER, MetadataError, fetch_latest, fetch_metadata, search_works
+from app.sources.javbus import (
+    CACHE_VER,
+    MetadataError,
+    fetch_javbus_html,
+    fetch_latest,
+    fetch_metadata,
+    parse_search,
+    search_works,
+)
 from app.sources.tpdb import is_excluded_orientation
 
 router = APIRouter()
@@ -36,6 +45,34 @@ async def jav_latest(
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {
         "kind": kind,
+        "page": page,
+        "items": attach_library(items, hits, marked),
+        "error": None,
+    }
+
+
+@router.get("/api/jav/browse")
+async def jav_browse(
+    request: Request,
+    url: str = Query(""),
+    page: int = Query(1, ge=1, le=50),
+):
+    target = javbus_list_url(url.strip())
+    if javbus_page_kind(target) not in ("actress", "series", "studio"):
+        raise HTTPException(400, "只能打开女优、系列、厂家或发行商页面")
+    settings = request.app.state.settings
+    try:
+        html = await fetch_javbus_html(settings, javbus_page_url(target, page))
+    except MetadataError as exc:
+        if page > 1 and exc.status == 404:
+            return {"page": page, "items": [], "error": None}
+        raise HTTPException(exc.status or 400, str(exc)) from exc
+    items = parse_search(html, settings.javbus_base)
+    library = request.app.state.library
+    db = request.app.state.db
+    hits = await library.get_many([it["code"] for it in items if it.get("code")])
+    marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
+    return {
         "page": page,
         "items": attach_library(items, hits, marked),
         "error": None,

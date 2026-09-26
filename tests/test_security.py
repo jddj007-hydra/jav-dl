@@ -14,6 +14,9 @@ def test_image_host_must_be_the_domain_itself():
     base = "https://www.javbus.com"
     assert _allowed("https://www.javbus.com/pics/a.jpg", base)
     assert _allowed("https://pics.dmm.co.jp/x.jpg", base)
+    assert _allowed("https://awsimgsrc.dmm.co.jp/pics_dig/a.jpg", base)
+    assert _allowed("https://image.mgstage.com/images/doc/docm/001/cap_e_0.jpg", base)
+    assert not _allowed("https://mgstage.com.evil.com/a.jpg", base)
     assert _allowed("https://cdn.theporndb.net/p.jpg", base)
     assert _allowed("https://pics.seejav.bid/a.jpg", base)
     assert _allowed("https://cdnbus.org/a.jpg", base)

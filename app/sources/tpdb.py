@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -192,16 +193,7 @@ async def _get_json(settings: Settings, path: str, params: dict | None = None) -
     return payload
 
 
-async def fetch_list(
-    settings: Settings,
-    kind: str,
-    page: int = 1,
-    query: str | None = None,
-    theme: str | None = None,
-) -> dict:
-    page = max(1, int(page))
-    params = list_params(page, query, theme)
-    payload = await _get_json(settings, list_path(kind), params)
+def _unpack_list(payload: dict, kind: str, page: int) -> dict:
     data = payload.get("data")
     if not isinstance(data, list):
         data = []
@@ -216,6 +208,22 @@ async def fetch_list(
         if isinstance(row, dict) and row.get("id")
     ]
     return {"items": items, "page": page, "last_page": max(last_page, page)}
+
+
+async def fetch_list(
+    settings: Settings,
+    kind: str,
+    page: int = 1,
+    query: str | None = None,
+    theme: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    page = max(1, int(page))
+    params = list_params(page, query, theme)
+    if extra:
+        params.update(extra)
+    payload = await _get_json(settings, list_path(kind), params)
+    return _unpack_list(payload, kind, page)
 
 
 def _exact_name(rows: list, name: str) -> dict | None:
@@ -246,6 +254,23 @@ async def _scenes(settings: Settings, extra: dict, page: int) -> list[dict]:
     payload = await _get_json(settings, "/scenes", {**list_params(page), **extra})
     rows = payload.get("data") if isinstance(payload.get("data"), list) else []
     return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
+
+
+async def fetch_facet(settings: Settings, kind: str, facet: str, name: str, page: int = 1) -> dict:
+    """Works for one performer or one site, matched by the exact catalog name."""
+    facet = (facet or "").strip().lower()
+    if facet not in ("performer", "site"):
+        raise TpdbError("类型无效")
+    name = (name or "").strip()
+    if not name:
+        raise TpdbError("请填写名字")
+    root = "/performers" if facet == "performer" else "/sites"
+    ident = await _named_id(settings, root, name)
+    page = max(1, int(page))
+    leaf = list_path(kind).strip("/")
+    path = f"{root}/{quote(ident, safe='')}/{leaf}"
+    payload = await _get_json(settings, path, {"page": page, "per_page": PER_PAGE})
+    return _unpack_list(payload, kind, page)
 
 
 async def scenes_for_performer(

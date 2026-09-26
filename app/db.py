@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS suck (
     created_at REAL NOT NULL,
     PRIMARY KEY (kind, key)
 );
+CREATE TABLE IF NOT EXISTS plays (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    last_played_at REAL NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 """
 
 DOWNLOAD_COLUMNS = (
@@ -99,12 +105,28 @@ LIBRARY_COLUMNS = (
     ("actors", "TEXT NOT NULL DEFAULT '[]'"),
     ("release_date", "TEXT NOT NULL DEFAULT ''"),
     ("added_at", "REAL NOT NULL DEFAULT 0"),
+    ("studio", "TEXT NOT NULL DEFAULT ''"),
+    ("genres", "TEXT NOT NULL DEFAULT '[]'"),
+    ("outline", "TEXT NOT NULL DEFAULT ''"),
+    ("runtime_min", "INTEGER NOT NULL DEFAULT 0"),
+    ("has_sub", "INTEGER NOT NULL DEFAULT 0"),
+    ("has_uncensored", "INTEGER NOT NULL DEFAULT 0"),
+    ("has_cracked", "INTEGER NOT NULL DEFAULT 0"),
+    ("video", "TEXT NOT NULL DEFAULT ''"),
+    ("video_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("video_size", "INTEGER NOT NULL DEFAULT 0"),
+    ("poster", "TEXT NOT NULL DEFAULT ''"),
+    ("series", "TEXT NOT NULL DEFAULT ''"),
 )
 
 WESTERN_COLUMNS = (
     ("actors", "TEXT NOT NULL DEFAULT '[]'"),
     ("release_date", "TEXT NOT NULL DEFAULT ''"),
     ("added_at", "REAL NOT NULL DEFAULT 0"),
+    ("runtime_min", "INTEGER NOT NULL DEFAULT 0"),
+    ("year", "INTEGER NOT NULL DEFAULT 0"),
+    ("resolution", "TEXT NOT NULL DEFAULT ''"),
+    ("poster", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -133,7 +155,35 @@ def _library_row(row: dict, now: float) -> dict:
         "release_date": row.get("release_date") or "",
         "added_at": float(row.get("added_at") or now),
         "updated_at": now,
+        "studio": row.get("studio") or "",
+        "genres": _actors_json(row.get("genres")),
+        "outline": row.get("outline") or "",
+        "runtime_min": _as_int(row.get("runtime_min")),
+        "has_sub": 1 if row.get("has_sub") else 0,
+        "has_uncensored": 1 if row.get("has_uncensored") else 0,
+        "has_cracked": 1 if row.get("has_cracked") else 0,
+        "video": row.get("video") or "",
+        "video_count": _as_int(row.get("video_count")),
+        "video_size": _as_int(row.get("video_size")),
+        "poster": row.get("poster") or "",
+        "series": (row.get("series") or "")[:200],
     }
+
+
+async def _play_times(db, kind: str) -> dict[str, float]:
+    cur = await db.execute(
+        "SELECT key, last_played_at FROM plays WHERE kind = ?",
+        (kind,),
+    )
+    rows = await cur.fetchall()
+    return {row["key"]: float(row["last_played_at"] or 0) for row in rows}
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _western_row(row: dict, now: float) -> dict:
@@ -148,6 +198,10 @@ def _western_row(row: dict, now: float) -> dict:
         "release_date": row.get("release_date") or "",
         "added_at": float(row.get("added_at") or now),
         "updated_at": now,
+        "runtime_min": _as_int(row.get("runtime_min")),
+        "year": _as_int(row.get("year")),
+        "resolution": row.get("resolution") or "",
+        "poster": row.get("poster") or "",
     }
 
 
@@ -276,9 +330,15 @@ class Database:
             await db.executemany(
                 """INSERT INTO library
                    (code, month, path, has_video, has_nfo, has_poster,
-                    title, actors, release_date, added_at, updated_at)
+                    title, actors, release_date, added_at, updated_at,
+                    studio, genres, outline, runtime_min,
+                    has_sub, has_uncensored, has_cracked,
+                    video, video_count, video_size, poster, series)
                    VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster,
-                    :title, :actors, :release_date, :added_at, :updated_at)""",
+                    :title, :actors, :release_date, :added_at, :updated_at,
+                    :studio, :genres, :outline, :runtime_min,
+                    :has_sub, :has_uncensored, :has_cracked,
+                    :video, :video_count, :video_size, :poster, :series)""",
                 [_library_row(row, now) for row in rows],
             )
             await db.commit()
@@ -289,9 +349,15 @@ class Database:
             await db.execute(
                 """INSERT INTO library
                    (code, month, path, has_video, has_nfo, has_poster,
-                    title, actors, release_date, added_at, updated_at)
+                    title, actors, release_date, added_at, updated_at,
+                    studio, genres, outline, runtime_min,
+                    has_sub, has_uncensored, has_cracked,
+                    video, video_count, video_size, poster, series)
                    VALUES (:code, :month, :path, :has_video, :has_nfo, :has_poster,
-                    :title, :actors, :release_date, :added_at, :updated_at)
+                    :title, :actors, :release_date, :added_at, :updated_at,
+                    :studio, :genres, :outline, :runtime_min,
+                    :has_sub, :has_uncensored, :has_cracked,
+                    :video, :video_count, :video_size, :poster, :series)
                    ON CONFLICT(code) DO UPDATE SET
                      month=excluded.month,
                      path=excluded.path,
@@ -302,7 +368,19 @@ class Database:
                      actors=excluded.actors,
                      release_date=excluded.release_date,
                      added_at=excluded.added_at,
-                     updated_at=excluded.updated_at""",
+                     updated_at=excluded.updated_at,
+                     studio=excluded.studio,
+                     genres=excluded.genres,
+                     outline=excluded.outline,
+                     runtime_min=excluded.runtime_min,
+                     has_sub=excluded.has_sub,
+                     has_uncensored=excluded.has_uncensored,
+                     has_cracked=excluded.has_cracked,
+                     video=excluded.video,
+                     video_count=excluded.video_count,
+                     video_size=excluded.video_size,
+                     poster=excluded.poster,
+                     series=excluded.series""",
                 payload,
             )
             await db.commit()
@@ -311,8 +389,11 @@ class Database:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM library ORDER BY month DESC, code")
-            rows = await cur.fetchall()
-        return [dict(row) for row in rows]
+            rows = [dict(row) for row in await cur.fetchall()]
+            played = await _play_times(db, "jav")
+        for row in rows:
+            row["last_played_at"] = played.get(row.get("code") or "", 0)
+        return rows
 
     async def get_library(self, code: str) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
@@ -343,9 +424,11 @@ class Database:
                 await db.executemany(
                     """INSERT INTO western_library
                        (path, tpdb_id, studio, title, has_nfo, has_poster,
-                        actors, release_date, added_at, updated_at)
+                        actors, release_date, added_at, updated_at,
+                        runtime_min, year, resolution, poster)
                        VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
-                        :actors, :release_date, :added_at, :updated_at)""",
+                        :actors, :release_date, :added_at, :updated_at,
+                        :runtime_min, :year, :resolution, :poster)""",
                     [_western_row(row, now) for row in rows],
                 )
             await db.commit()
@@ -356,9 +439,11 @@ class Database:
             await db.execute(
                 """INSERT INTO western_library
                    (path, tpdb_id, studio, title, has_nfo, has_poster,
-                    actors, release_date, added_at, updated_at)
+                    actors, release_date, added_at, updated_at,
+                    runtime_min, year, resolution, poster)
                    VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
-                    :actors, :release_date, :added_at, :updated_at)
+                    :actors, :release_date, :added_at, :updated_at,
+                    :runtime_min, :year, :resolution, :poster)
                    ON CONFLICT(path) DO UPDATE SET
                      tpdb_id=excluded.tpdb_id,
                      studio=excluded.studio,
@@ -368,7 +453,11 @@ class Database:
                      actors=excluded.actors,
                      release_date=excluded.release_date,
                      added_at=excluded.added_at,
-                     updated_at=excluded.updated_at""",
+                     updated_at=excluded.updated_at,
+                     runtime_min=excluded.runtime_min,
+                     year=excluded.year,
+                     resolution=excluded.resolution,
+                     poster=excluded.poster""",
                 payload,
             )
             await db.commit()
@@ -379,8 +468,11 @@ class Database:
             cur = await db.execute(
                 "SELECT * FROM western_library ORDER BY studio, title"
             )
-            rows = await cur.fetchall()
-        return [dict(row) for row in rows]
+            rows = [dict(row) for row in await cur.fetchall()]
+            played = await _play_times(db, "western")
+        for row in rows:
+            row["last_played_at"] = played.get(row.get("tpdb_id") or "", 0)
+        return rows
 
     async def western_by_ids(self, ids: list[str]) -> dict[str, dict]:
         uniq = [item for item in dict.fromkeys(ids) if item]
@@ -398,6 +490,17 @@ class Database:
         for row in rows:
             found.setdefault(row["tpdb_id"], dict(row))
         return found
+
+    async def mark_played(self, kind: str, key: str) -> float:
+        now = time.time()
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO plays (kind, key, last_played_at) VALUES (?, ?, ?)
+                   ON CONFLICT(kind, key) DO UPDATE SET last_played_at = excluded.last_played_at""",
+                (kind, key, now),
+            )
+            await db.commit()
+        return now
 
     async def mark_suck(self, kind: str, key: str, title: str) -> None:
         async with aiosqlite.connect(self.path) as db:

@@ -365,6 +365,9 @@ def _commit_western(
     _discard_slug(Path(job.get("dest") or ""), settings.download_dir)
     title = meta.get("title") or ""
     tpdb_id = (meta.get("uniqueid") or "").strip()
+    from app.library import western_catalog_fields
+
+    release = (meta.get("release_date") or "").strip()
     return {
         "path": str(folder),
         "videos": [str(path) for path in written],
@@ -377,7 +380,13 @@ def _commit_western(
             "has_nfo": 1,
             "has_poster": 1 if poster else 0,
             "actors": meta.get("actors") or [],
-            "release_date": (meta.get("release_date") or "").strip(),
+            "release_date": release,
+            **western_catalog_fields(
+                f"{folder.name}/{path.name}",
+                release,
+                meta.get("runtime") or "",
+                bool(poster),
+            ),
         } for path in written],
     }
 

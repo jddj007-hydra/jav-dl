@@ -13,7 +13,7 @@ from app.httputil import site_client
 DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
 
 AGE_COOKIE = "age=verified; existmag=all"
-CACHE_VER = "v2"
+CACHE_VER = "v3"
 
 
 class MetadataError(Exception):
@@ -55,6 +55,15 @@ def _first_link_or_text(field: dict | None) -> str:
     if field.get("links"):
         return field["links"][0]["name"]
     return (field.get("text") or "").strip()
+
+
+def _named_link(field: dict | None) -> tuple[str, str]:
+    if not field:
+        return "", ""
+    links = field.get("links") or []
+    if links:
+        return links[0]["name"], links[0].get("url") or ""
+    return (field.get("text") or "").strip(), ""
 
 
 def parse_javbus(html: str, base: str, code: str) -> dict:
@@ -113,6 +122,10 @@ def parse_javbus(html: str, base: str, code: str) -> dict:
             if name and name != "多選提交" and name not in genres:
                 genres.append(name)
 
+    studio, studio_url = _named_link(fields.get("製作商") or fields.get("制作商"))
+    label, label_url = _named_link(fields.get("發行商") or fields.get("发行商"))
+    series, series_url = _named_link(fields.get("系列"))
+
     samples: list[dict] = []
     for a in soup.select("#sample-waterfall a.sample-box, a.sample-box"):
         img = a.find("img")
@@ -127,9 +140,12 @@ def parse_javbus(html: str, base: str, code: str) -> dict:
         "title": title,
         "cover": cover,
         "actors": actors,
-        "studio": _first_link_or_text(fields.get("製作商") or fields.get("制作商")),
-        "label": _first_link_or_text(fields.get("發行商") or fields.get("发行商")),
-        "series": _first_link_or_text(fields.get("系列")),
+        "studio": studio,
+        "studio_url": studio_url,
+        "label": label,
+        "label_url": label_url,
+        "series": series,
+        "series_url": series_url,
         "director": _first_link_or_text(fields.get("導演") or fields.get("导演")),
         "release_date": (fields.get("發行日期") or fields.get("发行日期") or {}).get("text") or "",
         "runtime": (fields.get("長度") or fields.get("长度") or {}).get("text") or "",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
@@ -43,7 +44,16 @@ def nfo_title(text: str) -> str:
 
 
 def nfo_fields(text: str) -> dict:
-    empty = {"title": "", "actors": [], "release_date": ""}
+    empty = {
+        "title": "",
+        "actors": [],
+        "release_date": "",
+        "studio": "",
+        "genres": [],
+        "outline": "",
+        "runtime_min": 0,
+        "series": "",
+    }
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
@@ -65,7 +75,186 @@ def nfo_fields(text: str) -> dict:
         if value:
             release = value
             break
-    return {"title": title, "actors": actors, "release_date": release}
+    genres = []
+    for tag in ("genre", "tag"):
+        for el in root.iter(tag):
+            name = (el.text or "").strip()
+            if name and name not in genres:
+                genres.append(name)
+    outline = (root.findtext("outline") or root.findtext("plot") or "").strip()
+    if len(outline) > 8000:
+        outline = outline[:8000]
+    return {
+        "title": title,
+        "actors": actors,
+        "release_date": release,
+        "studio": (root.findtext("studio") or root.findtext("maker") or "").strip(),
+        "genres": genres,
+        "outline": outline,
+        "runtime_min": runtime_minutes(root.findtext("runtime")),
+        "series": _series_name(root),
+    }
+
+
+def _series_name(root) -> str:
+    for element in root.iter("set"):
+        name = (element.findtext("name") or "").strip()
+        if name:
+            return name[:200]
+        text = (element.text or "").strip()
+        if text:
+            return text[:200]
+    return ((root.findtext("series") or "").strip())[:200]
+
+
+def runtime_minutes(value: object) -> int:
+    match = re.search(r"(\d+)", str(value or ""))
+    if not match:
+        return 0
+    minutes = int(match.group(1))
+    if minutes <= 0 or minutes >= 1000:
+        return 0
+    return minutes
+
+
+def year_of(release: str) -> int:
+    text = (release or "")[:4]
+    if len(text) < 4 or not text.isdigit():
+        return 0
+    year = int(text)
+    if year < 1900 or year > 2100:
+        return 0
+    return year
+
+
+_RES_RE = re.compile(r"(?i)(?:^|[^0-9])(2160|1440|1080|720|480|360)p(?:[^a-z0-9]|$)")
+_FOUR_K_RE = re.compile(r"(?i)(?:^|[^a-z0-9])4k(?:[^a-z0-9]|$)")
+
+
+def resolution_of(name: str) -> str:
+    match = _RES_RE.search(name or "")
+    if match:
+        return f"{match.group(1)}p"
+    if _FOUR_K_RE.search(name or ""):
+        return "4k"
+    return ""
+
+
+def release_flags(names: list[str], genres: list[str]) -> dict:
+    has_sub = False
+    uncensored = False
+    cracked = False
+    for name in names:
+        stem = Path(name).stem
+        low = stem.lower()
+        if low.endswith("-uc") or low.endswith("-c"):
+            has_sub = True
+        if (
+            "破解" in stem
+            or "uncensored" in low
+            or "流出" in stem
+            or low.endswith("-uc")
+            or low.endswith("-u")
+        ):
+            cracked = True
+    for genre in genres:
+        if "中文字幕" in genre or genre == "字幕":
+            has_sub = True
+        if "无码" in genre or "無碼" in genre:
+            uncensored = True
+        if "破解" in genre or "流出" in genre:
+            cracked = True
+    return {
+        "has_sub": 1 if has_sub else 0,
+        "has_uncensored": 1 if uncensored else 0,
+        "has_cracked": 1 if cracked else 0,
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _pick_nfo(files: list[Path], code: str) -> Path | None:
+    nfos = [path for path in files if path.is_file() and path.suffix.lower() == ".nfo"]
+    exact = None
+    sub = None
+    wanted = code.lower()
+    for path in nfos:
+        stem = path.stem.lower()
+        if stem == wanted:
+            exact = path
+        elif stem == f"{wanted}-c":
+            sub = path
+    if exact is not None:
+        return exact
+    if sub is not None:
+        return sub
+    if not nfos:
+        return None
+    return max(nfos, key=_file_size)
+
+
+def index_code_dir(code_dir: Path, month: str) -> dict | None:
+    code = normalize_code(code_dir.name) or code_dir.name.strip().upper()
+    if not code:
+        return None
+    try:
+        files = [path for path in code_dir.iterdir() if path.is_file()]
+    except OSError:
+        return None
+    videos = [path for path in files if is_video(path)]
+    if not videos:
+        return None
+    mains = [path for path in videos if "sample" not in path.stem.lower()]
+    pool = mains or videos
+    main = max(pool, key=_file_size)
+    nfo = _pick_nfo(files, code)
+    poster = next((path for path in files if path.name.lower() in POSTER_NAMES), None)
+    fields = nfo_fields(_read_text(nfo)) if nfo else nfo_fields("")
+    rel = f"{month}/{code_dir.name}"
+    flags = release_flags(
+        [code_dir.name, main.name, nfo.name if nfo else ""],
+        fields["genres"],
+    )
+    return {
+        "code": code,
+        "month": month,
+        "path": rel,
+        "has_video": 1,
+        "has_nfo": 1 if nfo else 0,
+        "has_poster": 1 if poster else 0,
+        "title": fields["title"],
+        "actors": fields["actors"],
+        "release_date": fields["release_date"],
+        "added_at": max(_mtime(path) or 1.0 for path in videos),
+        "studio": fields["studio"],
+        "genres": fields["genres"],
+        "outline": fields["outline"],
+        "runtime_min": fields["runtime_min"],
+        "video": f"{rel}/{main.name}",
+        "video_count": len(pool),
+        "video_size": _file_size(main),
+        "poster": f"{rel}/{poster.name}" if poster else "",
+        "series": fields["series"],
+        **flags,
+    }
+
+
+def western_catalog_fields(path: str, release_date: str, runtime: object, has_poster: bool) -> dict:
+    pure = PurePosixPath(path)
+    poster = ""
+    if has_poster and pure.name:
+        poster = str(pure.with_name(f"{pure.stem}-poster.jpg"))
+    return {
+        "runtime_min": runtime_minutes(runtime),
+        "year": year_of(release_date),
+        "resolution": resolution_of(pure.name),
+        "poster": poster,
+    }
 
 
 def _mtime(path: Path) -> float:
@@ -198,45 +387,13 @@ def scan_media(media_dir: Path) -> list[dict]:
         for code_dir in sorted(month_dir.iterdir()):
             if not code_dir.is_dir():
                 continue
-            code = normalize_code(code_dir.name) or code_dir.name.strip().upper()
-            if not code:
+            row = index_code_dir(code_dir, month_dir.name)
+            if row is None:
                 continue
-            added_at = 0.0
-            nfo: Path | None = None
-            has_poster = False
-            try:
-                files = list(code_dir.iterdir())
-            except OSError:
+            prev = found.get(row["code"])
+            if prev and prev["month"] > row["month"]:
                 continue
-            for path in files:
-                if not path.is_file():
-                    continue
-                name = path.name.lower()
-                if is_video(path):
-                    added_at = max(added_at, _mtime(path) or 1.0)
-                elif path.suffix.lower() == ".nfo":
-                    nfo = nfo or path
-                elif name in POSTER_NAMES:
-                    has_poster = True
-            if not added_at:
-                continue
-            rel = f"{month_dir.name}/{code_dir.name}"
-            prev = found.get(code)
-            if prev and prev["month"] > month_dir.name:
-                continue
-            fields = nfo_fields(_read_text(nfo)) if nfo else {}
-            found[code] = {
-                "code": code,
-                "month": month_dir.name,
-                "path": rel,
-                "has_video": 1,
-                "has_nfo": 1 if nfo else 0,
-                "has_poster": 1 if has_poster else 0,
-                "title": fields.get("title") or "",
-                "actors": fields.get("actors") or [],
-                "release_date": fields.get("release_date") or "",
-                "added_at": added_at,
-            }
+            found[row["code"]] = row
     return list(found.values())
 
 
@@ -255,8 +412,9 @@ def scan_western(root: Path | None) -> list[dict]:
             poster = by_name.get(f"{video.stem.lower()}-poster.jpg")
             text = _read_text(nfo)
             fields = nfo_fields(text)
+            rel = f"{studio.name}/{video.name}"
             rows.append({
-                "path": f"{studio.name}/{video.name}",
+                "path": rel,
                 "tpdb_id": tpdb_id_from_nfo(text),
                 "studio": studio.name,
                 "title": fields["title"] or video.stem,
@@ -265,6 +423,7 @@ def scan_western(root: Path | None) -> list[dict]:
                 "actors": fields["actors"],
                 "release_date": fields["release_date"],
                 "added_at": _mtime(video),
+                **western_catalog_fields(rel, fields["release_date"], fields["runtime_min"], poster is not None),
             })
     return rows
 

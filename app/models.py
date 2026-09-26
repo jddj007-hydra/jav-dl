@@ -49,6 +49,11 @@ class BatchEnqueue(BaseModel):
     items: list[BatchEnqueueItem] = Field(default_factory=list)
 
 
+class PlayMark(BaseModel):
+    kind: str = ""
+    key: str = ""
+
+
 class SuckMark(BaseModel):
     kind: str = ""
     key: str = ""

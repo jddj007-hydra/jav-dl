@@ -17,6 +17,7 @@ ALLOWED_SUFFIXES = (
     "javbus.org",
     "dmm.co.jp",
     "dmm.com",
+    "mgstage.com",
     "theporndb.net",
     "metadataapi.net",
 )
