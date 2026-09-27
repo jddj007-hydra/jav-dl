@@ -11,12 +11,77 @@ from app.sources.javbus import (
     fetch_javbus_html,
     fetch_latest,
     fetch_metadata,
+    is_omnibus_work,
     parse_search,
     search_works,
 )
 from app.sources.tpdb import is_excluded_orientation
 
 router = APIRouter()
+
+# One actress wall page. JavBus lists about 30 credits per page, newest first.
+_ACTRESS_PAGE = 30
+# Stop scanning so a star with hundreds of omnibus discs cannot walk the whole catalog.
+_ACTRESS_SCAN_CAP = 20
+
+
+async def _actress_cache(db, key: str, ttl: int) -> dict | None:
+    getter = getattr(db, "get_metadata", None)
+    if getter is None:
+        return None
+    payload = await getter(key, ttl)
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return None
+    return payload
+
+
+async def _save_actress_cache(db, key: str, payload: dict) -> None:
+    setter = getattr(db, "put_metadata", None)
+    if setter is None:
+        return
+    await setter(key, payload)
+
+
+async def actress_works(settings, db, list_url: str, page: int) -> list[dict]:
+    """Solo titles for one wall page, reading later star pages until this page fills."""
+    key = f"actress-solo:v1:{list_url}"
+    cached = await _actress_cache(db, key, settings.latest_ttl)
+    items = list(cached["items"]) if cached else []
+    scanned = int(cached.get("scanned") or 0) if cached else 0
+    exhausted = bool(cached.get("exhausted")) if cached else False
+    need = page * _ACTRESS_PAGE
+    while len(items) < need and not exhausted and scanned < _ACTRESS_SCAN_CAP:
+        scanned += 1
+        try:
+            html = await fetch_javbus_html(settings, javbus_page_url(list_url, scanned))
+        except MetadataError as exc:
+            if scanned == 1:
+                raise
+            if exc.status == 404 or items:
+                exhausted = True
+                break
+            raise
+        batch = parse_search(html, settings.javbus_base)
+        if not batch:
+            exhausted = True
+            break
+        seen = {it.get("code") for it in items}
+        fresh = False
+        for it in batch:
+            code = it.get("code")
+            if not code or code in seen:
+                continue
+            fresh = True
+            seen.add(code)
+            if is_omnibus_work(it):
+                continue
+            items.append(it)
+        if not fresh:
+            exhausted = True
+            break
+    await _save_actress_cache(db, key, {"items": items, "scanned": scanned, "exhausted": exhausted})
+    start = (page - 1) * _ACTRESS_PAGE
+    return items[start : start + _ACTRESS_PAGE]
 
 
 @router.get("/api/jav/latest")
@@ -58,18 +123,22 @@ async def jav_browse(
     page: int = Query(1, ge=1, le=50),
 ):
     target = javbus_list_url(url.strip())
-    if javbus_page_kind(target) not in ("actress", "series", "studio", "genre"):
+    kind = javbus_page_kind(target)
+    if kind not in ("actress", "series", "studio", "genre"):
         raise HTTPException(400, "只能打开女优、系列、厂家、发行商或类别页面")
     settings = request.app.state.settings
+    db = request.app.state.db
     try:
-        html = await fetch_javbus_html(settings, javbus_page_url(target, page))
+        if kind == "actress":
+            items = await actress_works(settings, db, target, page)
+        else:
+            html = await fetch_javbus_html(settings, javbus_page_url(target, page))
+            items = parse_search(html, settings.javbus_base)
     except MetadataError as exc:
         if page > 1 and exc.status == 404:
             return {"page": page, "items": [], "error": None}
         raise HTTPException(exc.status or 400, str(exc)) from exc
-    items = parse_search(html, settings.javbus_base)
     library = request.app.state.library
-    db = request.app.state.db
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {

@@ -12,6 +12,30 @@ from app.httputil import site_client
 
 DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
 _THUMB_RE = re.compile(r"/pics/thumb/([^/?#]+)\.(jpe?g|png|webp)(?=$|[?#])", re.I)
+# These labels only release omnibus discs. List cards have no genre, and the title
+# often never says ベスト. Regular labels such as SSIS / MIDA / IPZZ are not here.
+_OMNIBUS_PREFIXES = frozenset({
+    "OFJE", "ONSD", "IDBD", "MIZD", "HNDB", "KWBD", "IPOK", "RBB", "PBD",
+    "PPBD", "KIBD",
+})
+_OMNIBUS_TITLE = re.compile(
+    r"ベスト|best|総集|合集|全集|打包|コンプリート|complete|メモリアル|memorial|"
+    r"お得セット|girls\s*collection|全\d+\s*(?:タイトル|作品)|"
+    r"(?<![a-z0-9])box(?![a-z0-9])",
+    re.I,
+)
+_OMNIBUS_COUNT = re.compile(
+    r"(?:[2-9]\d|\d{3,})\s*(?:本番|連発)|"
+    r"(?:[1-9]\d|\d{3,})\s*(?:タイトル|作品)|"
+    r"収録|福袋|永久保存|女体図鑑|女たち|オンナたち"
+)
+# 8時間 / 10時間SP is a disc length. 20時間犯 is one scene, so 犯・後 stay.
+_OMNIBUS_HOURS = re.compile(r"(\d+)\s*時間(?!犯|後|以内|以上|目)")
+_OMNIBUS_MINUTES = re.compile(r"(\d+)\s*分")
+_OMNIBUS_CAST = re.compile(
+    r"(?:[5-9]|\d{2,})\s*(?:選|射精|名)|"
+    r"(?:女|美女|女優|女子|女の子|ギャル|人妻|娘たち)\D{0,6}(?:[1-9]\d|\d{3,})\s*人"
+)
 
 AGE_COOKIE = "age=verified; existmag=all"
 CACHE_VER = "v4"
@@ -222,6 +246,22 @@ def _genres(soup, fields: dict, base: str) -> list[dict]:
             continue
         add(a.get_text(strip=True), _abs(base, href))
     return found
+
+
+def is_omnibus_work(item: dict) -> bool:
+    """Actress pages list every credit, so publisher omnibus discs crowd out her own titles."""
+    code = (item.get("code") or "").upper()
+    prefix = code.split("-", 1)[0]
+    if prefix in _OMNIBUS_PREFIXES:
+        return True
+    title = item.get("title") or ""
+    if _OMNIBUS_TITLE.search(title) or _OMNIBUS_COUNT.search(title) or _OMNIBUS_CAST.search(title):
+        return True
+    hours = [int(n) for n in _OMNIBUS_HOURS.findall(title)]
+    if any(n >= 4 for n in hours):
+        return True
+    minutes = [int(n) for n in _OMNIBUS_MINUTES.findall(title)]
+    return any(n >= 360 for n in minutes)
 
 
 def javbus_page_kind(url: str) -> str | None:

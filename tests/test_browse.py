@@ -44,7 +44,7 @@ def test_jav_browse_reads_the_star_page(monkeypatch):
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            ok = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/star/2xi/3", "page": 2})
+            ok = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/star/2xi/3", "page": 1})
             assert ok.status_code == 200
             body = ok.json()
             assert body["items"][0]["code"] == "SSIS-001"
@@ -56,9 +56,73 @@ def test_jav_browse_reads_the_star_page(monkeypatch):
 
     asyncio.run(run())
     assert seen == [
+        "https://www.javbus.com/star/2xi",
         "https://www.javbus.com/star/2xi/2",
         "https://www.javbus.com/genre/3n/2",
     ]
+
+
+def test_omnibus_titles_and_best_labels():
+    from app.sources.javbus import is_omnibus_work
+
+    assert is_omnibus_work({"code": "OFJE-712", "title": "汗だくボディ"})
+    assert is_omnibus_work({"code": "SSIS-100", "title": "三上悠亜 12時間BEST"})
+    assert is_omnibus_work({"code": "SSIS-100", "title": "突き上げピストンBEST"})
+    assert is_omnibus_work({"code": "ABP-001", "title": "まとめ抜けるお得セット"})
+    assert is_omnibus_work({"code": "CADV-952", "title": "ショートカット美女編8時間"})
+    assert is_omnibus_work({"code": "IPVR-327", "title": "ゼロ距離で耳元囁き犯してくれる10時間SP"})
+    assert is_omnibus_work({"code": "MMPB-084", "title": "騎乗位の天才20選"})
+    assert is_omnibus_work({"code": "MKCK-410", "title": "爆乳女優30名が男の欲望を同時に叶える"})
+    assert is_omnibus_work({"code": "HNVR-153", "title": "女の子64人と連続でリアル生SEX"})
+    assert not is_omnibus_work({"code": "SSIS-777", "title": "20時間犯られ続ける"})
+    assert not is_omnibus_work({"code": "SSNI-142", "title": "童貞13人が極上ボディ"})
+    assert not is_omnibus_work({"code": "MIDA-766", "title": "学園アイドル 小野六花"})
+    assert not is_omnibus_work({"code": "IPZZ-672", "title": "温泉旅館で相部屋"})
+    assert is_omnibus_work({"code": "DFBVR-003", "title": "人気女優！ 15作品収録 お腹いっぱい811分！"})
+    assert is_omnibus_work({"code": "BF-772", "title": "徹底的にドM調教された女たち"})
+    assert is_omnibus_work({"code": "PPBD-271", "title": "巨乳で絶倫のお姉さんに寝取られてしまったボク"})
+    assert not is_omnibus_work({"code": "SIVR-271", "title": "引退直前Special"})
+    assert not is_omnibus_work({"code": "SSIS-737", "title": "120分120回イク！究極のワンカット"})
+    assert not is_omnibus_work({"code": "IPVR-328", "title": "2SEX 130分！ 現役保母さん監修"})
+    assert not is_omnibus_work({"code": "BF-400", "title": "現役名門女子大生AVデビュー"})
+
+
+def test_actress_browse_skips_omnibus_and_reads_the_next_page(monkeypatch):
+    def box(code, title):
+        return f"""
+        <a class="movie-box" href="https://www.javbus.com/{code}">
+          <div class="photo-frame"><img src="/pics/thumb/x.jpg" title="{title}"></div>
+          <div class="photo-info"><span>{title}<br><date>{code}</date> / <date>2024-01-01</date></span></div>
+        </a>
+        """
+
+    pages = {
+        "https://www.javbus.com/star/okq": box("OFJE-712", "汗だく") + box("OFJE-100", "12時間BEST"),
+        "https://www.javbus.com/star/okq/2": box("SSIS-834", "最後の1日") + box("IDBD-001", "単体の一日"),
+        "https://www.javbus.com/star/okq/3": "",
+        "https://www.javbus.com/studio/7q": box("OFJE-712", "汗だく"),
+    }
+
+    async def fake_html(settings, url):
+        return pages[url]
+
+    monkeypatch.setattr("app.routers.search.fetch_javbus_html", fake_html)
+    app = FastAPI()
+    app.include_router(search.router)
+    app.state.settings = Settings()
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            actress = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/star/okq", "page": 1})
+            assert actress.status_code == 200
+            assert [item["code"] for item in actress.json()["items"]] == ["SSIS-834"]
+            studio = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/studio/7q"})
+            assert [item["code"] for item in studio.json()["items"]] == ["OFJE-712"]
+
+    asyncio.run(run())
 
 
 def test_jav_browse_rejects_a_foreign_host(monkeypatch):
