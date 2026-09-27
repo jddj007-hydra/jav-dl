@@ -1516,7 +1516,7 @@ function renderWesternMeta(item) {
     card.innerHTML = "";
     return;
   }
-  const tags = (item.tags || []).map((g) => `<span class="tag">${escapeHtml(g)}</span>`).join("");
+  const tags = westernTagButtons(item);
   const people = (item.performers || []).map((name) => browseButton(name, { facet: "performer" })).filter(Boolean).join("、");
   card.hidden = false;
   card.innerHTML = `
@@ -1536,6 +1536,34 @@ function renderWesternMeta(item) {
         ${item.description ? `<p class="summary">${escapeHtml(item.description)}</p>` : ""}
       </div>
     </div>`;
+}
+
+function westernTagButtons(item) {
+  const refs = item.tag_refs && item.tag_refs.length
+    ? item.tag_refs
+    : (item.tags || []).map((name) => ({ name }));
+  return refs.map((tag) => {
+    const name = typeof tag === "string" ? tag : (tag && tag.name) || "";
+    if (!name) return "";
+    const ident = typeof tag === "string" ? "" : String((tag && tag.id) || "");
+    const idAttr = ident ? ` data-tag-id="${escapeHtml(ident)}"` : "";
+    return `<button type="button" class="tag" data-browse-facet="tag" data-browse-name="${escapeHtml(name)}"${idAttr}>${escapeHtml(name)}</button>`;
+  }).filter(Boolean).join("");
+}
+
+function westernThemeLabel() {
+  if (!westernTheme) return "";
+  const btn = [...document.querySelectorAll("#western-themes button")].find(
+    (el) => (el.dataset.theme || "") === westernTheme,
+  );
+  return btn ? btn.textContent.trim() : "";
+}
+
+function westernCountStatus(n, latest) {
+  const theme = westernThemeLabel();
+  const prefix = theme ? `${theme} · ` : "";
+  if (latest) return n ? `${prefix}最新 ${n} 部` : (theme ? `${theme} 没有更多了` : "没有更多了");
+  return n ? `${prefix}找到 ${n} 部` : "没有搜到作品";
 }
 
 function renderWesternResources(items) {
@@ -1635,7 +1663,7 @@ function restoreWestern(frame) {
   if (westernMode === "browse" && westernBrowse) {
     const target = westernBrowse;
     renderPager($("western-pager"), westernPage, null, (next) => {
-      loadWesternBrowse(target.facet, target.name, next).catch((err) => {
+      loadWesternBrowse(target.facet, target.name, next, target.tagId || "").catch((err) => {
         setStatus($("western-status"), err.message, "bad");
       });
     });
@@ -1653,17 +1681,14 @@ function restoreWestern(frame) {
   }
   const n = westernItems.length;
   const latest = westernMode === "latest";
-  setStatus(
-    $("western-status"),
-    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部`) : (latest ? "没有更多了" : "没有搜到作品"),
-    n ? "good" : "bad",
-  );
+  setStatus($("western-status"), westernCountStatus(n, latest), n ? "good" : "bad");
 }
 
-async function loadWesternBrowse(facet, name, page) {
+async function loadWesternBrowse(facet, name, page, tagId) {
   const view = ++westernView;
+  const ident = String(tagId || "");
   westernMode = "browse";
-  westernBrowse = { facet, name, page };
+  westernBrowse = { facet, name, page, tagId: ident };
   westernPage = page;
   $("western-back").hidden = false;
   $("western-meta").hidden = true;
@@ -1680,12 +1705,13 @@ async function loadWesternBrowse(facet, name, page) {
       kind: westernKind,
       page: String(page),
     });
+    if (ident) params.set("tag_id", ident);
     const data = await api("/api/western/browse?" + params.toString());
     if (view !== westernView) return;
     westernItems = data.items || [];
     renderWesternWorks(westernItems);
     renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => {
-      loadWesternBrowse(facet, name, next).catch((err) => {
+      loadWesternBrowse(facet, name, next, ident).catch((err) => {
         setStatus($("western-status"), err.message, "bad");
       });
     });
@@ -1710,13 +1736,7 @@ function showWesternList() {
   $("western-themes").hidden = westernMode === "browse";
   $("western-heading").textContent = westernMode === "browse" && westernBrowse ? westernBrowse.name : "作品";
   renderWesternWorks(westernItems);
-  const n = westernItems.length;
-  const latest = westernMode === "latest";
-  setStatus(
-    $("western-status"),
-    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部`) : (latest ? "没有更多了" : "没有搜到作品"),
-    n ? "good" : "bad",
-  );
+  setStatus($("western-status"), westernCountStatus(westernItems.length, westernMode === "latest"), westernItems.length ? "good" : "bad");
 }
 
 function westernParams(page, q) {
@@ -1755,7 +1775,7 @@ async function loadWesternFeed(page) {
     const n = westernItems.length;
     setStatus(
       $("western-status"),
-      data.error || (n ? `最新 ${n} 部` : "没有更多了"),
+      data.error || westernCountStatus(n, true),
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
@@ -1871,7 +1891,7 @@ async function loadWesternSearch(q, page) {
   );
   setStatus(
     $("western-status"),
-    data.error || (westernItems.length ? `找到 ${westernItems.length} 部` : "没有搜到作品"),
+    data.error || westernCountStatus(westernItems.length, false),
     westernItems.length && !data.error ? "good" : "bad",
   );
 }
@@ -1882,7 +1902,7 @@ $("western-kind").addEventListener("click", (e) => {
   westernKind = btn.dataset.kind;
   markSeg("western-kind", westernKind);
   if (westernMode === "browse" && westernBrowse) {
-    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1).catch((err) => {
+    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1, westernBrowse.tagId || "").catch((err) => {
       setStatus($("western-status"), err.message, "bad");
     });
     return;
@@ -2024,7 +2044,7 @@ $("western-meta").addEventListener("click", (e) => {
   const browse = e.target.closest("[data-browse-facet]");
   if (browse && browse.dataset.browseName) {
     westernTrail.push(westernDetailFrame());
-    loadWesternBrowse(browse.dataset.browseFacet, browse.dataset.browseName, 1).catch((err) => {
+    loadWesternBrowse(browse.dataset.browseFacet, browse.dataset.browseName, 1, browse.dataset.tagId || "").catch((err) => {
       setStatus($("western-status"), err.message, "bad");
     });
     return;

@@ -121,7 +121,7 @@ def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypat
             "last_page": 1,
         }
 
-    async def fake_facet(settings, kind, facet, name, page=1):
+    async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
         return {
             "items": [
                 {"id": "gay", "kind": kind, "duration": "40", "title": "Room", "tags": ["Gay"], "site": name, "performers": []},
@@ -153,9 +153,11 @@ def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypat
 
 def test_western_browse_uses_the_exact_performer(monkeypatch):
     seen = {}
+    calls = []
 
-    async def fake_facet(settings, kind, facet, name, page=1):
-        seen.update(kind=kind, facet=facet, name=name, page=page)
+    async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
+        seen.update(kind=kind, facet=facet, name=name, page=page, tag_id=tag_id)
+        calls.append(dict(seen))
         return {
             "items": [{
                 "id": "abc",
@@ -189,7 +191,12 @@ def test_western_browse_uses_the_exact_performer(monkeypatch):
             body = ok.json()
             assert body["items"][0]["id"] == "abc"
             assert body["last_page"] == 4
-            missing = await client.get("/api/western/browse", params={"facet": "tag", "name": "Jane"})
+            tagged = await client.get("/api/western/browse", params={
+                "facet": "tag", "name": "Massage", "tag_id": "135",
+            })
+            assert tagged.status_code == 200
+            assert tagged.json()["items"][0]["id"] == "abc"
+            missing = await client.get("/api/western/browse", params={"facet": "series", "name": "Jane"})
             assert missing.status_code == 400
             app.state.settings = Settings()
             quiet = await client.get("/api/western/browse", params={"facet": "site", "name": "Vixen"})
@@ -197,7 +204,8 @@ def test_western_browse_uses_the_exact_performer(monkeypatch):
             assert "ThePornDB" in quiet.json()["error"]
 
     asyncio.run(run())
-    assert seen == {"kind": "scene", "facet": "performer", "name": "Jane Doe", "page": 2}
+    assert calls[0] == {"kind": "scene", "facet": "performer", "name": "Jane Doe", "page": 2, "tag_id": ""}
+    assert calls[1] == {"kind": "scene", "facet": "tag", "name": "Massage", "page": 1, "tag_id": "135"}
 
 
 def test_fetch_facet_asks_theporndb_by_id(monkeypatch):
@@ -218,5 +226,33 @@ def test_fetch_facet_asks_theporndb_by_id(monkeypatch):
         payload = await fetch_facet(Settings(), "movie", "site", "Vixen", 1)
         assert payload["items"][0]["id"] == "m1"
         assert payload["last_page"] == 2
+
+    asyncio.run(run())
+
+
+def test_fetch_facet_tag_filters_scenes_by_id(monkeypatch):
+    async def fake_json(settings, path, params=None):
+        assert path == "/scenes"
+        assert params["tags[135]"] == "Massage"
+        assert params["duration"] == 15 * 60
+        assert params["orderBy"] == "recently_released"
+        return {
+            "data": [{
+                "id": "s1",
+                "title": "Rub",
+                "duration": 2000,
+                "tags": [{"id": 135, "name": "Massage"}],
+            }],
+            "meta": {"last_page": 3},
+        }
+
+    monkeypatch.setattr("app.sources.tpdb._get_json", fake_json)
+
+    async def run():
+        payload = await fetch_facet(Settings(), "scene", "tag", "Massage", 1, tag_id="135")
+        assert payload["items"][0]["id"] == "s1"
+        assert payload["items"][0]["tags"] == ["Massage"]
+        assert payload["items"][0]["tag_refs"] == [{"id": "135", "name": "Massage"}]
+        assert payload["last_page"] == 3
 
     asyncio.run(run())

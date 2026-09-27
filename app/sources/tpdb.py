@@ -124,22 +124,28 @@ def _performers(raw: dict) -> list[str]:
     return names
 
 
-def _tags(raw: dict) -> list[str]:
-    tags: list[str] = []
+def _tag_refs(raw: dict) -> list[dict]:
+    refs: list[dict] = []
+    seen: set[str] = set()
     for tag in raw.get("tags") or []:
         if isinstance(tag, dict):
             name = str(tag.get("name") or "").strip()
+            ident = str(tag.get("id") or "").strip()
         else:
             name = str(tag or "").strip()
-        if name and name not in tags:
-            tags.append(name)
-    return tags
+            ident = ""
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        refs.append({"id": ident, "name": name})
+    return refs
 
 
 def map_item(raw: dict, kind: str) -> dict:
     posters = raw.get("posters") if isinstance(raw.get("posters"), dict) else {}
     background = raw.get("background") if isinstance(raw.get("background"), dict) else {}
     cover = posters.get("large") or posters.get("medium") or posters.get("small") or ""
+    tags = _tag_refs(raw)
     return {
         "id": str(raw.get("id") or ""),
         "kind": kind,
@@ -150,7 +156,8 @@ def map_item(raw: dict, kind: str) -> dict:
         "cover": str(cover or ""),
         "background": str(background.get("full") or ""),
         "description": str(raw.get("description") or ""),
-        "tags": _tags(raw),
+        "tags": [ref["name"] for ref in tags],
+        "tag_refs": tags,
         "duration": duration_minutes(raw.get("duration")),
         "url": str(raw.get("url") or ""),
     }
@@ -256,17 +263,41 @@ async def _scenes(settings: Settings, extra: dict, page: int) -> list[dict]:
     return [map_item(row, "scene") for row in rows if isinstance(row, dict) and row.get("id")]
 
 
-async def fetch_facet(settings: Settings, kind: str, facet: str, name: str, page: int = 1) -> dict:
-    """Works for one performer or one site, matched by the exact catalog name."""
+async def _named_tag(settings: Settings, name: str) -> tuple[str, str]:
+    payload = await _get_json(settings, "/tags", {"q": name, "per_page": 30})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    match = _exact_name(rows, name)
+    if not match or not str(match.get("id") or "").strip():
+        raise TpdbError(f"没有找到 {name}")
+    return str(match["id"]), str(match.get("name") or name)
+
+
+async def fetch_facet(
+    settings: Settings,
+    kind: str,
+    facet: str,
+    name: str,
+    page: int = 1,
+    tag_id: str = "",
+) -> dict:
+    """Works for one performer, site, or tag, matched by the exact catalog name."""
     facet = (facet or "").strip().lower()
-    if facet not in ("performer", "site"):
+    if facet not in ("performer", "site", "tag"):
         raise TpdbError("类型无效")
     name = (name or "").strip()
     if not name:
         raise TpdbError("请填写名字")
+    page = max(1, int(page))
+    if facet == "tag":
+        ident = (tag_id or "").strip()
+        if not ident.isdigit():
+            ident, name = await _named_tag(settings, name)
+        params = list_params(page)
+        params[f"tags[{ident}]"] = name
+        payload = await _get_json(settings, list_path(kind), params)
+        return _unpack_list(payload, kind, page)
     root = "/performers" if facet == "performer" else "/sites"
     ident = await _named_id(settings, root, name)
-    page = max(1, int(page))
     leaf = list_path(kind).strip("/")
     path = f"{root}/{quote(ident, safe='')}/{leaf}"
     payload = await _get_json(settings, path, {"page": page, "per_page": PER_PAGE})

@@ -115,10 +115,11 @@ async def western_browse(
     name: str = Query(""),
     kind: str = Query("scene"),
     page: int = Query(1, ge=1, le=50),
+    tag_id: str = Query(""),
 ):
     kind = _kind(kind)
     facet = facet.strip().lower()
-    if facet not in ("performer", "site"):
+    if facet not in ("performer", "site", "tag"):
         raise HTTPException(400, "类型无效")
     name = name.strip()
     if not name:
@@ -133,7 +134,7 @@ async def western_browse(
             "error": "请先在设置里填写 ThePornDB token",
         }
     try:
-        payload = await fetch_facet(settings, kind, facet, name, page)
+        payload = await fetch_facet(settings, kind, facet, name, page, tag_id=tag_id)
     except TpdbError as exc:
         return {
             "kind": kind,

@@ -54,9 +54,11 @@ def test_map_tpdb_scene_uses_parent_and_minutes():
             {"name": "Alias", "parent": {"name": "Riley Reid", "face": "https://cdn.theporndb.net/f.jpg"}},
             {"name": "Other"},
         ],
-        "tags": [{"name": "Feature"}],
+        "tags": [{"id": 12, "name": "Feature"}, {"name": "Feature"}, "Feature"],
     }
     item = map_item(raw, "scene")
+    assert item["tags"] == ["Feature"]
+    assert item["tag_refs"] == [{"id": "12", "name": "Feature"}]
     assert item["site"] == "Brazzers"
     assert item["performers"] == ["Riley Reid", "Other"]
     assert item["cover"].endswith("/p.jpg")
