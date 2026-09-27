@@ -35,6 +35,7 @@ let javTrail = [];
 let javView = 0;
 let westernKind = "scene";
 let westernPage = 1;
+let westernLastPage = null;
 let westernMode = "latest";
 let westernTheme = "";
 let westernBootstrapped = false;
@@ -440,7 +441,10 @@ function escapeHtml(s) {
 }
 
 function looksLikeCode(q) {
-  return /^[a-z]{2,5}-?\d{2,5}$/i.test(String(q).replace(/[\s_]/g, ""));
+  const s = String(q).trim().toUpperCase().replace(/_/g, "-").replace(/\s+/g, "");
+  return /^[A-Z]{2,5}-?\d{2,5}$/.test(s)
+    || /^\d{6}-\d{2,4}$/.test(s)
+    || /^FC2(?:-?PPV)?-?\d{6,8}$/.test(s);
 }
 
 function showBack(on) {
@@ -1601,6 +1605,7 @@ function westernListFrame() {
     items: westernItems,
     mode: westernMode,
     page: westernPage,
+    lastPage: westernLastPage,
     theme: westernTheme,
     kind: westernKind,
     query: $("western-input").value.trim(),
@@ -1647,6 +1652,7 @@ function restoreWestern(frame) {
   westernItems = frame.items || [];
   westernMode = frame.mode || "latest";
   westernPage = frame.page || 1;
+  westernLastPage = frame.lastPage || null;
   westernTheme = frame.theme || "";
   westernKind = frame.kind || westernKind;
   westernBrowse = frame.browse || null;
@@ -1662,7 +1668,7 @@ function restoreWestern(frame) {
   renderWesternWorks(westernItems);
   if (westernMode === "browse" && westernBrowse) {
     const target = westernBrowse;
-    renderPager($("western-pager"), westernPage, null, (next) => {
+    renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
       loadWesternBrowse(target.facet, target.name, next, target.tagId || "").catch((err) => {
         setStatus($("western-status"), err.message, "bad");
       });
@@ -1671,13 +1677,13 @@ function restoreWestern(frame) {
     return;
   }
   if (westernMode === "search") {
-    renderPager($("western-pager"), westernPage, null, (next) => {
+    renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
       loadWesternSearch(frame.query || "", next).catch((err) => {
         setStatus($("western-status"), err.message, "bad");
       });
     });
   } else {
-    renderPager($("western-pager"), westernPage, null, (next) => loadWesternFeed(next));
+    renderPager($("western-pager"), westernPage, westernLastPage, (next) => loadWesternFeed(next));
   }
   const n = westernItems.length;
   const latest = westernMode === "latest";
@@ -1709,8 +1715,9 @@ async function loadWesternBrowse(facet, name, page, tagId) {
     const data = await api("/api/western/browse?" + params.toString());
     if (view !== westernView) return;
     westernItems = data.items || [];
+    westernLastPage = data.last_page || page;
     renderWesternWorks(westernItems);
-    renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => {
+    renderPager($("western-pager"), data.page || page, westernLastPage, (next) => {
       loadWesternBrowse(facet, name, next, ident).catch((err) => {
         setStatus($("western-status"), err.message, "bad");
       });
@@ -1770,8 +1777,9 @@ async function loadWesternFeed(page) {
     const data = await api(`/api/western/latest?${westernParams(page)}`);
     if (view !== westernView) return;
     westernItems = data.items || [];
+    westernLastPage = data.last_page || page;
     renderWesternWorks(westernItems);
-    renderPager($("western-pager"), data.page || page, data.last_page || page, (next) => loadWesternFeed(next));
+    renderPager($("western-pager"), data.page || page, westernLastPage, (next) => loadWesternFeed(next));
     const n = westernItems.length;
     setStatus(
       $("western-status"),
@@ -1880,11 +1888,12 @@ async function loadWesternSearch(q, page) {
   const data = await api(`/api/western/search?${westernParams(page, q)}`);
   if (view !== westernView) return;
   westernItems = data.items || [];
+  westernLastPage = data.last_page || page;
   renderWesternWorks(westernItems);
   renderPager(
     $("western-pager"),
     data.page || page,
-    data.last_page || page,
+    westernLastPage,
     (next) => loadWesternSearch(q, next).catch((err) => {
       setStatus($("western-status"), err.message, "bad");
     }),

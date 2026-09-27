@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.scrape import (
     is_incomplete,
     iter_videos,
     looks_like_pack,
+    newer_unmatched_videos,
     safe_rmtree,
     scrape_job,
 )
@@ -227,6 +229,72 @@ def test_maybe_scrape_waits_for_settle(tmp_path):
         mgr = JobManager(settings, db, object())
         out = await mgr.maybe_scrape(job)
         assert out["scrape_status"] == "waiting"
+
+    asyncio.run(run())
+
+
+class _Owned:
+    async def get(self, code):
+        return {"code": code, "has_video": 1, "path": "202102/SSIS-001"}
+
+
+def test_owned_code_without_a_new_file_counts_as_archived(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        scrape_enabled=True,
+        scrape_settle_seconds=0,
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        job = _job(tmp_path / "dl" / "gone")
+        job["created_at"] = time.time() - 30
+        await db.insert_job(job)
+        mgr = JobManager(settings, db, object(), library=_Owned())
+        out = await mgr.maybe_scrape(job)
+        assert out["scrape_status"] == "archived"
+        assert out["archive_path"] == "202102/SSIS-001"
+
+    asyncio.run(run())
+
+
+def test_owned_code_stays_open_when_a_new_file_has_no_code(tmp_path):
+    root = tmp_path / "dl"
+    video = root / "xunlei" / "no-code-name.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x" * 80)
+    old = root / "old-junk.mp4"
+    old.write_bytes(b"x" * 40)
+    now = time.time()
+    os.utime(video, (now, now))
+    os.utime(old, (now - 3600, now - 3600))
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=root,
+        media_dir=tmp_path / "media",
+        scrape_enabled=True,
+        scrape_settle_seconds=0,
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+    assert newer_unmatched_videos(root, now - 30, 0) == [video]
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        job = _job(root / "SSIS-001")
+        job["created_at"] = now - 30
+        await db.insert_job(job)
+        mgr = JobManager(settings, db, object(), library=_Owned())
+        out = await mgr.maybe_scrape(job)
+        assert out["scrape_status"] == "error"
+        assert out["scrape_error"] == "没有可归档的视频"
+        assert video.is_file()
 
     asyncio.run(run())
 

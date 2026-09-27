@@ -16,6 +16,7 @@ from app.scrape import (
     ScrapeError,
     find_code_videos,
     list_ready_sources,
+    newer_unmatched_videos,
     scrape_job,
     source_incomplete,
     source_mtime,
@@ -610,7 +611,14 @@ class JobManager:
                 min_bytes,
             )
         except ScrapeError:
-            if hit and hit.get("has_video"):
+            since = float(job.get("created_at") or 0)
+            pending = await asyncio.to_thread(
+                newer_unmatched_videos,
+                self.settings.download_dir,
+                since,
+                min_bytes,
+            )
+            if hit and hit.get("has_video") and not pending:
                 return await self._mark_archived(job, hit.get("path") or "")
             log.warning("刮削失败 %s: 没有可归档的视频", job.get("code"))
             return await self._record_scrape_error(job, "没有可归档的视频")

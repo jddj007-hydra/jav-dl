@@ -184,6 +184,51 @@ def find_code_videos(
     raise ScrapeError("没有可归档的视频")
 
 
+def _is_ready_video(path: Path, min_bytes: int, since: float) -> bool:
+    if not is_video(path):
+        return False
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    return stat.st_size >= min_bytes and stat.st_mtime >= since
+
+
+def newer_unmatched_videos(download_root: Path, since: float, min_bytes: int) -> list[Path]:
+    """Videos that showed up after the job started and still have no JAV code in the name.
+
+    A completed job whose code is already in the library is not proof that this
+    download was archived. Xunlei leaves those files on the download root.
+    """
+    if not download_root.is_dir():
+        return []
+    found: list[Path] = []
+    for root in _candidate_dirs(download_root):
+        try:
+            children = list(root.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name in SKIP_DIR_NAMES or child.name.lower() in SKIP_DIR_NAMES:
+                continue
+            if child.name.lower() in BUCKET_DIRS:
+                continue
+            if is_western_release_name(child.name):
+                continue
+            if child.is_file():
+                if _is_ready_video(child, min_bytes, since) and not extract_code(child.name):
+                    found.append(child)
+                continue
+            if not child.is_dir():
+                continue
+            if normalize_code(child.name) or extract_code(child.name):
+                continue
+            videos = iter_videos(child, min_bytes)
+            if videos and source_mtime(child) >= since:
+                found.append(child)
+    return found
+
+
 def iter_watch_targets(download_root: Path) -> list[Path]:
     if not download_root.is_dir():
         return []

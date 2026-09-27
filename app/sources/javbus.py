@@ -11,6 +11,7 @@ from app.config import Settings
 from app.httputil import site_client
 
 DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
+_THUMB_RE = re.compile(r"/pics/thumb/([^/?#]+)\.(jpe?g|png|webp)(?=$|[?#])", re.I)
 
 AGE_COOKIE = "age=verified; existmag=all"
 CACHE_VER = "v4"
@@ -145,6 +146,20 @@ def parse_javbus(html: str, base: str, code: str) -> dict:
     }
 
 
+def listing_cover(url: str) -> str:
+    """List pages often publish a dead /pics/thumb file. The cover JPEG is the real image."""
+    if not url:
+        return ""
+
+    def repl(match: re.Match) -> str:
+        ext = match.group(2).lower()
+        if ext == "jpeg":
+            ext = "jpg"
+        return f"/pics/cover/{match.group(1)}_b.{ext}"
+
+    return _THUMB_RE.sub(repl, url, count=1)
+
+
 def _code_from_search_box(box, href: str) -> str:
     dates = [d.get_text(strip=True) for d in box.select("date")]
     if dates:
@@ -168,7 +183,7 @@ def parse_search(html: str, base: str) -> list[dict]:
             continue
         seen.add(code)
         img = box.select_one("img")
-        cover = _abs(base, img.get("src") if img else "")
+        cover = listing_cover(_abs(base, img.get("src") if img else ""))
         title = (img.get("title") if img else "") or ""
         if not title:
             span = box.select_one(".photo-info span")

@@ -17,6 +17,7 @@ def test_parse_batch_codes_keeps_paste_order_and_skips_junk():
     assert parse_batch_codes(text) == ["SSIS-001", "MIDV-123", "IPX-001", "ABP-123"]
     assert parse_batch_codes("没有番号") == []
     assert parse_batch_codes("") == []
+    assert parse_batch_codes("092126-001 FC2-3237415") == ["092126-001", "FC2-PPV-3237415"]
 
 
 def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):

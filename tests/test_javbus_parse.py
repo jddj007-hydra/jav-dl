@@ -51,7 +51,8 @@ def test_parse_search_boxes():
     assert items[0]["code"] == "SSIS-001"
     assert items[0]["release_date"] == "2021-02-18"
     assert "禁欲" in items[0]["title"]
-    assert items[0]["cover"].endswith("/pics/thumb/x.jpg")
+    assert items[0]["cover"].endswith("/pics/cover/x_b.jpg")
+    assert items[1]["cover"].endswith("/pics/cover/y_b.jpg")
     assert items[1]["code"] == "MTNDV-1396"
 
 
