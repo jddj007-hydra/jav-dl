@@ -3,7 +3,7 @@
 番号 / 关键词 / 欧美片名查询 + 磁力猫搜种 + 后台 BT 下载。浏览器只是控制台，关掉也不影响任务。
 
 ```text
-顶栏：JAV · 欧美 · 队列 · 设置
+顶栏：JAV · 欧美 · 媒体库 · 追更 · 队列 · 设置
 
 JAV
   打开即拉 JavBus 最新（有码 / 无码，可翻页）
@@ -16,10 +16,11 @@ JAV
   点一张 → 详情 + 磁力猫按片商搜索（片名相近的靠前）
                                       │
                                       ▼
-                               aria2（默认）或群晖迅雷
+                    aria2（默认）或网页迅雷
+                    https://github.com/cnk3x/xunlei
 ```
 
-当前版本 `2.0.0`。已经不是 Claude skill，也没有文本解密。
+当前版本 `2.0.0`。
 
 ## 跑起来
 
@@ -66,14 +67,14 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 1. 设置里填写 ThePornDB token（账号在 [theporndb.net](https://theporndb.net) 自己生成）。留空表示不改已保存的 token
 2. 打开「欧美」即拉场景最新；可切「电影」、翻页，或用片名 / 演员搜索
 3. 点一张看片商、演员、简介，磁链按片商去磁力猫搜。片名或演员对得上的排前面，合集和大约 15GB 以上靠后
-4. 没有「库里已有」。下载目录是 `western/{片商-日期-标题}`。配置了 `WESTERN_MEDIA_DIR` 后，下完会按片商归档到该目录（`片商/文件名.nfo` 和 `文件名-poster.jpg`），不写进 `YYYYMM/番号/`
+4. 库里已有的会标「已有」，仍可以再下。标了 suck 的不会再入队。下载目录是 `western/{片商-日期-标题}`。配置了 `WESTERN_MEDIA_DIR` 后，下完按片商归档（`片商/文件名.nfo` 和 `文件名-poster.jpg`），不写进 `YYYYMM/番号/`
 
-两边的下载都进同一个队列。点下载后到「队列」看进度。
+两边的下载都进同一个队列。点下载后到「队列」看进度。媒体库按封面看已归档的番号和欧美片。追更页可以关注女优、系列、片商，以及欧美演员和片商。
 
 ## 它怎么工作
 
 ```text
-浏览器  JAV / 欧美 / 队列 / 设置
+浏览器  JAV / 欧美 / 媒体库 / 追更 / 队列 / 设置
    │
    ▼
 FastAPI :8787
@@ -93,7 +94,7 @@ FastAPI :8787
            │
            ├── data/jav-dl.db      元数据缓存、下载任务
            ├── data/img_cache/     封面
-           └── aria2 RPC 或 群晖迅雷面板
+           └── aria2 RPC 或网页迅雷 https://github.com/cnk3x/xunlei
 ```
 
 | 目录 | 职责 |
@@ -108,8 +109,8 @@ FastAPI :8787
 | `app/scrape.py` | 带番号的文件写 NFO/封面，归档到 `YYYYMM/番号/`；跳过 `western/` |
 | `app/library.py` | 扫描归档目录，JAV 搜索时标「库里已有」 |
 | `app/downloader/aria2.py` | aria2 JSON-RPC |
-| `app/downloader/xunlei.py` | 群晖套件迅雷面板（环境变量切换） |
-| `app/static/` | 单页：JAV、欧美、队列、设置 |
+| `app/downloader/xunlei.py` | 网页迅雷面板，项目 [cnk3x/xunlei](https://github.com/cnk3x/xunlei) |
+| `app/static/` | 单页：JAV、欧美、媒体库、追更、队列、设置 |
 | `aria2/` | Docker 里的 aria2 镜像 |
 
 查站走 HTTP 代理（可选），磁力只拼 `magnet:?xt=urn:btih:` + 公共 tracker，BT 本身不走代理。
@@ -142,11 +143,11 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `PROXY_URL` | `http://127.0.0.1:7890` | Docker 里可写 `http://host.docker.internal:7890` |
 | `AUTH_USER` / `AUTH_PASS` | 空 | 同时非空则开 HTTP Basic，`/api/health` 也要登录。都空着时启动会警告 |
 | `DOWNLOADER` | `aria2` | `aria2` 或 `xunlei` |
-| `XUNLEI_URL` | `http://127.0.0.1:2345` | 群晖迅雷面板 |
+| `XUNLEI_URL` | `http://127.0.0.1:2345` | [cnk3x/xunlei](https://github.com/cnk3x/xunlei) 面板地址 |
 | `XUNLEI_USERNAME` / `XUNLEI_PASSWORD` | 空 | 面板账号 |
 | `XUNLEI_DEVICE_NAME` | `群晖-xunlei` | 用来匹配在线设备 |
 
-下载器可以在设置页切换。切到迅雷前需要面板已登录，并且手动下过一次以便识别下载目录。每条任务记下当时的下载器，之后切换只影响新任务。
+下载器可以在设置页切换。网页离线迅雷是 [cnk3x/xunlei](https://github.com/cnk3x/xunlei)，`XUNLEI_URL` 填它的面板地址。切过去之前，面板要已登录迅雷账号，并且手动下过一次，才能认出下载目录。每条任务记下当时的下载器，之后切换只影响新任务。
 
 通知在设置页选一种。下载完成、归档完成、失败各发一条，带番号或片名，失败带原因。通知失败只写日志。
 
@@ -155,14 +156,6 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 
 
 刮削在设置页开关。只处理文件名或文件夹里能抽出唯一番号的视频。`downloads/western/` 整目录跳过。归档目录可改成和别的库共用的 media；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。
-
-## 和 1.x skill 的差别
-
-- 不再是 Claude skill，也没有叙事文本解密
-- 种子只走 **磁力猫**（不再用 Nyaa）
-- 下载交给独立的 aria2（或群晖迅雷），Web 只负责点选和看进度
-- JAV 支持女优/关键词和最新列表，不只贴番号
-- 欧美走 ThePornDB 元数据，磁链仍是磁力猫，不和番号归档混在一起
 
 ## 测试
 
