@@ -343,6 +343,16 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .meta dt { color: var(--muted); }
 .meta dd { margin: 0; }
 .genre-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+button.tag {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 0;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 400;
+}
+button.tag:hover { filter: none; color: var(--accent-2); }
 .summary {
   margin: 12px 0 0;
   color: var(--muted);

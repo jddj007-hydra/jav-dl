@@ -326,7 +326,7 @@ function renderMeta(payload) {
     return;
   }
   const actors = normalizeActors(meta.actors);
-  const genres = (meta.genres || []).map((g) => `<span class="tag">${escapeHtml(g)}</span>`).join("");
+  const genres = genreHtml(meta.genres);
   const actorHtml = actors.length
     ? `<div class="actor-row">${actors.map((a) => {
         const body = `
@@ -358,11 +358,22 @@ function renderMeta(payload) {
           ${dlRow("发行", browseButton(meta.label, { url: meta.label_url }))}
           ${dlRow("系列", browseButton(meta.series, { url: meta.series_url }))}
         </dl>
-        ${genres ? `<div class="genre-row">${genres}</div>` : ""}
+        ${genres}
       </div>
     </div>
     ${actorHtml}
     ${previewHtml}`;
+}
+
+function genreHtml(genres) {
+  const chips = (genres || []).map((genre) => {
+    const name = typeof genre === "string" ? genre : (genre && genre.name) || "";
+    const url = typeof genre === "string" ? "" : (genre && genre.url) || "";
+    if (!name) return "";
+    if (!url) return `<span class="tag">${escapeHtml(name)}</span>`;
+    return `<button type="button" class="tag" data-browse-url="${escapeHtml(url)}" data-browse-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+  }).filter(Boolean);
+  return chips.length ? `<div class="genre-row">${chips.join("")}</div>` : "";
 }
 
 function tagHtml(item) {

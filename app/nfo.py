@@ -55,8 +55,9 @@ def build_nfo(meta: dict) -> str:
         s_el = ET.SubElement(movie, "set")
         _text(s_el, "name", series)
     for genre in meta.get("genres") or []:
-        _text(movie, "genre", genre)
-        _text(movie, "tag", genre)
+        name = genre.get("name") if isinstance(genre, dict) else genre
+        _text(movie, "genre", name)
+        _text(movie, "tag", name)
     actors = meta.get("actors") or []
     for actor in actors:
         name = actor["name"] if isinstance(actor, dict) else actor

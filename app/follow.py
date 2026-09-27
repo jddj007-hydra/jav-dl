@@ -102,7 +102,7 @@ def _resolve_url(kind: str, name: str, target: str) -> tuple[str, str]:
     raise ValueError("请粘贴 JavBus 的女优、系列或片商页面")
 
 
-_JAVBUS_LISTS = ("star", "series", "studio", "label")
+_JAVBUS_LISTS = ("star", "series", "studio", "label", "genre")
 
 
 def javbus_list_url(target: str) -> str:

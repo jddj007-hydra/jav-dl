@@ -48,11 +48,17 @@ def test_jav_browse_reads_the_star_page(monkeypatch):
             assert ok.status_code == 200
             body = ok.json()
             assert body["items"][0]["code"] == "SSIS-001"
-            bad = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/genre/3"})
+            genre = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/genre/3n/4", "page": 2})
+            assert genre.status_code == 200
+            assert genre.json()["items"][0]["code"] == "SSIS-001"
+            bad = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/SSIS-001"})
             assert bad.status_code == 400
 
     asyncio.run(run())
-    assert seen == ["https://www.javbus.com/star/2xi/2"]
+    assert seen == [
+        "https://www.javbus.com/star/2xi/2",
+        "https://www.javbus.com/genre/3n/2",
+    ]
 
 
 def test_jav_browse_rejects_a_foreign_host(monkeypatch):

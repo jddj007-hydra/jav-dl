@@ -363,6 +363,9 @@ def test_javbus_page_url_keeps_numeric_ids_and_drops_a_pasted_page():
     assert javbus_page_url("https://www.javbus.com/studio/1", 1) == "https://www.javbus.com/studio/1"
     assert javbus_page_url("https://www.javbus.com/studio/1", 2) == "https://www.javbus.com/studio/1/2"
     assert javbus_page_url("https://www.javbus.com/uncensored/star/9a/3", 2) == "https://www.javbus.com/uncensored/star/9a/2"
+    assert javbus_page_url("https://www.javbus.com/genre/3/2", 1) == "https://www.javbus.com/genre/3"
+    assert javbus_page_url("https://www.javbus.com/genre/3n", 2) == "https://www.javbus.com/genre/3n/2"
+    assert javbus_page_url("https://www.javbus.com/uncensored/genre/g/3", 2) == "https://www.javbus.com/uncensored/genre/g/2"
 
     async def run():
         return await resolve_target(Settings(), "actress", "", "https://www.javbus.com/star/2xi/2?x=1")

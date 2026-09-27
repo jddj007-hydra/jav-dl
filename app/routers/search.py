@@ -58,8 +58,8 @@ async def jav_browse(
     page: int = Query(1, ge=1, le=50),
 ):
     target = javbus_list_url(url.strip())
-    if javbus_page_kind(target) not in ("actress", "series", "studio"):
-        raise HTTPException(400, "只能打开女优、系列、厂家或发行商页面")
+    if javbus_page_kind(target) not in ("actress", "series", "studio", "genre"):
+        raise HTTPException(400, "只能打开女优、系列、厂家、发行商或类别页面")
     settings = request.app.state.settings
     try:
         html = await fetch_javbus_html(settings, javbus_page_url(target, page))

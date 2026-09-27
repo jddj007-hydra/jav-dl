@@ -24,7 +24,9 @@ def test_parse_ssis001():
     assert meta["label"] == "S1 NO.1 STYLE"
     assert len(meta["samples"]) >= 6
     assert meta["samples"][0]["thumb"]
-    assert "多P" in meta["genres"]
+    genres = {item["name"]: item["url"] for item in meta["genres"]}
+    assert genres["多P"].endswith("/genre/3")
+    assert genres["DMM獨家"].endswith("/genre/g")
 
 
 def test_parse_search_boxes():

@@ -13,7 +13,7 @@ from app.httputil import site_client
 DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
 
 AGE_COOKIE = "age=verified; existmag=all"
-CACHE_VER = "v3"
+CACHE_VER = "v4"
 
 
 class MetadataError(Exception):
@@ -109,18 +109,7 @@ def parse_javbus(html: str, base: str, code: str) -> dict:
             seen.add(link["name"])
             actors.append({"name": link["name"], "photo": "", "url": link.get("url") or ""})
 
-    genres: list[str] = []
-    for link in (fields.get("類別") or fields.get("类别") or {}).get("links") or []:
-        if link["name"] not in genres:
-            genres.append(link["name"])
-    if not genres:
-        for a in soup.select("span.genre a"):
-            href = a.get("href") or ""
-            if "/star" in href:
-                continue
-            name = a.get_text(strip=True)
-            if name and name != "多選提交" and name not in genres:
-                genres.append(name)
+    genres = _genres(soup, fields, base)
 
     studio, studio_url = _named_link(fields.get("製作商") or fields.get("制作商"))
     label, label_url = _named_link(fields.get("發行商") or fields.get("发行商"))
@@ -197,6 +186,29 @@ def parse_search(html: str, base: str) -> list[dict]:
     return items
 
 
+def _genres(soup, fields: dict, base: str) -> list[dict]:
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def add(name: str, url: str) -> None:
+        name = (name or "").strip()
+        if not name or name == "多選提交" or name in seen:
+            return
+        seen.add(name)
+        found.append({"name": name, "url": url or ""})
+
+    for link in (fields.get("類別") or fields.get("类别") or {}).get("links") or []:
+        add(link.get("name") or "", link.get("url") or "")
+    if found:
+        return found
+    for a in soup.select("span.genre a"):
+        href = a.get("href") or ""
+        if "/star" in href:
+            continue
+        add(a.get_text(strip=True), _abs(base, href))
+    return found
+
+
 def javbus_page_kind(url: str) -> str | None:
     path = urlparse(url).path
     if "/star/" in path:
@@ -205,6 +217,8 @@ def javbus_page_kind(url: str) -> str | None:
         return "series"
     if "/studio/" in path or "/label/" in path:
         return "studio"
+    if "/genre/" in path:
+        return "genre"
     return None
 
 
