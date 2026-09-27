@@ -93,6 +93,7 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
             items = await search_works(settings, raw)
         except MetadataError as e:
             return {"mode": "keyword", "query": raw, "items": [], "error": str(e)}
+        items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
         hits = await library.get_many([it["code"] for it in items])
         marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
         return {

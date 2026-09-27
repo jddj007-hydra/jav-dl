@@ -82,6 +82,75 @@ def test_jav_browse_rejects_a_foreign_host(monkeypatch):
     asyncio.run(run())
 
 
+def test_keyword_search_drops_excluded_orientation(monkeypatch):
+    async def fake_search(settings, query):
+        assert query == "葵"
+        return [
+            {"code": "ABCD-001", "title": "普通作品", "cover": "", "release_date": "", "url": "", "source": "javbus"},
+            {"code": "ABCD-002", "title": "男同作品", "cover": "", "release_date": "", "url": "", "source": "javbus"},
+            {"code": "ABCD-003", "title": "双性人企划", "cover": "", "release_date": "", "url": "", "source": "javbus"},
+        ]
+
+    monkeypatch.setattr("app.routers.search.search_works", fake_search)
+    app = FastAPI()
+    app.include_router(search.router)
+    app.state.settings = Settings()
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/search", params={"q": "葵"})
+            assert response.status_code == 200
+            assert [item["code"] for item in response.json()["items"]] == ["ABCD-001"]
+
+    asyncio.run(run())
+
+
+def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypatch):
+    async def fake_list(settings, kind, page=1, query=None, theme=None, extra=None):
+        return {
+            "items": [
+                {"id": "ok", "duration": "40", "title": "Room", "tags": ["Anal"]},
+                {"id": "gay", "duration": "40", "title": "Room", "tags": ["Threesome (Gay)"]},
+                {"id": "bi", "duration": "40", "title": "Night", "tags": ["Bisexual"]},
+                {"id": "short", "duration": "5", "title": "Clip", "tags": []},
+            ],
+            "page": 1,
+            "last_page": 1,
+        }
+
+    async def fake_facet(settings, kind, facet, name, page=1):
+        return {
+            "items": [
+                {"id": "gay", "kind": kind, "duration": "40", "title": "Room", "tags": ["Gay"], "site": name, "performers": []},
+            ],
+            "page": page,
+            "last_page": 1,
+        }
+
+    monkeypatch.setattr("app.routers.western.fetch_list", fake_list)
+    monkeypatch.setattr("app.routers.western.fetch_facet", fake_facet)
+    app = FastAPI()
+    app.include_router(western.router)
+    app.state.settings = Settings(tpdb_api_key="token")
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            found = await client.get("/api/western/search", params={"q": "Room", "kind": "scene"})
+            assert found.status_code == 200
+            assert [item["id"] for item in found.json()["items"]] == ["ok"]
+            opened = await client.get("/api/western/browse", params={"facet": "performer", "name": "Jane Doe"})
+            assert opened.status_code == 200
+            assert [item["id"] for item in opened.json()["items"]] == ["gay"]
+
+    asyncio.run(run())
+
+
 def test_western_browse_uses_the_exact_performer(monkeypatch):
     seen = {}
 

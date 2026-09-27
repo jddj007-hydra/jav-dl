@@ -33,12 +33,12 @@ def _theme(theme: str) -> str | None:
     return theme
 
 
-def _visible(items: list[dict], *, latest: bool) -> list[dict]:
+def _visible(items: list[dict], *, exclude_orientation: bool) -> list[dict]:
     kept: list[dict] = []
     for item in items:
         if is_too_short(item.get("duration")):
             continue
-        if latest and is_excluded_orientation(item.get("tags") or [], item.get("title") or ""):
+        if exclude_orientation and is_excluded_orientation(item.get("tags") or [], item.get("title") or ""):
             continue
         kept.append(item)
     return kept
@@ -51,7 +51,7 @@ async def _cached_list(
     query: str | None,
     theme: str | None = None,
     *,
-    latest: bool = False,
+    exclude_orientation: bool = False,
 ):
     settings = request.app.state.settings
     if not (settings.tpdb_api_key or "").strip():
@@ -67,7 +67,7 @@ async def _cached_list(
     if cache_key:
         cached = await db.get_metadata(cache_key, settings.latest_ttl)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list):
-            visible = _visible(cached["items"], latest=latest)
+            visible = _visible(cached["items"], exclude_orientation=exclude_orientation)
             return {**cached, "items": await _mark_library(request, visible), "error": None}
     try:
         payload = await fetch_list(settings, kind, page, query, theme)
@@ -87,7 +87,7 @@ async def _cached_list(
     }
     if cache_key:
         await db.put_metadata(cache_key, body)
-    visible = _visible(body["items"], latest=latest)
+    visible = _visible(body["items"], exclude_orientation=exclude_orientation)
     return {**body, "items": await _mark_library(request, visible), "error": None}
 
 
@@ -105,7 +105,7 @@ async def western_latest(
     page: int = Query(1, ge=1, le=50),
     theme: str = Query(""),
 ):
-    return await _cached_list(request, _kind(kind), page, None, _theme(theme), latest=True)
+    return await _cached_list(request, _kind(kind), page, None, _theme(theme), exclude_orientation=True)
 
 
 @router.get("/api/western/browse")
@@ -142,7 +142,7 @@ async def western_browse(
             "items": [],
             "error": str(exc),
         }
-    visible = _visible(payload["items"], latest=False)
+    visible = _visible(payload["items"], exclude_orientation=False)
     return {
         "kind": kind,
         "page": payload["page"],
@@ -163,7 +163,7 @@ async def western_search(
     query = q.strip()
     if not query:
         raise HTTPException(400, "请输入片名或演员")
-    return await _cached_list(request, _kind(kind), page, query, _theme(theme))
+    return await _cached_list(request, _kind(kind), page, query, _theme(theme), exclude_orientation=True)
 
 
 @router.get("/api/western/{kind}/{item_id}")
