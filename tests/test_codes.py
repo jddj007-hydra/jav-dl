@@ -57,3 +57,10 @@ def test_jav_vr_maker():
     assert jav_vr_maker("URVRSP-605") == "URVRSP"
     assert jav_vr_maker("SSIS-001") is None
     assert jav_vr_maker("092126-001") is None
+    assert normalize_code("DANDYHQVR-015") == "DANDYHQVR-015"
+    assert normalize_code("3DSVR-2028") == "3DSVR-2028"
+    assert normalize_code("URVRSP-605") == "URVRSP-605"
+    assert normalize_code("CBIKMV001") == "CBIKMV-001"
+    assert extract_code("DANDYHQVR-015.mp4") == "DANDYHQVR-015"
+    assert extract_code("3DSVR-2028") == "3DSVR-2028"
+    assert extract_code("urvrsp605") == "URVRSP-605"

@@ -5,6 +5,11 @@ import re
 CODE_RE = re.compile(r"^([A-Z]{2,5})-?(\d{2,5})$")
 CODE_HYPHEN_RE = re.compile(r"([A-Z]{2,5})-(\d{2,5})", re.I)
 CODE_LOOSE_RE = re.compile(r"([A-Z]{2,5})(\d{3,5})", re.I)
+# DANDYHQVR / URVRSP / 3DSVR 比普通厂牌长，或带数字。短正则会切成 YHQVR-015。
+VR_HYPHEN_RE = re.compile(r"(?<![A-Z0-9])([A-Z0-9]{2,12})-(\d{2,5})(?!\d)", re.I)
+VR_CODE_HYPHEN_RE = re.compile(r"^([A-Z0-9]{2,12})-(\d{2,5})$")
+VR_CODE_COMPACT_RE = re.compile(r"^([A-Z0-9]{2,12}?)(\d{3,5})$")
+VR_LOOSE_RE = re.compile(r"([A-Z0-9]{2,12}?)(\d{3,5})")
 # 加勒比、一本道、天然むすめ这一类是日期加序号，不是字母厂牌。
 DATE_CODE_RE = re.compile(r"^(\d{6})-(\d{2,4})$")
 DATE_HYPHEN_RE = re.compile(r"(?<!\d)(\d{6})-(\d{2,4})(?!\d)")
@@ -29,6 +34,16 @@ def _fc2_code(number: str) -> str:
     return f"FC2-PPV-{number}"
 
 
+def _vr_code(maker: str, number: str) -> str | None:
+    maker = (maker or "").upper()
+    number = (number or "").strip()
+    if not maker or not number or maker in FALSE_PREFIXES:
+        return None
+    if maker in _JAV_VR_MAKERS or "VR" in maker:
+        return f"{maker}-{number}"
+    return None
+
+
 def normalize_code(raw: str) -> str | None:
     """ssis001 / SSIS-001 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
     if raw is None:
@@ -41,9 +56,15 @@ def normalize_code(raw: str) -> str | None:
     if dated:
         return f"{dated.group(1)}-{dated.group(2)}"
     m = CODE_RE.fullmatch(s)
-    if not m:
-        return None
-    return f"{m.group(1)}-{m.group(2)}"
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    vr = VR_CODE_HYPHEN_RE.fullmatch(s)
+    if vr:
+        return _vr_code(vr.group(1), vr.group(2))
+    compact = VR_CODE_COMPACT_RE.fullmatch(s)
+    if compact:
+        return _vr_code(compact.group(1), compact.group(2))
+    return None
 
 
 def compact_code(code: str) -> str:
@@ -84,8 +105,15 @@ def extract_codes(raw: str) -> list[str]:
         fc2_spans.append(m.span())
     for m in DATE_HYPHEN_RE.finditer(text):
         _add_code(found, seen, f"{m.group(1)}-{m.group(2)}")
+    vr_spans: list[tuple[int, int]] = []
+    for m in VR_HYPHEN_RE.finditer(text):
+        code = _vr_code(m.group(1), m.group(2))
+        if not code:
+            continue
+        _add_code(found, seen, code)
+        vr_spans.append(m.span())
     for m in CODE_HYPHEN_RE.finditer(text):
-        if any(m.start() < end and m.end() > start for start, end in fc2_spans):
+        if any(m.start() < end and m.end() > start for start, end in (*fc2_spans, *vr_spans)):
             continue
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
@@ -94,6 +122,12 @@ def extract_codes(raw: str) -> list[str]:
     if found:
         return found
     compact = re.sub(r"[^A-Z0-9]", "", text)
+    for m in VR_LOOSE_RE.finditer(compact):
+        code = _vr_code(m.group(1), m.group(2))
+        if code:
+            _add_code(found, seen, code)
+    if found:
+        return found
     for m in CODE_LOOSE_RE.finditer(compact):
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
