@@ -145,11 +145,11 @@ async def clear_suck(request: Request, body: SuckMark):
 async def library_poster(request: Request, path: str = Query(...), kind: str = Query("jav")):
     settings = request.app.state.settings
     if kind == "vr":
-        root = settings.vr_root
-        found = poster_file(root, path, "vr")
+        found = poster_file(settings.vr_root, path, "vr")
     elif kind == "western":
-        root = settings.western_root
-        found = poster_file(root, path, "western")
+        found = poster_file(settings.western_root, path, "western")
+        if found is None:
+            found = poster_file(settings.vr_root, path, "vr")
     else:
         found = poster_file(settings.media_dir, path, "jav")
         if found is None:

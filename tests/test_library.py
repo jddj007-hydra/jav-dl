@@ -64,6 +64,7 @@ def test_poster_file_stays_inside_root(tmp_path):
     (tmp_path.parent / "poster.jpg").write_bytes(b"secret")
     assert poster_file(tmp_path, "202102/SSIS-001", "jav") == folder / "poster.jpg"
     assert poster_file(tmp_path, "Studio/clip.mp4", "western") == tmp_path / "Studio" / "clip-poster.jpg"
+    assert poster_file(tmp_path, "vr/Studio/clip.mp4", "vr") == tmp_path / "Studio" / "clip-poster.jpg"
     assert poster_file(tmp_path, "..", "jav") is None
     assert poster_file(tmp_path, "202102/../..", "jav") is None
     assert poster_file(tmp_path, str(tmp_path.parent), "jav") is None
@@ -78,6 +79,34 @@ def test_library_poster_404_without_file(tmp_path):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(library_poster(request, path="../data", kind="jav"))
     assert exc.value.status_code == 404
+
+
+def test_library_poster_western_kind_finds_vr_file(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "west"),
+        vr_media_dir=str(tmp_path / "vrporn" / "western"),
+    )
+    settings.ensure_dirs()
+    settings.vr_root.mkdir(parents=True)
+    poster = settings.vr_root / "Studio" / "headset-poster.jpg"
+    poster.parent.mkdir(parents=True)
+    poster.write_bytes(b"jpg")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
+    response = asyncio.run(library_poster(request, path="vr/Studio/headset.mp4", kind="western"))
+    assert response.path == poster
+
+
+def test_scan_media_accepts_fanart_as_poster(tmp_path):
+    folder = tmp_path / "DSVR" / "DSVR-1124"
+    folder.mkdir(parents=True)
+    (folder / "DSVR-1124.mp4").write_bytes(b"x")
+    (folder / "fanart.jpg").write_bytes(b"jpg")
+    row = scan_media(tmp_path)[0]
+    assert row["has_poster"] == 1
+    assert row["poster"] == "DSVR/DSVR-1124/fanart.jpg"
 
 
 def test_scan_prefers_newer_month(tmp_path):
@@ -115,9 +144,23 @@ def test_scan_western_reads_tpdb_id(tmp_path):
     vr = tmp_path / "vr" / "VRBangers"
     vr.mkdir(parents=True)
     (vr / "headset.mp4").write_bytes(b"x")
-    vr_rows = scan_western(tmp_path / "vr", "vr")
-    assert vr_rows[0]["path"] == "vr/VRBangers/headset.mp4"
-    assert vr_rows[0]["shelf"] == "vr"
+    nested = tmp_path / "vr" / "SqueezeVR" / "Fist Time"
+    nested.mkdir(parents=True)
+    (nested / "clip.mp4").write_bytes(b"x")
+    (nested / "movie.nfo").write_text(
+        '<movie><originaltitle>Fist</originaltitle>'
+        '<uniqueid type="tpdb">vr1</uniqueid></movie>',
+        encoding="utf-8",
+    )
+    (nested / "poster.jpg").write_bytes(b"j")
+    vr_rows = {row["path"]: row for row in scan_western(tmp_path / "vr", "vr")}
+    assert vr_rows["vr/VRBangers/headset.mp4"]["shelf"] == "vr"
+    nested_row = vr_rows["vr/SqueezeVR/Fist Time/clip.mp4"]
+    assert nested_row["title"] == "Fist"
+    assert nested_row["tpdb_id"] == "vr1"
+    assert nested_row["has_nfo"] == 1
+    assert nested_row["has_poster"] == 1
+    assert nested_row["poster"] == "vr/SqueezeVR/Fist Time/poster.jpg"
 
 
 def test_attach_western_marks_present():
@@ -189,3 +232,4 @@ def test_attach_library():
     assert items[0]["library"]["path"] == "202102/SSIS-001"
     assert items[1]["library"]["present"] is False
     assert library_info(None) == {"present": False}
+

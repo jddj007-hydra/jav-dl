@@ -173,6 +173,20 @@ def test_player_query_filters_subtitle_and_actor():
     assert "full_path" not in scenes["items"][0]
 
 
+def test_vr_scene_poster_url_uses_vr_kind():
+    item = scene_item({
+        "path": "vr/Studio/headset.mp4",
+        "shelf": "vr",
+        "studio": "Studio",
+        "title": "Headset",
+        "poster": "vr/Studio/headset-poster.jpg",
+        "has_poster": 1,
+    })
+    assert item["shelf"] == "vr"
+    assert item["poster_url"].startswith("/api/library/poster?kind=vr&path=")
+    assert "headset.mp4" in item["poster_url"]
+
+
 def test_player_route_reads_the_scanned_library(tmp_path):
     media = tmp_path / "media"
     folder = media / "202102" / "SSIS-001"

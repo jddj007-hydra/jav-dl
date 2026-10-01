@@ -12,7 +12,8 @@ from app.db import Database
 from app.scrape import is_video
 from app.western_archive import western_fs_rel
 
-POSTER_NAMES = {"poster.jpg", "poster.png", "poster.jpeg"}
+POSTER_NAMES = ("poster.jpg", "poster.png", "poster.jpeg", "folder.jpg", "cover.jpg", "fanart.jpg")
+WESTERN_POSTER_SUFFIXES = ("-poster.jpg", ".jpg", "-poster.png")
 
 
 def library_info(hit: dict | None) -> dict:
@@ -199,6 +200,31 @@ def _pick_nfo(files: list[Path], code: str) -> Path | None:
     return max(nfos, key=_file_size)
 
 
+def _pick_jav_poster(files: list[Path]) -> Path | None:
+    by_name = {path.name.lower(): path for path in files if path.is_file()}
+    for name in POSTER_NAMES:
+        found = by_name.get(name)
+        if found is not None:
+            return found
+    return None
+
+
+def _pick_western_nfo(by_name: dict[str, Path], stem: str) -> Path | None:
+    return by_name.get(f"{stem}.nfo") or by_name.get("movie.nfo")
+
+
+def _pick_western_poster(by_name: dict[str, Path], stem: str) -> Path | None:
+    for suffix in WESTERN_POSTER_SUFFIXES:
+        found = by_name.get(f"{stem}{suffix}")
+        if found is not None:
+            return found
+    for name in POSTER_NAMES:
+        found = by_name.get(name)
+        if found is not None:
+            return found
+    return None
+
+
 def index_code_dir(code_dir: Path, month: str) -> dict | None:
     code = normalize_code(code_dir.name) or code_dir.name.strip().upper()
     if not code:
@@ -214,7 +240,7 @@ def index_code_dir(code_dir: Path, month: str) -> dict | None:
     pool = mains or videos
     main = max(pool, key=_file_size)
     nfo = _pick_nfo(files, code)
-    poster = next((path for path in files if path.name.lower() in POSTER_NAMES), None)
+    poster = _pick_jav_poster(files)
     fields = nfo_fields(_read_text(nfo)) if nfo else nfo_fields("")
     rel = f"{month}/{code_dir.name}"
     flags = release_flags(
@@ -245,16 +271,13 @@ def index_code_dir(code_dir: Path, month: str) -> dict | None:
     }
 
 
-def western_catalog_fields(path: str, release_date: str, runtime: object, has_poster: bool) -> dict:
+def western_catalog_fields(path: str, release_date: str, runtime: object, poster_rel: str = "") -> dict:
     pure = PurePosixPath(path)
-    poster = ""
-    if has_poster and pure.name:
-        poster = str(pure.with_name(f"{pure.stem}-poster.jpg"))
     return {
         "runtime_min": runtime_minutes(runtime),
         "year": year_of(release_date),
         "resolution": resolution_of(pure.name),
-        "poster": poster,
+        "poster": poster_rel,
     }
 
 
@@ -290,12 +313,28 @@ def poster_file(root: Path | None, rel: str, kind: str) -> Path | None:
     if target is None:
         return None
     if kind in ("western", "vr"):
-        candidates = [target.with_name(f"{target.stem}-poster.jpg")]
+        parent = target.parent
+        stem = target.stem.lower()
+        candidates = [parent / f"{target.stem}{suffix}" for suffix in WESTERN_POSTER_SUFFIXES]
+        candidates.extend(parent / name for name in POSTER_NAMES)
     else:
-        candidates = [target / name for name in ("poster.jpg", "poster.png", "poster.jpeg")]
+        candidates = [target / name for name in POSTER_NAMES]
+    seen: set[Path] = set()
     for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
         if path.is_file():
             return path
+    if kind in ("western", "vr"):
+        try:
+            names = list(target.parent.iterdir()) if target.parent.is_dir() else []
+        except OSError:
+            names = []
+        for path in names:
+            low = path.name.lower()
+            if path.is_file() and (low == f"{stem}-poster.jpg" or low == f"{stem}.jpg"):
+                return path
     return None
 
 
@@ -406,23 +445,28 @@ def scan_western(root: Path | None, shelf: str = "western") -> list[dict]:
     if root is None or not root.is_dir():
         return []
     rows: list[dict] = []
-    for studio in sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")):
+    for studio, folder, prefix in _western_folders(root):
         try:
-            files = [path for path in studio.iterdir() if path.is_file()]
+            files = [path for path in folder.iterdir() if path.is_file()]
         except OSError:
             continue
         by_name = {path.name.lower(): path for path in files}
         for video in sorted(path for path in files if is_video(path)):
-            nfo = by_name.get(f"{video.stem.lower()}.nfo")
-            poster = by_name.get(f"{video.stem.lower()}-poster.jpg")
+            nfo = _pick_western_nfo(by_name, video.stem.lower())
+            poster = _pick_western_poster(by_name, video.stem.lower())
             text = _read_text(nfo)
             fields = nfo_fields(text)
-            rel = f"{studio.name}/{video.name}"
+            rel = f"{prefix}/{video.name}"
             path = rel if shelf != "vr" else f"vr/{rel}"
+            poster_rel = ""
+            if poster is not None:
+                poster_rel = f"{prefix}/{poster.name}"
+                if shelf == "vr":
+                    poster_rel = f"vr/{poster_rel}"
             rows.append({
                 "path": path,
                 "tpdb_id": tpdb_id_from_nfo(text),
-                "studio": studio.name,
+                "studio": studio,
                 "shelf": shelf,
                 "title": fields["title"] or video.stem,
                 "has_nfo": 1 if nfo else 0,
@@ -430,9 +474,29 @@ def scan_western(root: Path | None, shelf: str = "western") -> list[dict]:
                 "actors": fields["actors"],
                 "release_date": fields["release_date"],
                 "added_at": _mtime(video),
-                **western_catalog_fields(rel, fields["release_date"], fields["runtime_min"], poster is not None),
+                **western_catalog_fields(
+                    path, fields["release_date"], fields["runtime_min"], poster_rel,
+                ),
             })
     return rows
+
+
+def _western_folders(root: Path) -> list[tuple[str, Path, str]]:
+    found: list[tuple[str, Path, str]] = []
+    try:
+        studios = sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith("."))
+    except OSError:
+        return found
+    for studio in studios:
+        found.append((studio.name, studio, studio.name))
+        try:
+            children = sorted(studio.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_dir() and not child.name.startswith("."):
+                found.append((studio.name, child, f"{studio.name}/{child.name}"))
+    return found
 
 
 def archived_jav_path(settings: Settings, rel: str) -> Path:

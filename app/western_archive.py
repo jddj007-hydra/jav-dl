@@ -409,10 +409,10 @@ def _commit_western(
             "actors": meta.get("actors") or [],
             "release_date": release,
             **western_catalog_fields(
-                f"{folder.name}/{path.name}",
+                western_db_path(f"{folder.name}/{path.name}", shelf),
                 release,
                 meta.get("runtime") or "",
-                bool(poster),
+                western_db_path(f"{folder.name}/{path.stem}-poster.jpg", shelf) if poster else "",
             ),
         } for path in written],
     }
@@ -454,3 +454,4 @@ async def scrape_western_job(
     else:
         log.info("已归档欧美 %s -> %s", result.get("title") or job.get("title") or "", result["path"])
     return result
+

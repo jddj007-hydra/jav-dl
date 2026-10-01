@@ -100,6 +100,8 @@ def scene_item(row: dict) -> dict:
     poster = row.get("poster") or ""
     folder, _, name = path.rpartition("/")
     year = _minutes(row.get("year"))
+    shelf = scene_shelf(row)
+    kind = "vr" if shelf == "vr" else "western"
     return {
         "title": row.get("title") or "",
         "site": row.get("studio") or "",
@@ -111,11 +113,11 @@ def scene_item(row: dict) -> dict:
         "video": path,
         "folder": folder,
         "poster": poster,
-        "poster_url": poster_url("western", path) if poster or row.get("has_poster") else "",
+        "poster_url": poster_url(kind, path) if poster or row.get("has_poster") else "",
         "release_name": name.rsplit(".", 1)[0] if name else "",
         "tpdb_id": row.get("tpdb_id") or "",
         "added_at": row.get("added_at") or 0,
-        "shelf": scene_shelf(row),
+        "shelf": shelf,
         "last_played_at": _unix(row.get("last_played_at")),
     }
 
