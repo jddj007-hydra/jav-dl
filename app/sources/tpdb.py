@@ -158,6 +158,13 @@ def map_item(raw: dict, kind: str) -> dict:
     posters = raw.get("posters") if isinstance(raw.get("posters"), dict) else {}
     background = raw.get("background") if isinstance(raw.get("background"), dict) else {}
     cover = posters.get("large") or posters.get("medium") or posters.get("small") or ""
+    if not cover:
+        cover = str(raw.get("image") or raw.get("poster") or "")
+    bg = ""
+    if isinstance(raw.get("background"), str):
+        bg = raw.get("background")
+    else:
+        bg = str(background.get("full") or background.get("large") or "")
     tags = _tag_refs(raw)
     site = _site_name(raw)
     title = str(raw.get("title") or "")
@@ -170,7 +177,7 @@ def map_item(raw: dict, kind: str) -> dict:
         "site": site,
         "performers": _performers(raw),
         "cover": str(cover or ""),
-        "background": str(background.get("full") or ""),
+        "background": bg,
         "description": str(raw.get("description") or ""),
         "tags": tag_names,
         "tag_refs": tags,

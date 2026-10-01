@@ -74,6 +74,22 @@ def test_map_tpdb_scene_uses_parent_and_minutes():
     assert duration_minutes(None) == ""
 
 
+def test_map_item_uses_image_when_posters_missing():
+    item = map_item({
+        "id": "vr1",
+        "title": "Headset",
+        "date": "2024-05-06",
+        "site": {"name": "VR Bangers"},
+        "image": "https://cdn.theporndb.net/image.jpg",
+        "background": "https://cdn.theporndb.net/bg.jpg",
+        "tags": [{"name": "Virtual Reality"}],
+        "performers": [],
+    }, "scene")
+    assert item["cover"].endswith("/image.jpg")
+    assert item["background"].endswith("/bg.jpg")
+    assert item["vr"] is True
+
+
 def test_heat_sort_ignores_single_letter_tags():
     ranked = sort_by_heat([
         {"title": "Scene U C", "heat": 1, "size": "1 GB"},
