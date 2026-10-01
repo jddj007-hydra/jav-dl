@@ -244,11 +244,11 @@ async def clear_downloads(request: Request, body: ClearDownloads):
 
 
 @router.post("/api/library/refresh")
-async def refresh_library(request: Request):
+async def refresh_library(request: Request, scrape: bool = False):
     library = getattr(request.app.state, "library", None)
     if library is None:
         raise HTTPException(503, "媒体库还没准备好")
-    return {"count": await library.refresh()}
+    return {"count": await library.refresh(scrape_missing=scrape)}
 
 
 async def _act(request: Request, job_id: str, op: str):

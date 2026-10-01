@@ -455,3 +455,45 @@ async def scrape_western_job(
         log.info("已归档欧美 %s -> %s", result.get("title") or job.get("title") or "", result["path"])
     return result
 
+
+def _write_western_sidecars(video: Path, nfo_xml: str, poster: bytes | None) -> None:
+    nfo = video.with_name(f"{video.stem}.nfo")
+    if not nfo.exists() or nfo.stat().st_size == 0:
+        nfo.write_text(nfo_xml, encoding="utf-8")
+    if poster:
+        poster_path = video.with_name(f"{video.stem}-poster.jpg")
+        if not poster_path.exists() or poster_path.stat().st_size == 0:
+            poster_path.write_bytes(poster)
+            poster_path.chmod(0o644)
+
+
+async def fill_western_video(settings: Settings, video: Path) -> bool:
+    """Write NFO/poster next to an already archived western file. Does not move the video."""
+    if not is_video(video):
+        return False
+    try:
+        detail = await fetch_by_filename(settings, video.name)
+    except (TpdbError, ScrapeError):
+        return False
+    info = {
+        "kind": "western",
+        "tpdb_id": detail.get("id") or "",
+        "tpdb_kind": detail.get("kind") or "scene",
+        "site": detail.get("site") or "",
+        "title": detail.get("title") or video.stem,
+        "date": detail.get("date") or "",
+        "performers": detail.get("performers") or [],
+    }
+    try:
+        meta = await western_metadata(settings, info)
+    except ScrapeError:
+        return False
+    poster = None
+    cover = (meta.get("cover") or "").strip()
+    if cover:
+        try:
+            poster = await fetch_cover_bytes(settings, cover, referer="https://theporndb.net/")
+        except ScrapeError:
+            poster = None
+    await asyncio.to_thread(_write_western_sidecars, video, build_nfo(meta), poster)
+    return True

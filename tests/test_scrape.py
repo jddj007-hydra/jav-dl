@@ -227,7 +227,50 @@ def test_scrape_job_sends_jav_vr_to_vrporn(tmp_path, monkeypatch):
         )
         assert result["path"] == "DSVR/DSVR-1124"
         assert (vrporn / "jav" / "DSVR" / "DSVR-1124" / "DSVR-1124.mp4").is_file()
+        assert (vrporn / "jav" / "DSVR" / "DSVR-1124" / "DSVR-1124.nfo").is_file()
         assert not (media / "202205" / "DSVR-1124").exists()
+
+    asyncio.run(run())
+
+
+def test_fill_jav_folder_writes_nfo_and_poster(tmp_path, monkeypatch):
+    from app.scrape import fill_jav_folder
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "DSVR-1124",
+            "title": "Headset",
+            "release_date": "2022-05-01",
+            "cover": "https://www.javbus.com/pics/cover/x_b.jpg",
+            "actors": [{"name": "葵"}],
+            "genres": [],
+        }
+
+    async def fake_cover(settings, url, referer=None):
+        return b"jpg-bytes"
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    monkeypatch.setattr("app.scrape.fetch_cover_bytes", fake_cover)
+    dest = tmp_path / "jav" / "DSVR" / "DSVR-1124"
+    dest.mkdir(parents=True)
+    (dest / "DSVR-1124.mp4").write_bytes(b"x" * 8)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        row = await fill_jav_folder(settings, db, dest, "DSVR-1124")
+        assert row["has_nfo"] == 1
+        assert row["has_poster"] == 1
+        assert (dest / "DSVR-1124.nfo").is_file()
+        assert (dest / "poster.jpg").read_bytes() == b"jpg-bytes"
+        assert "Headset" in (dest / "DSVR-1124.nfo").read_text(encoding="utf-8")
 
     asyncio.run(run())
 

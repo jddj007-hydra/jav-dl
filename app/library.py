@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
-from app.codes import normalize_code
+from app.codes import jav_vr_maker, normalize_code
 from app.config import Settings
 from app.db import Database
 from app.scrape import is_video
 from app.western_archive import western_fs_rel
+
+log = logging.getLogger("app.library")
 
 POSTER_NAMES = ("poster.jpg", "poster.png", "poster.jpeg", "folder.jpg", "cover.jpg", "fanart.jpg")
 WESTERN_POSTER_SUFFIXES = ("-poster.jpg", ".jpg", "-poster.png")
@@ -499,6 +502,38 @@ def _western_folders(root: Path) -> list[tuple[str, Path, str]]:
     return found
 
 
+def reindex_western_video(video: Path, studio: str, shelf: str, db_path: str) -> dict | None:
+    if not is_video(video):
+        return None
+    try:
+        files = [path for path in video.parent.iterdir() if path.is_file()]
+    except OSError:
+        return None
+    by_name = {path.name.lower(): path for path in files}
+    nfo = _pick_western_nfo(by_name, video.stem.lower())
+    poster = _pick_western_poster(by_name, video.stem.lower())
+    text = _read_text(nfo)
+    fields = nfo_fields(text)
+    fs_rel = western_fs_rel(db_path)
+    prefix = str(PurePosixPath(fs_rel).parent)
+    poster_rel = f"{prefix}/{poster.name}" if poster and prefix not in (".", "") else (poster.name if poster else "")
+    if shelf == "vr" and poster_rel and not poster_rel.startswith("vr/"):
+        poster_rel = f"vr/{poster_rel}"
+    return {
+        "path": db_path,
+        "tpdb_id": tpdb_id_from_nfo(text),
+        "studio": studio,
+        "shelf": shelf,
+        "title": fields["title"] or video.stem,
+        "has_nfo": 1 if nfo else 0,
+        "has_poster": 1 if poster else 0,
+        "actors": fields["actors"],
+        "release_date": fields["release_date"],
+        "added_at": _mtime(video),
+        **western_catalog_fields(db_path, fields["release_date"], fields["runtime_min"], poster_rel),
+    }
+
+
 def archived_jav_path(settings: Settings, rel: str) -> Path:
     if not rel:
         return settings.media_dir
@@ -517,7 +552,7 @@ class Library:
         self.db = db
         self._lock = asyncio.Lock()
 
-    async def refresh(self) -> int:
+    async def refresh(self, scrape_missing: bool = False) -> int:
         async with self._lock:
             rows = await asyncio.to_thread(scan_media, self.settings.media_dir)
             jav_vr = self.settings.jav_vr_root
@@ -531,9 +566,61 @@ class Library:
             vr_root = self.settings.vr_root
             if vr_root is not None and vr_root != self.settings.western_root:
                 western.extend(await asyncio.to_thread(scan_western, vr_root, "vr"))
+            if scrape_missing:
+                rows, western = await self._fill_missing(rows, western)
             await self.db.replace_library(rows)
             await self.db.replace_western(western)
             return len(rows) + len(western)
+
+    async def _fill_missing(self, jav_rows: list[dict], western_rows: list[dict]) -> tuple[list[dict], list[dict]]:
+        from app.scrape import ScrapeError, fill_jav_folder
+        from app.western_archive import fill_western_video
+
+        sem = asyncio.Semaphore(3)
+
+        async def fill_jav(row: dict) -> dict:
+            if not jav_vr_maker(row.get("code") or ""):
+                return row
+            if row.get("has_nfo") and row.get("has_poster"):
+                return row
+            dest = archived_jav_path(self.settings, row.get("path") or "")
+            if not dest.is_dir():
+                return row
+            async with sem:
+                try:
+                    updated = await fill_jav_folder(self.settings, self.db, dest, row["code"])
+                except (OSError, ScrapeError) as exc:
+                    log.warning("番号 VR 补刮失败 %s: %s", row.get("code"), exc)
+                    return row
+            return updated or row
+
+        async def fill_west(row: dict) -> dict:
+            if (row.get("shelf") or "") != "vr" and not str(row.get("path") or "").startswith("vr/"):
+                return row
+            if row.get("has_nfo") and row.get("has_poster"):
+                return row
+            root = self.settings.vr_root
+            rel = western_fs_rel(row.get("path") or "")
+            video = (root / rel) if root and rel else None
+            if video is None or not video.is_file():
+                return row
+            async with sem:
+                try:
+                    ok = await fill_western_video(self.settings, video)
+                except OSError as exc:
+                    log.warning("欧美 VR 补刮失败 %s: %s", row.get("path"), exc)
+                    return row
+            if not ok or video is None:
+                return row
+            return reindex_western_video(
+                video, row.get("studio") or video.parent.name, "vr", row.get("path") or "",
+            ) or row
+
+        jav_done, west_done = await asyncio.gather(
+            asyncio.gather(*(fill_jav(row) for row in jav_rows)),
+            asyncio.gather(*(fill_west(row) for row in western_rows)),
+        )
+        return list(jav_done), list(west_done)
 
     async def remember_western(self, result: dict) -> None:
         for entry in result.get("entries") or []:

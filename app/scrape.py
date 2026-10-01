@@ -545,3 +545,33 @@ async def scrape_job(
         "video_size": indexed.get("video_size") or 0,
         "poster": indexed.get("poster") or "",
     }
+
+
+def _write_jav_sidecars(dest_dir: Path, videos: list[Path], nfo_xml: str, poster_bytes: bytes | None) -> None:
+    for video in videos:
+        nfo = dest_dir / f"{video.stem}.nfo"
+        if not nfo.exists() or nfo.stat().st_size == 0:
+            nfo.write_text(nfo_xml, encoding="utf-8")
+    write_images(dest_dir, poster_bytes)
+
+
+async def fill_jav_folder(settings: Settings, db, dest_dir: Path, code: str) -> dict | None:
+    """Write NFO/poster next to an already archived JAV folder. Does not move the video."""
+    try:
+        videos = [path for path in dest_dir.iterdir() if is_video(path)]
+    except OSError:
+        return None
+    if not videos:
+        return None
+    meta = await resolve_metadata(settings, db, code)
+    poster_bytes = None
+    cover = (meta.get("cover") or "").strip()
+    if cover:
+        try:
+            poster_bytes = await fetch_cover_bytes(settings, cover)
+        except ScrapeError:
+            poster_bytes = None
+    await asyncio.to_thread(_write_jav_sidecars, dest_dir, videos, build_nfo(meta), poster_bytes)
+    from app.library import index_code_dir
+
+    return index_code_dir(dest_dir, dest_dir.parent.name)

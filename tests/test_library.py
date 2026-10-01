@@ -233,3 +233,56 @@ def test_attach_library():
     assert items[1]["library"]["present"] is False
     assert library_info(None) == {"present": False}
 
+
+def test_refresh_scrapes_missing_vr_sidecars(tmp_path, monkeypatch):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "west"),
+        vr_media_dir=str(tmp_path / "vrporn" / "western"),
+        scrape_min_mb=0,
+        tpdb_api_key="token",
+    )
+    settings.ensure_dirs()
+    settings.jav_vr_root.mkdir(parents=True)
+    settings.vr_root.mkdir(parents=True)
+    jav = settings.jav_vr_root / "DSVR" / "DSVR-1124"
+    jav.mkdir(parents=True)
+    (jav / "DSVR-1124.mp4").write_bytes(b"x" * 8)
+    west = settings.vr_root / "VRBangers"
+    west.mkdir()
+    (west / "headset.mp4").write_bytes(b"x" * 8)
+
+    async def fake_jav(settings, db, dest_dir, code):
+        (dest_dir / f"{code}.nfo").write_text("<movie><title>Headset</title></movie>", encoding="utf-8")
+        (dest_dir / "poster.jpg").write_bytes(b"j")
+        from app.library import index_code_dir
+        return index_code_dir(dest_dir, dest_dir.parent.name)
+
+    async def fake_west(settings, video):
+        video.with_name(f"{video.stem}.nfo").write_text(
+            '<movie><title>Office</title><uniqueid type="tpdb">vr1</uniqueid></movie>',
+            encoding="utf-8",
+        )
+        video.with_name(f"{video.stem}-poster.jpg").write_bytes(b"p")
+        return True
+
+    monkeypatch.setattr("app.scrape.fill_jav_folder", fake_jav)
+    monkeypatch.setattr("app.western_archive.fill_western_video", fake_west)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        lib = Library(settings, db)
+        count = await lib.refresh(scrape_missing=True)
+        assert count == 2
+        jav_row = await db.get_library("DSVR-1124")
+        assert jav_row["has_nfo"] == 1
+        assert jav_row["has_poster"] == 1
+        west_rows = await db.list_western()
+        assert west_rows[0]["has_nfo"] == 1
+        assert west_rows[0]["has_poster"] == 1
+        assert west_rows[0]["title"] == "Office"
+
+    asyncio.run(run())

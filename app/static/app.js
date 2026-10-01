@@ -2386,9 +2386,9 @@ if ("IntersectionObserver" in window) {
 $("library-rescan").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
-  setStatus($("library-status"), "正在重扫…");
+    setStatus($("library-status"), "正在重扫并补刮缺失的封面…");
   try {
-    const data = await api("/api/library/refresh", { method: "POST" });
+    const data = await api("/api/library/refresh?scrape=1", { method: "POST" });
     await loadLibrary();
     setStatus($("library-status"), `已重扫，共 ${data.count} 部`, "good");
   } catch (err) {

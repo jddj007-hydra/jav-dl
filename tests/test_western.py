@@ -542,6 +542,66 @@ def test_scrape_vr_moves_file_into_vr_root(tmp_path):
     asyncio.run(run())
 
 
+def test_fill_western_video_writes_sidecars(tmp_path, monkeypatch):
+    import asyncio
+
+    from app.config import Settings
+    from app.western_archive import fill_western_video
+
+    async def fake_filename(settings, name):
+        return {
+            "id": "vr1",
+            "kind": "scene",
+            "site": "VR Bangers",
+            "title": "Office Fantasy",
+            "date": "2024-05-06",
+            "performers": ["Ann"],
+            "cover": "https://cdn.theporndb.net/p.jpg",
+        }
+
+    async def fake_meta(settings, info):
+        return {
+            "title": "Office Fantasy",
+            "release_date": "2024-05-06",
+            "studio": "VR Bangers",
+            "actors": ["Ann"],
+            "cover": "https://cdn.theporndb.net/p.jpg",
+            "uniqueid": "vr1",
+            "uniqueid_type": "tpdb",
+            "genres": ["Virtual Reality"],
+            "plot": "",
+            "runtime": "40",
+            "url": "",
+            "code": "",
+        }
+
+    async def fake_cover(settings, url, referer=None):
+        return b"vr-poster"
+
+    monkeypatch.setattr("app.western_archive.fetch_by_filename", fake_filename)
+    monkeypatch.setattr("app.western_archive.western_metadata", fake_meta)
+    monkeypatch.setattr("app.western_archive.fetch_cover_bytes", fake_cover)
+    video = tmp_path / "VRBangers" / "headset.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x" * 80)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        vr_media_dir=str(tmp_path),
+        scrape_min_mb=0,
+        tpdb_api_key="token",
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        assert await fill_western_video(settings, video) is True
+        assert (video.parent / "headset.nfo").is_file()
+        assert (video.parent / "headset-poster.jpg").read_bytes() == b"vr-poster"
+
+    asyncio.run(run())
+
+
 def test_western_slug_dir_is_removed_after_a_loose_file_is_archived(tmp_path):
     import asyncio
 
