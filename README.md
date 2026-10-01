@@ -6,13 +6,13 @@
 顶栏：JAV · 欧美 · 媒体库 · 追更 · 队列 · 设置
 
 JAV
-  打开即拉 JavBus 最新（有码 / 无码，可翻页）
+  打开即拉 JavBus 最新（有码 / 无码，平面 / VR，可翻页）
   番号  → 详情 + 磁力猫（无码/中字/热度）
   关键词 → 作品列表 → 点进番号
 
 欧美
-  打开即拉 ThePornDB 最新（场景 / 电影，要 token）
-  片名或演员 → 作品列表
+  打开即拉 ThePornDB 最新（场景 / 电影，平面 / VR，要 token）
+  片名、演员或片商 → 作品列表
   点一张 → 详情 + 磁力猫按片商搜索（片名相近的靠前）
                                       │
                                       ▼
@@ -50,14 +50,14 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 ./run.sh
 ```
 
-日本片落在 `./downloads/{番号}/`，刮削后归档到 `./media/YYYYMM/{番号}/`。欧美片落在 `./downloads/western/{目录名}/`，不按番号刮削。
+日本片落在 `./downloads/{番号}/`。平面刮削到 `./media/YYYYMM/{番号}/`，番号 VR 刮削到 `vrporn/jav/{厂牌}/{番号}/`（见 `VR_MEDIA_DIR`）。欧美片落在 `./downloads/western/{目录名}/`，不按番号刮削；平面和 VR 再分别进欧美目录和 `vrporn/western/{片商}/`。
 
 ## 使用
 
 ### JAV
 
-1. 打开页面就是有码最新一页，可切「无码」、翻页，或点「最新」回到第一页
-2. 也可以输入番号（`ssis001` / `SSIS-001`）或关键词（女优名、片名）
+1. 打开页面就是有码平面最新一页，可切「无码」、「平面 / VR」、翻页，或点「最新」回到第一页。VR 最新走 JavBus 的 VR専用 列表
+2. 也可以输入番号（`ssis001` / `SSIS-001`）或关键词（女优名、片名）。列表和搜索都按当前的平面 / VR 筛；直接查一个番号仍打开详情
 3. 番号：封面、片名、女优、预览图；关键词：先出作品列表，点一张进详情
 4. 磁链来自磁力猫，按 **无码破解 > 无码 > 中文 > 热度 > 体积** 排，第一行高亮但不会自动下
 5. 库里已有的作品会标「已有」，不会禁止再下
@@ -65,11 +65,11 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 ### 欧美
 
 1. 设置里填写 ThePornDB token（账号在 [theporndb.net](https://theporndb.net) 自己生成）。留空表示不改已保存的 token
-2. 打开「欧美」即拉场景最新；可切「电影」、翻页，或用片名 / 演员搜索
+2. 打开「欧美」即拉场景平面最新；可切「电影」、「平面 / VR」、翻页，或用片名 / 演员 / 片商搜索。片商名对得上会直接打开该站目录
 3. 点一张看片商、演员、简介，磁链按片商去磁力猫搜。片名或演员对得上的排前面，合集和大约 15GB 以上靠后
-4. 库里已有的会标「已有」，仍可以再下。标了 suck 的不会再入队。下载目录是 `western/{片商-日期-标题}`。配置了 `WESTERN_MEDIA_DIR` 后，下完按片商归档（`片商/文件名.nfo` 和 `文件名-poster.jpg`），不写进 `YYYYMM/番号/`
+4. 库里已有的会标「已有」，仍可以再下。标了 suck 的不会再入队。下载目录是 `western/{片商-日期-标题}`。平面归档到 `WESTERN_MEDIA_DIR/{片商}/`，VR 归档到 `VR_MEDIA_DIR/{片商}/`（`文件名.nfo` 和 `文件名-poster.jpg`），都不写进 `YYYYMM/番号/`
 
-两边的下载都进同一个队列。点下载后到「队列」看进度。媒体库按封面看已归档的番号和欧美片。追更页可以关注女优、系列、片商，以及欧美演员和片商。
+两边的下载都进同一个队列。点下载后到「队列」看进度。媒体库分四块：番号（按月份）、番号VR（按厂牌）、欧美（按片商）、VR（欧美 VR，按片商）。追更页可以关注女优、系列、片商，以及欧美演员和片商。
 
 ## 它怎么工作
 
@@ -78,16 +78,16 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
    │
    ▼
 FastAPI :8787
-   ├── /api/search            JavBus 番号或关键词（SQLite 缓存 24h）
-   ├── /api/jav/latest        JavBus 有码 / 无码最新（缓存 2h）
-   ├── /api/western/latest    ThePornDB 场景 / 电影最新（缓存 2h）
-   ├── /api/western/search    ThePornDB 片名或演员
+   ├── /api/search            JavBus 番号或关键词（SQLite 缓存 24h；列表可带 format=flat|vr）
+   ├── /api/jav/latest        JavBus 有码 / 无码最新（缓存 2h；format=vr 走 VR専用）
+   ├── /api/western/latest    ThePornDB 场景 / 电影最新（缓存 2h；format=flat|vr）
+   ├── /api/western/search    ThePornDB 片名、演员或片商
    ├── /api/western/{kind}/{id}
    ├── /api/resources         磁力猫：?code= 番号排序，?q= 关键词按热度
    ├── /api/downloads         入队 / 暂停 / 继续 / 取消；可一次贴多个番号，预览后再入队。多文件种子先勾选文件
    ├── /api/downloads/events  队列状态推送。页面在后台时断开，断线后退回大约 30 秒拉一次
    ├── /api/subscriptions     追更：女优、系列、片商、欧美演员和片商。默认只提醒
-   ├── /api/library           媒体库：番号按月份，欧美按片商
+   ├── /api/library           媒体库：番号按月份，番号VR按厂牌，欧美 / VR 按片商
    ├── /api/img               封面代理 + 磁盘缓存
    ├── /api/settings          代理、站点、ThePornDB token（写入 data/config.json）
    └── /api/health            aria2 / 迅雷 / JavBus / 磁力猫 / token 是否已填
@@ -99,15 +99,18 @@ FastAPI :8787
 
 | 目录 | 职责 |
 |------|------|
-| `app/codes.py` | 番号规范化：`ssis001` → `SSIS-001` |
+| `app/codes.py` | 番号规范化：`ssis001` → `SSIS-001`；番号 VR 厂牌 |
+| `app/studios.py` | 欧美片商前缀、VR 片商判定 |
 | `app/slug.py` | 欧美下载目录名，保证不是合法番号 |
-| `app/sources/javbus.py` | JavBus HTML 解析（详情、搜索、最新列表） |
-| `app/sources/tpdb.py` | ThePornDB 场景 / 电影 |
+| `app/sources/javbus.py` | JavBus HTML 解析（详情、搜索、最新列表、VR専用） |
+| `app/sources/tpdb.py` | ThePornDB 场景 / 电影（平面 / VR 列表） |
 | `app/sources/clm.py` | 磁力猫搜索（atob 包装页、base32 id → info_hash、十分钟结果缓存、备用域） |
 | `app/ranking.py` | 番号磁链的 UC/U/C 排序；关键词磁链按热度 |
 | `app/downloader/jobs.py` | 任务状态机，对接 aria2 / 迅雷 |
-| `app/scrape.py` | 带番号的文件写 NFO/封面，归档到 `YYYYMM/番号/`；跳过 `western/` |
-| `app/library.py` | 扫描归档目录，JAV 搜索时标「库里已有」 |
+| `app/scrape.py` | 带番号的文件写 NFO/封面；平面进 `YYYYMM/番号/`，番号 VR 进 `vrporn/jav/{厂牌}/{番号}/`；跳过 `western/` |
+| `app/western_archive.py` | 欧美刮削：平面进欧美目录，VR 进 `vrporn/western/{片商}/` |
+| `app/rehome.py` | 把误进平面库的 VR 迁到 vrporn |
+| `app/library.py` | 扫描四套归档目录，搜索时标「库里已有」 |
 | `app/downloader/aria2.py` | aria2 JSON-RPC |
 | `app/downloader/xunlei.py` | 网页迅雷面板，项目 [cnk3x/xunlei](https://github.com/cnk3x/xunlei) |
 | `app/static/` | 单页：JAV、欧美、媒体库、追更、队列、设置 |
@@ -126,11 +129,12 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `PORT` | `8787` | Web 端口（本机 `run.sh`） |
 | `DATA_DIR` | `./data` | SQLite、封面缓存、用户配置 |
 | `DOWNLOAD_DIR` | `./downloads` | 本机下载根目录 |
-| `MEDIA_DIR` | `./media` | 刮削归档根目录（`YYYYMM/番号/`） |
+| `MEDIA_DIR` | `./media` | 番号平面归档根目录（`YYYYMM/番号/`） |
 | `SCRAPE_ENABLED` | `true` | 带番号的文件是否刮削归档 |
 | `SCRAPE_SETTLE_SECONDS` | `60` | 下完后再静置这么久才归档。设置页可改，留空保存则保留原值 |
 | `SCRAPE_MIN_MB` | `50` | 小于这个体积不当成正片。设置页可改，留空保存则保留原值 |
-| `WESTERN_MEDIA_DIR` | 空 | 欧美归档根目录。空则只下载不归档。设置页可改，留空保存则保留原值 |
+| `WESTERN_MEDIA_DIR` | 空 | 欧美平面归档根目录。空则只下载不归档。设置页可改，留空保存则保留原值 |
+| `VR_MEDIA_DIR` | 空 | 欧美 VR 归档根目录，现网是 `vrporn/western`。空则 VR 欧美退回欧美平面目录。设置页可改，留空保存则保留原值。番号 VR 用它的上一级下的 `jav/`（例如 `vrporn/western` → `vrporn/jav`） |
 | `TPDB_API_KEY` | 空 | ThePornDB token，也可只在设置页填写 |
 | `NOTIFY_CHANNEL` | 空 | `telegram`、`bark`、`serverchan` 之一。空则不通知 |
 | `NOTIFY_TELEGRAM_TOKEN` / `NOTIFY_TELEGRAM_CHAT` | 空 | Telegram 机器人 token 和 chat id |
@@ -153,9 +157,7 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 
 追更在单独一页。女优可以写名字，系列和片商粘贴 JavBus 页面。欧美填演员或片商名字。第一次检查只记下现有作品。之后的新作默认只提醒；打开自动下载后，才按无码破解、中字和体积入队。库里或队列里已有的不重复下。
 
-
-
-刮削在设置页开关。只处理文件名或文件夹里能抽出唯一番号的视频。`downloads/western/` 整目录跳过。归档目录可改成和别的库共用的 media；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。
+刮削在设置页开关。带番号的视频：平面进 `MEDIA_DIR/YYYYMM/番号/`，番号 VR（厂牌名带 VR，或 DSVR / SAVR / MKCK 这一类）进 `vrporn/jav/{厂牌}/{番号}/`。`downloads/western/` 整目录按欧美处理：平面进 `WESTERN_MEDIA_DIR/{片商}/`，VR 进 `VR_MEDIA_DIR/{片商}/`。归档目录可改成和别的库共用；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。番号平面的月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。已经进错目录的 VR，可用 `app/rehome.py` 迁到 vrporn 再重扫媒体库。
 
 ## 测试
 
@@ -163,4 +165,4 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 python3 -m pytest
 ```
 
-覆盖番号规范化、磁链排序、JavBus/磁力猫 HTML 解析、ThePornDB 字段映射、欧美目录名、迅雷文件索引。不打真实站点。
+覆盖番号规范化、磁链排序、JavBus/磁力猫 HTML 解析、ThePornDB 字段映射、欧美目录名、平面 / VR 拆分、迅雷文件索引。不打真实站点。
