@@ -44,3 +44,16 @@ def test_extract_code_from_torrent_names():
     assert extract_code("FHD-1080 SSIS") is None
     assert extract_code("SSIS-001 IPX-999 合集") is None
     assert extract_codes("SSIS-001-C") == ["SSIS-001"]
+
+
+def test_jav_vr_maker():
+    from app.codes import jav_vr_maker
+
+    assert jav_vr_maker("DSVR-1124") == "DSVR"
+    assert jav_vr_maker("PPVR-002") == "PPVR"
+    assert jav_vr_maker("EXMO-011") == "EXMO"
+    assert jav_vr_maker("DANDYHQVR-015") == "DANDYHQVR"
+    assert jav_vr_maker("3DSVR-2028") == "3DSVR"
+    assert jav_vr_maker("URVRSP-605") == "URVRSP"
+    assert jav_vr_maker("SSIS-001") is None
+    assert jav_vr_maker("092126-001") is None

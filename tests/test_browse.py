@@ -21,6 +21,12 @@ class _DB:
     async def suck_keys(self, kind, keys):
         return set()
 
+    async def get_metadata(self, key, ttl):
+        return None
+
+    async def put_metadata(self, key, payload):
+        return None
+
 
 def test_jav_browse_reads_the_star_page(monkeypatch):
     seen = []
@@ -172,18 +178,62 @@ def test_keyword_search_drops_excluded_orientation(monkeypatch):
     asyncio.run(run())
 
 
+def test_jav_latest_and_search_split_vr(monkeypatch):
+    seen = []
+
+    async def fake_latest(settings, kind, page=1, fmt="flat"):
+        seen.append((kind, page, fmt))
+        return [
+            {"code": "SSIS-001", "title": "禁欲", "cover": "", "release_date": "2021-02-18", "url": "", "source": "javbus"},
+            {"code": "DSVR-1124", "title": "VR", "cover": "", "release_date": "2022-05-01", "url": "", "source": "javbus"},
+        ]
+
+    async def fake_search(settings, query):
+        return [
+            {"code": "SSIS-001", "title": "禁欲", "cover": "", "release_date": "", "url": "", "source": "javbus"},
+            {"code": "SAVR-1190", "title": "Headset", "cover": "", "release_date": "", "url": "", "source": "javbus"},
+        ]
+
+    monkeypatch.setattr("app.routers.search.fetch_latest", fake_latest)
+    monkeypatch.setattr("app.routers.search.search_works", fake_search)
+    app = FastAPI()
+    app.include_router(search.router)
+    app.state.settings = Settings()
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            flat = await client.get("/api/jav/latest", params={"format": "flat"})
+            assert [item["code"] for item in flat.json()["items"]] == ["SSIS-001"]
+            vr = await client.get("/api/jav/latest", params={"format": "vr"})
+            assert vr.json()["format"] == "vr"
+            assert [item["code"] for item in vr.json()["items"]] == ["SSIS-001", "DSVR-1124"]
+            found = await client.get("/api/search", params={"q": "葵", "format": "vr"})
+            assert [item["code"] for item in found.json()["items"]] == ["SAVR-1190"]
+
+    asyncio.run(run())
+    assert seen[0][2] == "flat"
+    assert seen[1][2] == "vr"
+
+
 def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypatch):
-    async def fake_list(settings, kind, page=1, query=None, theme=None, extra=None):
+    async def fake_search(settings, kind, query, page=1, theme=None, fmt=None):
         return {
             "items": [
                 {"id": "ok", "duration": "40", "title": "Room", "tags": ["Anal"]},
                 {"id": "gay", "duration": "40", "title": "Room", "tags": ["Threesome (Gay)"]},
                 {"id": "bi", "duration": "40", "title": "Night", "tags": ["Bisexual"]},
                 {"id": "short", "duration": "5", "title": "Clip", "tags": []},
+                {"id": "unknown", "duration": "", "title": "No Length", "tags": []},
             ],
             "page": 1,
             "last_page": 1,
         }
+
+    async def fake_list(settings, kind, page=1, query=None, theme=None, extra=None, fmt=None):
+        return await fake_search(settings, kind, query, page, theme)
 
     async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
         return {
@@ -194,6 +244,7 @@ def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypat
             "last_page": 1,
         }
 
+    monkeypatch.setattr("app.routers.western.search_catalog", fake_search)
     monkeypatch.setattr("app.routers.western.fetch_list", fake_list)
     monkeypatch.setattr("app.routers.western.fetch_facet", fake_facet)
     app = FastAPI()
@@ -211,6 +262,84 @@ def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypat
             opened = await client.get("/api/western/browse", params={"facet": "performer", "name": "Jane Doe"})
             assert opened.status_code == 200
             assert [item["id"] for item in opened.json()["items"]] == ["gay"]
+
+    asyncio.run(run())
+
+
+def test_western_site_lists_keep_unknown_duration(monkeypatch):
+    async def fake_search(settings, kind, query, page=1, theme=None, fmt=None):
+        return {
+            "items": [
+                {"id": "full", "duration": "40", "title": "A", "tags": []},
+                {"id": "unknown", "duration": "", "title": "B", "tags": []},
+                {"id": "short", "duration": "5", "title": "C", "tags": []},
+            ],
+            "page": 1,
+            "last_page": 10,
+            "matched_site": "SexLikeReal",
+        }
+
+    async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
+        return {
+            "items": [
+                {"id": "unknown", "kind": kind, "duration": "", "title": "B", "tags": [], "site": name, "performers": []},
+                {"id": "short", "kind": kind, "duration": "5", "title": "C", "tags": [], "site": name, "performers": []},
+            ],
+            "page": page,
+            "last_page": 10,
+        }
+
+    monkeypatch.setattr("app.routers.western.search_catalog", fake_search)
+    monkeypatch.setattr("app.routers.western.fetch_facet", fake_facet)
+    app = FastAPI()
+    app.include_router(western.router)
+    app.state.settings = Settings(tpdb_api_key="token")
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            found = await client.get("/api/western/search", params={"q": "SexLikeReal", "kind": "scene"})
+            assert found.status_code == 200
+            assert [item["id"] for item in found.json()["items"]] == ["full", "unknown"]
+            opened = await client.get("/api/western/browse", params={"facet": "site", "name": "SexLikeReal"})
+            assert opened.status_code == 200
+            assert [item["id"] for item in opened.json()["items"]] == ["unknown"]
+            tagged = await client.get("/api/western/browse", params={"facet": "tag", "name": "Massage", "tag_id": "135"})
+            assert tagged.status_code == 200
+            assert [item["id"] for item in tagged.json()["items"]] == []
+
+    asyncio.run(run())
+
+
+def test_western_format_splits_vr_from_flat(monkeypatch):
+    async def fake_search(settings, kind, query, page=1, theme=None, fmt=None):
+        return {
+            "items": [
+                {"id": "flat", "duration": "40", "title": "Room", "tags": [], "vr": False},
+                {"id": "vr", "duration": "40", "title": "Headset", "tags": ["Virtual Reality"], "vr": True},
+                {"id": "unknown", "duration": "", "title": "No Length", "tags": ["Virtual Reality"], "vr": True},
+            ],
+            "page": 1,
+            "last_page": 2,
+            "matched_site": "SexLikeReal",
+        }
+
+    monkeypatch.setattr("app.routers.western.search_catalog", fake_search)
+    app = FastAPI()
+    app.include_router(western.router)
+    app.state.settings = Settings(tpdb_api_key="token")
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            flat = await client.get("/api/western/search", params={"q": "SexLikeReal", "format": "flat"})
+            assert [item["id"] for item in flat.json()["items"]] == ["flat"]
+            vr = await client.get("/api/western/search", params={"q": "SexLikeReal", "format": "vr"})
+            assert [item["id"] for item in vr.json()["items"]] == ["vr", "unknown"]
 
     asyncio.run(run())
 

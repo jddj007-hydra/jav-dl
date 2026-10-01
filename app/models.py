@@ -91,6 +91,7 @@ class SettingsUpdate(BaseModel):
     scrape_enabled: bool | None = None
     media_dir: str | None = None
     western_media_dir: str | None = None
+    vr_media_dir: str | None = None
     scrape_settle_seconds: int | None = Field(default=None, ge=0)
     scrape_min_mb: int | None = Field(default=None, ge=0)
     tpdb_api_key: str | None = None

@@ -16,6 +16,13 @@ FALSE_PREFIXES = frozenset({
     "HDR", "HEVC", "AV1", "AAC", "DTS", "MKV", "MP4", "WMV", "ISO", "WEB",
     "REMUX", "BLURAY", "H264", "H265", "X264", "X265", "AVC",
 })
+# 番号 VR 厂牌。EXMO / MKCK / CBIKMV 名字里没有 VR，但现网 vrporn/jav 是这一套。
+_JAV_VR_MAKERS = frozenset({
+    "AJVR", "BIBIVR", "CBIKMV", "CJVR", "CRVR", "DANDYHQVR", "DSVR",
+    "EBVR", "EXMO", "FCVR", "HUNVR", "IPVR", "JUVR", "KAVR", "KIVR",
+    "KIWVR", "KMVR", "MDVR", "MKCK", "NHVR", "NKKVR", "PPVR", "PXVR",
+    "SAVR", "SIVR", "TMAVR", "URVR", "VRKM", "WAVR", "3DSVR",
+})
 
 
 def _fc2_code(number: str) -> str:
@@ -98,3 +105,19 @@ def extract_codes(raw: str) -> list[str]:
 def extract_code(raw: str) -> str | None:
     codes = extract_codes(raw)
     return codes[0] if len(codes) == 1 else None
+
+
+def code_maker(code: str) -> str:
+    normalized = normalize_code(code) or (code or "").strip().upper()
+    if not normalized or "-" not in normalized:
+        return normalized
+    return normalized.split("-", 1)[0]
+
+
+def jav_vr_maker(code: str) -> str | None:
+    maker = code_maker(code)
+    if not maker or maker.isdigit():
+        return None
+    if maker in _JAV_VR_MAKERS or "VR" in maker:
+        return maker
+    return None

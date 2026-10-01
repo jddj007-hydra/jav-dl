@@ -10,6 +10,7 @@ from app.codes import normalize_code
 from app.config import Settings
 from app.db import Database
 from app.scrape import is_video
+from app.western_archive import western_fs_rel
 
 POSTER_NAMES = {"poster.jpg", "poster.png", "poster.jpeg"}
 
@@ -283,10 +284,12 @@ def _safe_join(root: Path | None, rel: str) -> Path | None:
 
 
 def poster_file(root: Path | None, rel: str, kind: str) -> Path | None:
+    if kind in ("western", "vr"):
+        rel = western_fs_rel(rel)
     target = _safe_join(root, rel)
     if target is None:
         return None
-    if kind == "western":
+    if kind in ("western", "vr"):
         candidates = [target.with_name(f"{target.stem}-poster.jpg")]
     else:
         candidates = [target / name for name in ("poster.jpg", "poster.png", "poster.jpeg")]
@@ -350,13 +353,15 @@ def _drop_empty_dir(directory: Path, root: Path) -> None:
 
 def remove_archived(root: Path | None, rel: str, kind: str) -> bool:
     """Delete one archived work. The path has to stay inside that library root."""
+    if kind in ("western", "vr"):
+        rel = western_fs_rel(rel)
     target = _safe_join(root, rel)
     if target is None or root is None:
         return False
     resolved = _inside(root, target)
     if resolved is None:
         return False
-    if kind == "western":
+    if kind in ("western", "vr"):
         if not resolved.is_file():
             return False
         parent = resolved.parent
@@ -397,7 +402,7 @@ def scan_media(media_dir: Path) -> list[dict]:
     return list(found.values())
 
 
-def scan_western(root: Path | None) -> list[dict]:
+def scan_western(root: Path | None, shelf: str = "western") -> list[dict]:
     if root is None or not root.is_dir():
         return []
     rows: list[dict] = []
@@ -413,10 +418,12 @@ def scan_western(root: Path | None) -> list[dict]:
             text = _read_text(nfo)
             fields = nfo_fields(text)
             rel = f"{studio.name}/{video.name}"
+            path = rel if shelf != "vr" else f"vr/{rel}"
             rows.append({
-                "path": rel,
+                "path": path,
                 "tpdb_id": tpdb_id_from_nfo(text),
                 "studio": studio.name,
+                "shelf": shelf,
                 "title": fields["title"] or video.stem,
                 "has_nfo": 1 if nfo else 0,
                 "has_poster": 1 if poster else 0,
@@ -428,6 +435,18 @@ def scan_western(root: Path | None) -> list[dict]:
     return rows
 
 
+def archived_jav_path(settings: Settings, rel: str) -> Path:
+    if not rel:
+        return settings.media_dir
+    candidates = [settings.media_dir / rel]
+    if settings.jav_vr_root is not None:
+        candidates.append(settings.jav_vr_root / rel)
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[-1] if settings.jav_vr_root is not None else candidates[0]
+
+
 class Library:
     def __init__(self, settings: Settings, db: Database):
         self.settings = settings
@@ -437,7 +456,17 @@ class Library:
     async def refresh(self) -> int:
         async with self._lock:
             rows = await asyncio.to_thread(scan_media, self.settings.media_dir)
-            western = await asyncio.to_thread(scan_western, self.settings.western_root)
+            jav_vr = self.settings.jav_vr_root
+            if jav_vr is not None and jav_vr != self.settings.media_dir:
+                extra = await asyncio.to_thread(scan_media, jav_vr)
+                by_code = {row["code"]: row for row in rows}
+                for row in extra:
+                    by_code[row["code"]] = row
+                rows = list(by_code.values())
+            western = await asyncio.to_thread(scan_western, self.settings.western_root, "western")
+            vr_root = self.settings.vr_root
+            if vr_root is not None and vr_root != self.settings.western_root:
+                western.extend(await asyncio.to_thread(scan_western, vr_root, "vr"))
             await self.db.replace_library(rows)
             await self.db.replace_western(western)
             return len(rows) + len(western)

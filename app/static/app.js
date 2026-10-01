@@ -27,6 +27,7 @@ let queueRetry = null;
 let queueSlow = null;
 let sseFailures = 0;
 let javKind = "censored";
+let javFormat = "flat";
 let javPage = 1;
 let javMode = "latest";
 let javBootstrapped = false;
@@ -34,6 +35,7 @@ let javBrowse = null;
 let javTrail = [];
 let javView = 0;
 let westernKind = "scene";
+let westernFormat = "flat";
 let westernPage = 1;
 let westernLastPage = null;
 let westernMode = "latest";
@@ -490,7 +492,8 @@ function showWorksList() {
 
 function markSeg(id, kind) {
   document.querySelectorAll(`#${id} button`).forEach((btn) => {
-    btn.classList.toggle("on", btn.dataset.kind === kind);
+    const value = btn.dataset.kind || btn.dataset.format || btn.dataset.lib || "";
+    btn.classList.toggle("on", value === kind);
   });
 }
 
@@ -523,6 +526,7 @@ function javListFrame() {
     page: javPage,
     browse: javBrowse ? { ...javBrowse } : null,
     kind: javKind,
+    format: javFormat,
   };
 }
 
@@ -552,6 +556,7 @@ function restoreJavFrame(frame) {
     javPage = list.page || 1;
     javBrowse = list.browse || null;
     javKind = list.kind || javKind;
+    javFormat = list.format || javFormat;
     fromWorks = frame.fromWorks;
     renderMeta(frame.meta);
     renderResources(frame.resources || []);
@@ -567,7 +572,9 @@ function restoreJavFrame(frame) {
   javPage = frame.page || 1;
   javBrowse = frame.browse || null;
   javKind = frame.kind || javKind;
+  javFormat = frame.format || javFormat;
   markSeg("jav-kind", javKind);
+  markSeg("jav-format", javFormat);
   fromWorks = false;
   showBack(javTrail.length > 0);
   clearDetail();
@@ -588,9 +595,10 @@ function restoreJavFrame(frame) {
   }
   const n = lastWorks.length;
   const latest = javMode === "latest";
+  const fmt = javFormat === "vr" ? "VR" : "平面";
   setStatus(
     $("search-status"),
-    n ? (latest ? `最新 ${n} 部` : `找到 ${n} 部作品，点一张看磁链`) : (latest ? "没有更多了" : "没有搜到作品"),
+    n ? (latest ? `${fmt} · 最新 ${n} 部` : `找到 ${n} 部作品，点一张看磁链`) : (latest ? "没有更多了" : "没有搜到作品"),
     n ? "good" : "bad",
   );
 }
@@ -607,7 +615,7 @@ async function loadJavBrowse(url, name, page) {
   showSkeleton("works-wrap", "works-list");
   setStatus($("search-status"), `正在列 ${name} 的作品…`);
   try {
-    const params = new URLSearchParams({ url, page: String(page) });
+    const params = new URLSearchParams({ url, page: String(page), format: javFormat });
     const data = await api("/api/jav/browse?" + params.toString());
     if (view !== javView) return;
     const items = data.items || [];
@@ -643,7 +651,7 @@ async function loadJavFeed(page) {
   showSkeleton("works-wrap", "works-list");
   setStatus($("search-status"), "加载最新…");
   try {
-    const data = await api(`/api/jav/latest?kind=${encodeURIComponent(javKind)}&page=${page}`);
+    const data = await api(`/api/jav/latest?kind=${encodeURIComponent(javKind)}&format=${encodeURIComponent(javFormat)}&page=${page}`);
     if (view !== javView) return;
     const items = data.items || [];
     rememberWorks("", items);
@@ -653,9 +661,10 @@ async function loadJavFeed(page) {
       $("jav-pager").querySelectorAll("button")[1].disabled = true;
     }
     const n = items.length;
+    const fmt = javFormat === "vr" ? "VR" : "平面";
     setStatus(
       $("search-status"),
-      data.error || (n ? `最新 ${n} 部` : "没有更多了"),
+      data.error || (n ? `${fmt} · 最新 ${n} 部` : "没有更多了"),
       n && !data.error ? "good" : "bad",
     );
   } catch (err) {
@@ -682,7 +691,7 @@ async function runCodeSearch(code, { fromList = false } = {}) {
     clearWorksView();
   }
   const [meta, res] = await Promise.allSettled([
-    api("/api/search?q=" + encodeURIComponent(code)),
+    api("/api/search?q=" + encodeURIComponent(code) + "&format=" + encodeURIComponent(javFormat)),
     api("/api/resources?code=" + encodeURIComponent(code)),
   ]);
   if (view !== javView) return;
@@ -749,7 +758,7 @@ $("search-form").addEventListener("submit", async (e) => {
       await runCodeSearch(q, { fromList: false });
       return;
     }
-    const data = await api("/api/search?q=" + encodeURIComponent(q));
+    const data = await api("/api/search?q=" + encodeURIComponent(q) + "&format=" + encodeURIComponent(javFormat));
     if (data.mode === "code") {
       await runCodeSearch(data.code, { fromList: false });
       return;
@@ -777,6 +786,24 @@ $("jav-kind").addEventListener("click", (e) => {
   if (!btn) return;
   javKind = btn.dataset.kind;
   markSeg("jav-kind", javKind);
+  loadJavFeed(1);
+});
+
+$("jav-format").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-format]");
+  if (!btn) return;
+  javFormat = btn.dataset.format || "flat";
+  markSeg("jav-format", javFormat);
+  if (javMode === "browse" && javBrowse) {
+    loadJavBrowse(javBrowse.url, javBrowse.name, 1).catch((err) => {
+      setStatus($("search-status"), err.message, "bad");
+    });
+    return;
+  }
+  if (javMode === "search") {
+    $("search-form").requestSubmit();
+    return;
+  }
   loadJavFeed(1);
 });
 
@@ -1352,6 +1379,7 @@ async function loadSettings() {
   form.scrape_enabled.checked = s.scrape_enabled !== false;
   form.media_dir.value = s.media_dir || "";
   form.western_media_dir.value = s.western_media_dir || "";
+  form.vr_media_dir.value = s.vr_media_dir || "";
   form.scrape_settle_seconds.value = s.scrape_settle_seconds ?? "";
   form.scrape_min_mb.value = s.scrape_min_mb ?? "";
   form.notify_channel.value = s.notify_channel || "";
@@ -1425,6 +1453,8 @@ $("settings-form").addEventListener("submit", async (e) => {
   if (minMb !== "") body.scrape_min_mb = Number(minMb);
   const westernDir = form.western_media_dir.value.trim();
   if (westernDir) body.western_media_dir = westernDir;
+  const vrDir = form.vr_media_dir.value.trim();
+  if (vrDir) body.vr_media_dir = vrDir;
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;
   if (!body.tpdb_api_key) delete body.tpdb_api_key;
@@ -1563,9 +1593,11 @@ function westernThemeLabel() {
   return btn ? btn.textContent.trim() : "";
 }
 
-function westernCountStatus(n, latest) {
+function westernCountStatus(n, latest, matchedSite) {
   const theme = westernThemeLabel();
-  const prefix = theme ? `${theme} · ` : "";
+  const fmt = westernFormat === "vr" ? "VR" : "平面";
+  const bits = [fmt, theme, matchedSite].filter(Boolean);
+  const prefix = bits.length ? `${bits.join(" · ")} · ` : "";
   if (latest) return n ? `${prefix}最新 ${n} 部` : (theme ? `${theme} 没有更多了` : "没有更多了");
   return n ? `${prefix}找到 ${n} 部` : "没有搜到作品";
 }
@@ -1608,6 +1640,7 @@ function westernListFrame() {
     lastPage: westernLastPage,
     theme: westernTheme,
     kind: westernKind,
+    format: westernFormat,
     query: $("western-input").value.trim(),
     browse: westernBrowse ? { ...westernBrowse } : null,
   };
@@ -1637,8 +1670,10 @@ function restoreWestern(frame) {
     westernPage = list.page || 1;
     westernTheme = list.theme || "";
     westernKind = list.kind || westernKind;
+    westernFormat = list.format || westernFormat;
     westernBrowse = list.browse || null;
     markSeg("western-kind", westernKind);
+    markSeg("western-format", westernFormat);
     markThemes();
     renderWesternMeta(frame.item);
     renderWesternResources(frame.resources || []);
@@ -1655,8 +1690,10 @@ function restoreWestern(frame) {
   westernLastPage = frame.lastPage || null;
   westernTheme = frame.theme || "";
   westernKind = frame.kind || westernKind;
+  westernFormat = frame.format || westernFormat;
   westernBrowse = frame.browse || null;
   markSeg("western-kind", westernKind);
+  markSeg("western-format", westernFormat);
   markThemes();
   $("western-input").value = frame.query || "";
   $("western-meta").hidden = true;
@@ -1712,6 +1749,7 @@ async function loadWesternBrowse(facet, name, page, tagId) {
       page: String(page),
     });
     if (ident) params.set("tag_id", ident);
+    params.set("format", westernFormat);
     const data = await api("/api/western/browse?" + params.toString());
     if (view !== westernView) return;
     westernItems = data.items || [];
@@ -1750,6 +1788,7 @@ function westernParams(page, q) {
   const params = new URLSearchParams();
   params.set("kind", westernKind);
   params.set("page", String(page));
+  params.set("format", westernFormat);
   if (q) params.set("q", q);
   if (westernTheme) params.set("theme", westernTheme);
   return params.toString();
@@ -1900,7 +1939,7 @@ async function loadWesternSearch(q, page) {
   );
   setStatus(
     $("western-status"),
-    data.error || westernCountStatus(westernItems.length, false),
+    data.error || westernCountStatus(westernItems.length, false, data.matched_site || ""),
     westernItems.length && !data.error ? "good" : "bad",
   );
 }
@@ -1910,6 +1949,24 @@ $("western-kind").addEventListener("click", (e) => {
   if (!btn) return;
   westernKind = btn.dataset.kind;
   markSeg("western-kind", westernKind);
+  if (westernMode === "browse" && westernBrowse) {
+    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1, westernBrowse.tagId || "").catch((err) => {
+      setStatus($("western-status"), err.message, "bad");
+    });
+    return;
+  }
+  if (westernMode === "search") {
+    $("western-form").requestSubmit();
+    return;
+  }
+  loadWesternFeed(1);
+});
+
+$("western-format").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-format]");
+  if (!btn) return;
+  westernFormat = btn.dataset.format || "flat";
+  markSeg("western-format", westernFormat);
   if (westernMode === "browse" && westernBrowse) {
     loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1, westernBrowse.tagId || "").catch((err) => {
       setStatus($("western-status"), err.message, "bad");
@@ -2069,7 +2126,9 @@ function monthLabel(month) {
 
 const LIB_SORTS = {
   jav: [["group", "按月份"], ["added", "最近入库"], ["release", "发售日"], ["name", "番号"]],
+  jav_vr: [["group", "按厂牌"], ["added", "最近入库"], ["release", "发售日"], ["name", "番号"]],
   western: [["group", "按片商"], ["added", "最近入库"], ["release", "发行日"], ["name", "片名"]],
+  vr: [["group", "按片商"], ["added", "最近入库"], ["release", "发行日"], ["name", "片名"]],
 };
 
 function fillLibrarySort() {
@@ -2081,11 +2140,15 @@ function fillLibrarySort() {
 
 function libraryItems() {
   const data = libraryPayload || {};
-  const jav = libraryKind === "jav";
-  const groups = jav ? (data.jav || []) : (data.western || []);
+  const javLike = libraryKind === "jav" || libraryKind === "jav_vr";
+  const groups = libraryKind === "jav"
+    ? (data.jav || [])
+    : libraryKind === "jav_vr"
+      ? (data.jav_vr || [])
+      : (libraryKind === "vr" ? (data.vr || []) : (data.western || []));
   return groups.flatMap((group) => (group.items || []).map((item) => ({
     ...item,
-    group: jav ? monthLabel(group.month) : (group.studio || "未知片商"),
+    group: javLike ? monthLabel(group.month) : (group.studio || "未知片商"),
   })));
 }
 
@@ -2107,10 +2170,11 @@ function sortLibrary(items) {
 }
 
 function libraryCard(item) {
-  const jav = libraryKind === "jav";
+  const jav = libraryKind === "jav" || libraryKind === "jav_vr";
   const name = jav ? item.code : item.title;
+  const posterKind = jav ? "jav" : libraryKind;
   const poster = item.has_poster
-    ? `/api/library/poster?kind=${libraryKind}&path=${encodeURIComponent(item.path)}`
+    ? `/api/library/poster?kind=${posterKind}&path=${encodeURIComponent(item.path)}`
     : "";
   const flags = [
     item.has_poster ? "" : '<span class="flag">缺封面</span>',
@@ -2142,7 +2206,7 @@ function libraryCard(item) {
 }
 
 function librarySuckButton(item) {
-  const jav = libraryKind === "jav";
+  const jav = libraryKind === "jav" || libraryKind === "jav_vr";
   const key = jav ? item.code : item.tpdb_id;
   if (!key) return "";
   const title = item.title || key;
@@ -2190,11 +2254,15 @@ function renderLibrary() {
     renderSuck();
     return;
   }
-  const data = libraryPayload || { jav: [], western: [], jav_root: "", western_root: "" };
-  const jav = libraryKind === "jav";
-  $("library-root").textContent = jav
+  const data = libraryPayload || { jav: [], jav_vr: [], western: [], vr: [], jav_root: "", jav_vr_root: "", western_root: "", vr_root: "" };
+  const jav = libraryKind === "jav" || libraryKind === "jav_vr";
+  $("library-root").textContent = libraryKind === "jav"
     ? data.jav_root || ""
-    : (data.western_root || "还没配置欧美归档目录");
+    : libraryKind === "jav_vr"
+      ? (data.jav_vr_root || "还没配置番号 VR 归档目录")
+      : libraryKind === "vr"
+        ? (data.vr_root || "还没配置 VR 归档目录")
+        : (data.western_root || "还没配置欧美归档目录");
   const list = $("library-list");
   const status = $("library-status");
   const more = $("library-more");
@@ -2207,7 +2275,12 @@ function renderLibrary() {
     more.hidden = true;
     const empty = all.length
       ? "没有对得上的片子"
-      : (jav ? "番号库是空的" : (data.western_root ? "还没有欧美片子" : "还没配置欧美归档目录"));
+      : (libraryKind === "jav" ? "番号库是空的"
+        : (libraryKind === "jav_vr"
+          ? (data.jav_vr_root ? "还没有番号 VR" : "还没配置番号 VR 归档目录")
+          : (libraryKind === "vr"
+            ? (data.vr_root ? "还没有 VR 片子" : "还没配置 VR 归档目录")
+            : (data.western_root ? "还没有欧美片子" : "还没配置欧美归档目录"))));
     list.innerHTML = `<p class="empty">${escapeHtml(empty)}</p>`;
     setStatus(status, "", "");
     return;

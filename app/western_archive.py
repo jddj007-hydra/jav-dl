@@ -22,6 +22,7 @@ from app.scrape import (
     source_mtime,
 )
 from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail
+from app.studios import is_vr_work
 from app.western_magnets import is_western_release_name, release_text
 
 log = logging.getLogger("app.western_archive")
@@ -52,6 +53,30 @@ def read_sidecar(dest: Path) -> dict | None:
 
 def _key(name: str) -> str:
     return _ALNUM.sub("", (name or "").lower())
+
+
+def western_db_path(rel: str, shelf: str) -> str:
+    rel = str(rel or "").replace("\\", "/").lstrip("/")
+    if shelf == "vr" and not rel.startswith("vr/"):
+        return f"vr/{rel}"
+    return rel
+
+
+def western_fs_rel(path: str) -> str:
+    rel = str(path or "").replace("\\", "/").lstrip("/")
+    if rel.startswith("vr/"):
+        return rel[3:]
+    return rel
+
+
+def archive_root(settings: Settings, vr: bool) -> tuple[Path | None, str]:
+    if vr and settings.vr_root is not None:
+        return settings.vr_root, "vr"
+    if settings.western_root is not None:
+        return settings.western_root, "western"
+    if settings.vr_root is not None:
+        return settings.vr_root, "vr"
+    return None, "western"
 
 
 def studio_dir(root: Path, site: str) -> Path:
@@ -318,7 +343,8 @@ def _commit_western(
     meta: dict,
     poster: bytes | None,
 ) -> dict:
-    root = settings.western_root
+    vr = is_vr_work(meta.get("studio") or "", meta.get("genres") or [], meta.get("title") or "")
+    root, shelf = archive_root(settings, vr)
     if root is None:
         raise ScrapeError("未配置欧美归档目录")
     folder = studio_dir(root, meta.get("studio") or "")
@@ -373,9 +399,10 @@ def _commit_western(
         "videos": [str(path) for path in written],
         "title": title,
         "entries": [{
-            "path": f"{folder.name}/{path.name}",
+            "path": western_db_path(f"{folder.name}/{path.name}", shelf),
             "tpdb_id": tpdb_id,
             "studio": folder.name,
+            "shelf": shelf,
             "title": title or path.stem,
             "has_nfo": 1,
             "has_poster": 1 if poster else 0,
@@ -397,7 +424,7 @@ async def scrape_western_job(
     info: dict,
     found: tuple[Path, list[Path]] | None = None,
 ) -> dict:
-    if settings.western_root is None:
+    if archive_root(settings, False)[0] is None and archive_root(settings, True)[0] is None:
         raise ScrapeError("未配置欧美归档目录")
     dest = Path(job.get("dest") or "")
     min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)

@@ -110,6 +110,14 @@ def test_scan_western_reads_tpdb_id(tmp_path):
     assert rows[0]["title"] == "Scene"
     assert rows[0]["path"] == "Brazzers/clip.mp4"
     assert rows[0]["has_poster"] == 1
+    assert rows[0]["shelf"] == "western"
+
+    vr = tmp_path / "vr" / "VRBangers"
+    vr.mkdir(parents=True)
+    (vr / "headset.mp4").write_bytes(b"x")
+    vr_rows = scan_western(tmp_path / "vr", "vr")
+    assert vr_rows[0]["path"] == "vr/VRBangers/headset.mp4"
+    assert vr_rows[0]["shelf"] == "vr"
 
 
 def test_attach_western_marks_present():
@@ -142,6 +150,9 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         await db.upsert_library({
             "code": "IPX-001", "month": "202101", "path": "202101/IPX-001", "has_video": 1,
         })
+        await db.upsert_library({
+            "code": "DSVR-1124", "month": "DSVR", "path": "DSVR/DSVR-1124", "has_video": 1,
+        })
         await lib.remember_western({"entries": [{
             "path": "Brazzers/a.mp4",
             "tpdb_id": "abc",
@@ -153,6 +164,8 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings, db=db)))
         body = await library_page(request)
         assert [group["month"] for group in body["jav"]] == ["202102", "202101"]
+        assert [group["month"] for group in body["jav_vr"]] == ["DSVR"]
+        assert body["jav_vr"][0]["items"][0]["code"] == "DSVR-1124"
         first = body["jav"][0]["items"][0]
         assert first["full_path"].endswith("202102/SSIS-001")
         assert first["title"] == "Title"

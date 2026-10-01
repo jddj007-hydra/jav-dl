@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=27" />
+  <link rel="stylesheet" href="/static/style.css?v=29" />
 </head>
 <body>
   <header class="top">
@@ -50,6 +50,10 @@
           <button type="button" data-kind="censored" class="on">有码</button>
           <button type="button" data-kind="uncensored">无码</button>
         </div>
+        <div class="seg" id="jav-format">
+          <button type="button" data-format="flat" class="on">平面</button>
+          <button type="button" data-format="vr">VR</button>
+        </div>
         <button type="button" class="ghost" id="jav-latest">最新</button>
         <span class="pager" id="jav-pager"></span>
       </div>
@@ -60,7 +64,7 @@
       <div id="works-wrap" hidden>
         <div class="table-head">
           <h2 id="works-heading">作品</h2>
-          <p class="hint">来源：JavBus · 点一张进番号详情和磁链</p>
+          <p class="hint">来源：JavBus · 平面和 VR 分开列 · 点一张进番号详情和磁链</p>
         </div>
         <div id="works-list" class="works-grid"></div>
       </div>
@@ -77,13 +81,17 @@
     <section id="view-western" class="view" hidden>
       <form id="western-form" class="search-bar">
         <input id="western-input" name="q" autocomplete="off" spellcheck="false"
-               placeholder="片名或演员" />
+               placeholder="片名、演员或片商" />
         <button type="submit">查询</button>
       </form>
       <div class="feed-bar" id="western-feed">
         <div class="seg" id="western-kind">
           <button type="button" data-kind="scene" class="on">场景</button>
           <button type="button" data-kind="movie">电影</button>
+        </div>
+        <div class="seg" id="western-format">
+          <button type="button" data-format="flat" class="on">平面</button>
+          <button type="button" data-format="vr">VR</button>
         </div>
         <button type="button" class="ghost" id="western-latest">最新</button>
         <span class="pager" id="western-pager"></span>
@@ -111,7 +119,7 @@
       <div id="western-works-wrap" hidden>
         <div class="table-head">
           <h2 id="western-heading">作品</h2>
-          <p class="hint">来源：ThePornDB · 只列 15 分钟以上 · 点一张看详情和磁链</p>
+          <p class="hint">来源：ThePornDB · 平面和 VR 分开列 · 点一张看详情和磁链</p>
         </div>
         <div id="western-works" class="works-grid"></div>
       </div>
@@ -119,7 +127,7 @@
       <div id="western-resources-wrap" hidden>
         <div class="table-head">
           <h2>磁链</h2>
-          <p class="hint">来源：磁力猫。按片商加发行日去对文件名里的日期，收录时间是种子上传时间。下载后归档到 6T 的欧美目录。</p>
+          <p class="hint">来源：磁力猫。按片商加发行日去对文件名里的日期。平面归档到 6T 欧美目录，VR 归档到 4T 的 vrporn/western。</p>
         </div>
         <div id="western-resources" class="res-list"></div>
       </div>
@@ -136,7 +144,9 @@
       <div class="lib-tools">
         <div class="seg" id="library-kind">
           <button type="button" data-lib="jav" class="on">番号</button>
+          <button type="button" data-lib="jav_vr">番号VR</button>
           <button type="button" data-lib="western">欧美</button>
+          <button type="button" data-lib="vr">VR</button>
           <button type="button" data-lib="suck">suck</button>
         </div>
         <input id="library-q" type="search" autocomplete="off" spellcheck="false" placeholder="搜番号、标题或演员" />
@@ -310,6 +320,9 @@
             <label>欧美归档目录
               <input name="western_media_dir" placeholder="留空表示不改" />
             </label>
+            <label>欧美 VR 归档目录
+              <input name="vr_media_dir" placeholder="留空表示不改" />
+            </label>
           </div>
           <div class="field-row">
             <label>完成后静置（秒）
@@ -321,8 +334,8 @@
           </div>
           <details class="help">
             <summary>归档怎么做</summary>
-            <p>监控下载目录，文件静置够久后按番号写 NFO、poster.jpg、fanart.jpg，归档到 YYYYMM/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
-            <p>小于最小体积的文件不当正片。静置、最小体积和两个归档目录留空保存会保留原值。</p>
+            <p>监控下载目录，文件静置够久后按番号写 NFO、poster.jpg、fanart.jpg。平面进 YYYYMM/番号/，番号 VR 进 vrporn/jav/厂牌/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
+            <p>小于最小体积的文件不当正片。静置、最小体积和归档目录留空保存会保留原值。欧美平面进欧美目录，欧美 VR 进 vrporn/western。</p>
           </details>
         </fieldset>
         <fieldset class="group">
@@ -382,6 +395,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=40"></script>
+  <script src="/static/app.js?v=43"></script>
 </body>
 </html>

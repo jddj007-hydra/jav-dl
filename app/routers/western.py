@@ -10,6 +10,7 @@ from app.sources.tpdb import (
     fetch_list,
     is_excluded_orientation,
     is_too_short,
+    search_catalog,
     theme_tag,
 )
 
@@ -33,12 +34,28 @@ def _theme(theme: str) -> str | None:
     return theme
 
 
-def _visible(items: list[dict], *, exclude_orientation: bool) -> list[dict]:
+def _fmt(fmt: str) -> str:
+    value = (fmt or "").strip().lower()
+    return value if value in ("vr", "flat") else "flat"
+
+
+def _visible(
+    items: list[dict],
+    *,
+    exclude_orientation: bool,
+    allow_unknown_duration: bool = False,
+    fmt: str = "flat",
+) -> list[dict]:
     kept: list[dict] = []
     for item in items:
-        if is_too_short(item.get("duration")):
+        if is_too_short(item.get("duration"), allow_unknown=allow_unknown_duration):
             continue
         if exclude_orientation and is_excluded_orientation(item.get("tags") or [], item.get("title") or ""):
+            continue
+        vr = bool(item.get("vr"))
+        if fmt == "vr" and not vr:
+            continue
+        if fmt == "flat" and vr:
             continue
         kept.append(item)
     return kept
@@ -50,6 +67,7 @@ async def _cached_list(
     page: int,
     query: str | None,
     theme: str | None = None,
+    fmt: str = "flat",
     *,
     exclude_orientation: bool = False,
 ):
@@ -63,14 +81,23 @@ async def _cached_list(
             "error": "请先在设置里填写 ThePornDB token",
         }
     db = request.app.state.db
-    cache_key = None if query else f"latest:tpdb:{kind}:{page}:{theme or '-'}"
+    cache_key = None if query else f"latest:tpdb:{kind}:{page}:{theme or '-'}:{fmt}"
+    allow_unknown = fmt == "vr"
     if cache_key:
         cached = await db.get_metadata(cache_key, settings.latest_ttl)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list):
-            visible = _visible(cached["items"], exclude_orientation=exclude_orientation)
-            return {**cached, "items": await _mark_library(request, visible), "error": None}
+            visible = _visible(
+                cached["items"],
+                exclude_orientation=exclude_orientation,
+                allow_unknown_duration=allow_unknown or bool(cached.get("matched_site")),
+                fmt=fmt,
+            )
+            return {**cached, "items": await _mark_library(request, visible), "error": None, "format": fmt}
     try:
-        payload = await fetch_list(settings, kind, page, query, theme)
+        if query:
+            payload = await search_catalog(settings, kind, query, page, theme, fmt=fmt)
+        else:
+            payload = await fetch_list(settings, kind, page, query, theme, fmt=fmt)
     except TpdbError as exc:
         return {
             "kind": kind,
@@ -84,10 +111,17 @@ async def _cached_list(
         "page": payload["page"],
         "last_page": payload["last_page"],
         "items": payload["items"],
+        "matched_site": payload.get("matched_site") or "",
+        "format": fmt,
     }
     if cache_key:
         await db.put_metadata(cache_key, body)
-    visible = _visible(body["items"], exclude_orientation=exclude_orientation)
+    visible = _visible(
+        body["items"],
+        exclude_orientation=exclude_orientation,
+        allow_unknown_duration=allow_unknown or bool(body.get("matched_site")),
+        fmt=fmt,
+    )
     return {**body, "items": await _mark_library(request, visible), "error": None}
 
 
@@ -104,8 +138,11 @@ async def western_latest(
     kind: str = Query("scene"),
     page: int = Query(1, ge=1, le=50),
     theme: str = Query(""),
+    format: str = Query("flat"),
 ):
-    return await _cached_list(request, _kind(kind), page, None, _theme(theme), exclude_orientation=True)
+    return await _cached_list(
+        request, _kind(kind), page, None, _theme(theme), _fmt(format), exclude_orientation=True,
+    )
 
 
 @router.get("/api/western/browse")
@@ -116,9 +153,11 @@ async def western_browse(
     kind: str = Query("scene"),
     page: int = Query(1, ge=1, le=50),
     tag_id: str = Query(""),
+    format: str = Query("flat"),
 ):
     kind = _kind(kind)
     facet = facet.strip().lower()
+    fmt = _fmt(format)
     if facet not in ("performer", "site", "tag"):
         raise HTTPException(400, "类型无效")
     name = name.strip()
@@ -143,13 +182,19 @@ async def western_browse(
             "items": [],
             "error": str(exc),
         }
-    visible = _visible(payload["items"], exclude_orientation=False)
+    visible = _visible(
+        payload["items"],
+        exclude_orientation=False,
+        allow_unknown_duration=fmt == "vr" or facet in ("site", "performer"),
+        fmt=fmt,
+    )
     return {
         "kind": kind,
         "page": payload["page"],
         "last_page": payload["last_page"],
         "items": await _mark_library(request, visible),
         "error": None,
+        "format": fmt,
     }
 
 
@@ -160,11 +205,14 @@ async def western_search(
     kind: str = Query("scene"),
     page: int = Query(1, ge=1, le=50),
     theme: str = Query(""),
+    format: str = Query("flat"),
 ):
     query = q.strip()
     if not query:
         raise HTTPException(400, "请输入片名或演员")
-    return await _cached_list(request, _kind(kind), page, query, _theme(theme), exclude_orientation=True)
+    return await _cached_list(
+        request, _kind(kind), page, query, _theme(theme), _fmt(format), exclude_orientation=True,
+    )
 
 
 @router.get("/api/western/{kind}/{item_id}")

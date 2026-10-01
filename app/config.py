@@ -21,6 +21,7 @@ USER_KEYS = (
     "scrape_enabled",
     "media_dir",
     "western_media_dir",
+    "vr_media_dir",
     "scrape_settle_seconds",
     "scrape_min_mb",
     "tpdb_api_key",
@@ -91,6 +92,7 @@ class Settings(BaseSettings):
     download_dir: Path = Path("./downloads")
     media_dir: Path = Path("./media")
     western_media_dir: str = ""
+    vr_media_dir: str = ""
     scrape_enabled: bool = True
     scrape_settle_seconds: int = 60
     scrape_min_mb: int = 50
@@ -137,6 +139,19 @@ class Settings(BaseSettings):
         return Path(raw)
 
     @property
+    def vr_root(self) -> Path | None:
+        raw = (self.vr_media_dir or "").strip()
+        if not raw or raw == ".":
+            return None
+        return Path(raw)
+
+    @property
+    def jav_vr_root(self) -> Path | None:
+        if self.vr_root is None:
+            return None
+        return self.vr_root.parent / "jav"
+
+    @property
     def db_path(self) -> Path:
         return self.data_dir / "jav-dl.db"
 
@@ -162,6 +177,7 @@ class Settings(BaseSettings):
             "scrape_enabled": bool(self.scrape_enabled),
             "media_dir": str(self.media_dir),
             "western_media_dir": self.western_media_dir or "",
+            "vr_media_dir": self.vr_media_dir or "",
             "scrape_settle_seconds": int(self.scrape_settle_seconds),
             "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
@@ -189,6 +205,12 @@ def _keep_paths(allowed: dict) -> None:
             allowed.pop("western_media_dir")
         else:
             allowed["western_media_dir"] = raw
+    if "vr_media_dir" in allowed:
+        raw = str(allowed["vr_media_dir"]).strip()
+        if not raw:
+            allowed.pop("vr_media_dir")
+        else:
+            allowed["vr_media_dir"] = raw
     # 备用域留空表示关掉。非法地址不覆盖原来的值。
     if "clm_search_backup" in allowed:
         raw = str(allowed["clm_search_backup"]).strip()

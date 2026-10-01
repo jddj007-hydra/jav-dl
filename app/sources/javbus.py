@@ -317,22 +317,27 @@ async def fetch_javbus_html(settings: Settings, url: str) -> str:
     return response.text
 
 
-def latest_page_url(base: str, kind: str, page: int) -> str:
+def latest_page_url(base: str, kind: str, page: int, fmt: str = "flat") -> str:
     root = base.rstrip("/")
     page = max(1, int(page))
+    if kind not in ("censored", "uncensored"):
+        raise MetadataError("列表类型无效")
+    if (fmt or "flat").strip().lower() == "vr":
+        path = "uncensored/genre/gre162" if kind == "uncensored" else "genre/7x"
+        if page == 1:
+            return f"{root}/{path}"
+        return f"{root}/{path}/{page}"
     if kind == "uncensored":
         if page == 1:
             return f"{root}/uncensored"
         return f"{root}/uncensored/page/{page}"
-    if kind != "censored":
-        raise MetadataError("列表类型无效")
     if page == 1:
         return f"{root}/"
     return f"{root}/page/{page}"
 
 
-async def fetch_latest(settings: Settings, kind: str, page: int = 1) -> list[dict]:
-    url = latest_page_url(settings.javbus_base, kind, page)
+async def fetch_latest(settings: Settings, kind: str, page: int = 1, fmt: str = "flat") -> list[dict]:
+    url = latest_page_url(settings.javbus_base, kind, page, fmt)
     base = settings.javbus_base.rstrip("/")
     headers = {"Cookie": AGE_COOKIE, "Referer": base + "/"}
     async with site_client(settings) as client:

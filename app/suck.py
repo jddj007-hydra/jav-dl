@@ -39,8 +39,21 @@ async def mark_work(db: Database, settings: Settings, *, kind: str, key: str, ti
     await db.mark_suck(kind, key, label)
     removed = False
     if remove and row and row.get("path"):
-        root = settings.media_dir if kind == "jav" else settings.western_root
-        removed = await asyncio.to_thread(remove_archived, root, row["path"], kind)
+        if kind == "jav":
+            removed = await asyncio.to_thread(remove_archived, settings.media_dir, row["path"], "jav")
+            if not removed and settings.jav_vr_root is not None:
+                removed = await asyncio.to_thread(remove_archived, settings.jav_vr_root, row["path"], "jav")
+        else:
+            root = (
+                settings.vr_root if (row.get("shelf") or "") == "vr" or str(row.get("path") or "").startswith("vr/")
+                else settings.western_root
+            )
+            removed = await asyncio.to_thread(
+                remove_archived,
+                root,
+                row["path"],
+                "vr" if root == settings.vr_root else kind,
+            )
         if kind == "jav":
             await db.delete_library(key)
         else:

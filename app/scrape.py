@@ -8,7 +8,7 @@ import shutil
 from datetime import date
 from pathlib import Path
 
-from app.codes import extract_code, normalize_code, title_mentions_code
+from app.codes import extract_code, jav_vr_maker, normalize_code, title_mentions_code
 from app.western_magnets import is_western_release_name
 from app.config import Settings
 from app.httputil import site_client
@@ -46,6 +46,14 @@ def archive_month(release_date: str | None, today: date | None = None) -> str:
         return f"{m.group(1)}{int(m.group(2)):02d}"
     d = today or date.today()
     return d.strftime("%Y%m")
+
+
+def jav_archive_dest(settings: Settings, code: str, release_date: str | None) -> tuple[str, Path]:
+    maker = jav_vr_maker(code)
+    if maker and settings.jav_vr_root is not None:
+        return maker, settings.jav_vr_root / maker / code
+    month = archive_month(release_date)
+    return month, settings.media_dir / month / code
 
 
 def is_incomplete(path: Path) -> bool:
@@ -489,8 +497,7 @@ async def scrape_job(
         raise ScrapeError("下载尚未完成")
 
     meta = await resolve_metadata(settings, db, code)
-    month = archive_month(meta.get("release_date"))
-    dest_dir = settings.media_dir / month / code
+    month, dest_dir = jav_archive_dest(settings, code, meta.get("release_date"))
     nfo_xml = build_nfo(meta)
 
     poster_bytes = None

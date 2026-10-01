@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.codes import normalize_code
+from app.codes import jav_vr_maker, normalize_code
 from app.follow import javbus_list_url, javbus_page_kind, javbus_page_url
 from app.library import attach_library, item_code
 from app.sources.javbus import (
@@ -23,6 +23,17 @@ router = APIRouter()
 _ACTRESS_PAGE = 30
 # Stop scanning so a star with hundreds of omnibus discs cannot walk the whole catalog.
 _ACTRESS_SCAN_CAP = 20
+
+
+def _fmt(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    return value if value in ("vr", "flat") else "flat"
+
+
+def _keep_format(items: list[dict], fmt: str) -> list[dict]:
+    if fmt == "vr":
+        return [item for item in items if jav_vr_maker(item.get("code") or "")]
+    return [item for item in items if not jav_vr_maker(item.get("code") or "")]
 
 
 async def _actress_cache(db, key: str, ttl: int) -> dict | None:
@@ -89,23 +100,27 @@ async def jav_latest(
     request: Request,
     kind: str = Query("censored"),
     page: int = Query(1, ge=1, le=50),
+    format: str = Query("flat"),
 ):
     if kind not in ("censored", "uncensored"):
         raise HTTPException(400, "列表类型无效")
+    fmt = _fmt(format)
     settings = request.app.state.settings
     db = request.app.state.db
     library = request.app.state.library
-    key = f"latest:javbus:{kind}:{page}"
+    key = f"latest:javbus:{kind}:{page}:{fmt}"
     cached = await db.get_metadata(key, settings.latest_ttl)
     if isinstance(cached, dict) and isinstance(cached.get("items"), list):
         items = cached["items"]
     else:
         try:
-            items = await fetch_latest(settings, kind, page)
+            items = await fetch_latest(settings, kind, page, fmt)
         except MetadataError as exc:
-            return {"kind": kind, "page": page, "items": [], "error": str(exc)}
+            return {"kind": kind, "page": page, "items": [], "error": str(exc), "format": fmt}
         await db.put_metadata(key, {"kind": kind, "page": page, "items": items})
     items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
+    if fmt == "flat":
+        items = _keep_format(items, "flat")
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {
@@ -113,6 +128,7 @@ async def jav_latest(
         "page": page,
         "items": attach_library(items, hits, marked),
         "error": None,
+        "format": fmt,
     }
 
 
@@ -121,9 +137,11 @@ async def jav_browse(
     request: Request,
     url: str = Query(""),
     page: int = Query(1, ge=1, le=50),
+    format: str = Query("flat"),
 ):
     target = javbus_list_url(url.strip())
     kind = javbus_page_kind(target)
+    fmt = _fmt(format)
     if kind not in ("actress", "series", "studio", "genre"):
         raise HTTPException(400, "只能打开女优、系列、厂家、发行商或类别页面")
     settings = request.app.state.settings
@@ -138,6 +156,7 @@ async def jav_browse(
         if page > 1 and exc.status == 404:
             return {"page": page, "items": [], "error": None}
         raise HTTPException(exc.status or 400, str(exc)) from exc
+    items = _keep_format(items, fmt)
     library = request.app.state.library
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
@@ -145,15 +164,22 @@ async def jav_browse(
         "page": page,
         "items": attach_library(items, hits, marked),
         "error": None,
+        "format": fmt,
     }
 
 
 @router.get("/api/search")
-async def search(request: Request, q: str | None = Query(None), code: str | None = Query(None)):
+async def search(
+    request: Request,
+    q: str | None = Query(None),
+    code: str | None = Query(None),
+    format: str = Query("flat"),
+):
     raw = (q or code or "").strip()
     if not raw:
         raise HTTPException(400, "请输入番号或关键词")
     normalized = normalize_code(raw)
+    fmt = _fmt(format)
     settings = request.app.state.settings
     library = request.app.state.library
     db = request.app.state.db
@@ -161,8 +187,9 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
         try:
             items = await search_works(settings, raw)
         except MetadataError as e:
-            return {"mode": "keyword", "query": raw, "items": [], "error": str(e)}
+            return {"mode": "keyword", "query": raw, "items": [], "error": str(e), "format": fmt}
         items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
+        items = _keep_format(items, fmt)
         hits = await library.get_many([it["code"] for it in items])
         marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
         return {
@@ -170,6 +197,7 @@ async def search(request: Request, q: str | None = Query(None), code: str | None
             "query": raw,
             "items": attach_library(items, hits, marked),
             "error": None if items else "没有搜到作品",
+            "format": fmt,
         }
 
     cache_key = f"{CACHE_VER}:{normalized}"

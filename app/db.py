@@ -127,6 +127,7 @@ WESTERN_COLUMNS = (
     ("year", "INTEGER NOT NULL DEFAULT 0"),
     ("resolution", "TEXT NOT NULL DEFAULT ''"),
     ("poster", "TEXT NOT NULL DEFAULT ''"),
+    ("shelf", "TEXT NOT NULL DEFAULT 'western'"),
 )
 
 
@@ -202,6 +203,7 @@ def _western_row(row: dict, now: float) -> dict:
         "year": _as_int(row.get("year")),
         "resolution": row.get("resolution") or "",
         "poster": row.get("poster") or "",
+        "shelf": (row.get("shelf") or "western").strip() or "western",
     }
 
 
@@ -425,10 +427,10 @@ class Database:
                     """INSERT INTO western_library
                        (path, tpdb_id, studio, title, has_nfo, has_poster,
                         actors, release_date, added_at, updated_at,
-                        runtime_min, year, resolution, poster)
+                        runtime_min, year, resolution, poster, shelf)
                        VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
                         :actors, :release_date, :added_at, :updated_at,
-                        :runtime_min, :year, :resolution, :poster)""",
+                        :runtime_min, :year, :resolution, :poster, :shelf)""",
                     [_western_row(row, now) for row in rows],
                 )
             await db.commit()
@@ -440,10 +442,10 @@ class Database:
                 """INSERT INTO western_library
                    (path, tpdb_id, studio, title, has_nfo, has_poster,
                     actors, release_date, added_at, updated_at,
-                    runtime_min, year, resolution, poster)
+                    runtime_min, year, resolution, poster, shelf)
                    VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
                     :actors, :release_date, :added_at, :updated_at,
-                    :runtime_min, :year, :resolution, :poster)
+                    :runtime_min, :year, :resolution, :poster, :shelf)
                    ON CONFLICT(path) DO UPDATE SET
                      tpdb_id=excluded.tpdb_id,
                      studio=excluded.studio,
@@ -457,7 +459,8 @@ class Database:
                      runtime_min=excluded.runtime_min,
                      year=excluded.year,
                      resolution=excluded.resolution,
-                     poster=excluded.poster""",
+                     poster=excluded.poster,
+                     shelf=excluded.shelf""",
                 payload,
             )
             await db.commit()

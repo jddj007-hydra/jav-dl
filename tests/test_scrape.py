@@ -189,6 +189,49 @@ def test_scrape_job_archives_without_cover(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_scrape_job_sends_jav_vr_to_vrporn(tmp_path, monkeypatch):
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "DSVR-1124",
+            "title": "VR",
+            "release_date": "2022-05-01",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    data = tmp_path / "data"
+    root = tmp_path / "dl"
+    dest = root / "DSVR-1124"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    media = tmp_path / "media"
+    vrporn = tmp_path / "vrporn"
+    settings = Settings(
+        data_dir=data,
+        download_dir=root,
+        media_dir=media,
+        vr_media_dir=str(vrporn / "western"),
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        result = await scrape_job(
+            settings,
+            db,
+            {"code": "DSVR-1124", "dest": str(dest)},
+        )
+        assert result["path"] == "DSVR/DSVR-1124"
+        assert (vrporn / "jav" / "DSVR" / "DSVR-1124" / "DSVR-1124.mp4").is_file()
+        assert not (media / "202205" / "DSVR-1124").exists()
+
+    asyncio.run(run())
+
+
 def _job(dest: Path) -> dict:
     now = time.time()
     return {

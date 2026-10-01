@@ -587,7 +587,7 @@ class JobManager:
                 return job
         if not normalize_code(job.get("code") or ""):
             info = read_sidecar(Path(job.get("dest") or ""))
-            if self.settings.western_root and info and info.get("kind") == "western":
+            if (self.settings.western_root or self.settings.vr_root) and info and info.get("kind") == "western":
                 return await self._scrape_western(job, info)
             if status != "skipped":
                 await self.db.update_job(job["id"], scrape_status="skipped", scrape_error=None)
@@ -710,7 +710,7 @@ class JobManager:
 
     async def watch_western(self) -> None:
         """Xunlei panel downloads have no jav-dl job. Match Site.YY.MM.DD names."""
-        if not self.settings.scrape_enabled or self.settings.western_root is None:
+        if not self.settings.scrape_enabled or (self.settings.western_root is None and self.settings.vr_root is None):
             return
         if not (self.settings.tpdb_api_key or "").strip():
             return

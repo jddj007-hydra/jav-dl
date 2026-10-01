@@ -89,6 +89,10 @@ def test_scrape_timing_and_western_dir_roundtrip(tmp_path):
     assert kept.scrape_settle_seconds == 15
     assert kept.public_dict()["scrape_min_mb"] == 0
 
+    vr = save_user_config(kept, {"vr_media_dir": str(tmp_path / "vrporn" / "western")})
+    assert vr.vr_media_dir == str(tmp_path / "vrporn" / "western")
+    assert vr.public_dict()["vr_media_dir"] == str(tmp_path / "vrporn" / "western")
+
 
 def test_backup_search_domain_normalizes_and_blank_clears(tmp_path):
     s = Settings(data_dir=tmp_path, download_dir=tmp_path / "dl")
