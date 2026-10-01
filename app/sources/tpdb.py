@@ -9,6 +9,8 @@ import httpx
 
 from app.config import Settings
 from app.httputil import site_client
+from app.studios import compact_site as _compact_site
+from app.studios import is_vr_work, pick_site
 from app.western_magnets import parse_release_date, release_text, split_release_name, words
 
 API_BASE = "https://api.theporndb.net"
@@ -27,8 +29,9 @@ def is_excluded_orientation(tags: list[str] | None = None, title: str = "") -> b
 PER_PAGE = 24
 ORDER_LATEST = "recently_released"
 ORDER_SEARCH = "recently_released"
-# Trailers, BTS, and clip-site shorts sit under this. Unset durations are treated
-# as short because that pile is where the unlabeled clips are.
+# Trailers, BTS, and clip-site shorts sit under this. On /scenes, unset duration
+# is treated as short. Site browse cannot ask ThePornDB for duration (SexLikeReal
+# and other VR dumps leave it empty), so those lists keep unknown length.
 MIN_DURATION_SECONDS = 15 * 60
 MIN_DURATION_MINUTES = MIN_DURATION_SECONDS // 60
 # slug, ThePornDB tag id, tag name, Chinese label
@@ -47,6 +50,9 @@ THEMES: dict[str, tuple[str, str, str]] = {
     "massage": ("135", "Massage", "按摩"),
     "schoolgirl": ("787", "Schoolgirl", "制服"),
 }
+VR_TAG = ("503", "Virtual Reality")
+
+
 _TAIL_JUNK = re.compile(
     r"^(?:xxx|1080p|2160p|720p|480p|4k|mp4|mkv|avi|wmv|x264|x265|h264|h265|hevc|webrip|webdl|web-dl|bluray|hdr)$",
     re.I,
@@ -67,10 +73,15 @@ def duration_minutes(duration: object) -> str:
     return str(max(1, seconds // 60))
 
 
-def is_too_short(duration_minutes_text: object, minimum: int = MIN_DURATION_MINUTES) -> bool:
+def is_too_short(
+    duration_minutes_text: object,
+    minimum: int = MIN_DURATION_MINUTES,
+    *,
+    allow_unknown: bool = False,
+) -> bool:
     raw = str(duration_minutes_text or "").strip()
     if not raw:
-        return True
+        return not allow_unknown
     try:
         return int(raw) < minimum
     except ValueError:
@@ -87,7 +98,7 @@ def theme_tag(theme: str | None) -> tuple[str, str] | None:
     return row[0], row[1]
 
 
-def list_params(page: int, query: str | None = None, theme: str | None = None) -> dict:
+def list_params(page: int, query: str | None = None, theme: str | None = None, fmt: str | None = None) -> dict:
     params: dict = {
         "page": max(1, int(page)),
         "per_page": PER_PAGE,
@@ -101,6 +112,8 @@ def list_params(page: int, query: str | None = None, theme: str | None = None) -
     if tag:
         tag_id, tag_name = tag
         params[f"tags[{tag_id}]"] = tag_name
+    if (fmt or "").strip().lower() == "vr":
+        params[f"tags[{VR_TAG[0]}]"] = VR_TAG[1]
     return params
 
 
@@ -146,20 +159,24 @@ def map_item(raw: dict, kind: str) -> dict:
     background = raw.get("background") if isinstance(raw.get("background"), dict) else {}
     cover = posters.get("large") or posters.get("medium") or posters.get("small") or ""
     tags = _tag_refs(raw)
+    site = _site_name(raw)
+    title = str(raw.get("title") or "")
+    tag_names = [ref["name"] for ref in tags]
     return {
         "id": str(raw.get("id") or ""),
         "kind": kind,
-        "title": str(raw.get("title") or ""),
+        "title": title,
         "date": str(raw.get("date") or "")[:10],
-        "site": _site_name(raw),
+        "site": site,
         "performers": _performers(raw),
         "cover": str(cover or ""),
         "background": str(background.get("full") or ""),
         "description": str(raw.get("description") or ""),
-        "tags": [ref["name"] for ref in tags],
+        "tags": tag_names,
         "tag_refs": tags,
         "duration": duration_minutes(raw.get("duration")),
         "url": str(raw.get("url") or ""),
+        "vr": is_vr_work(site, tag_names, title),
     }
 
 
@@ -200,6 +217,21 @@ async def _get_json(settings: Settings, path: str, params: dict | None = None) -
     return payload
 
 
+def _scene_fold_key(item: dict) -> tuple[str, str, str] | None:
+    title = (item.get("title") or "").casefold().strip()
+    if not title:
+        return None
+    date = (item.get("date") or "")[:10]
+    return (title, date, _compact_site(item.get("site") or ""))
+
+
+def _duration_score(item: dict) -> int:
+    try:
+        return int(item.get("duration") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _unpack_list(payload: dict, kind: str, page: int) -> dict:
     data = payload.get("data")
     if not isinstance(data, list):
@@ -209,12 +241,58 @@ def _unpack_list(payload: dict, kind: str, page: int) -> dict:
         last_page = int(meta.get("last_page") or page)
     except (TypeError, ValueError):
         last_page = page
-    items = [
-        map_item(row, kind)
-        for row in data
-        if isinstance(row, dict) and row.get("id")
-    ]
+    items: list[dict] = []
+    seen_ids: set[str] = set()
+    by_key: dict[tuple[str, str, str], int] = {}
+    for row in data:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        ident = str(row["id"])
+        if ident in seen_ids:
+            continue
+        item = map_item(row, kind)
+        key = _scene_fold_key(item)
+        if key and key in by_key:
+            idx = by_key[key]
+            if _duration_score(item) > _duration_score(items[idx]):
+                seen_ids.discard(str(items[idx].get("id") or ""))
+                seen_ids.add(ident)
+                items[idx] = item
+            continue
+        seen_ids.add(ident)
+        if key:
+            by_key[key] = len(items)
+        items.append(item)
     return {"items": items, "page": page, "last_page": max(last_page, page)}
+
+
+async def match_site(settings: Settings, query: str) -> dict | None:
+    query = (query or "").strip()
+    if len(_compact_site(query)) < 5:
+        return None
+    payload = await _get_json(settings, "/sites", {"q": query, "per_page": 50})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    return pick_site(rows, query)
+
+
+async def search_catalog(
+    settings: Settings,
+    kind: str,
+    query: str,
+    page: int = 1,
+    theme: str | None = None,
+    fmt: str | None = None,
+) -> dict:
+    """Studio names open that site's list. A title still goes through keyword search."""
+    query = (query or "").strip()
+    page = max(1, int(page))
+    if query and not theme:
+        site = await match_site(settings, query)
+        if site and site.get("name"):
+            payload = await fetch_facet(settings, kind, "site", str(site["name"]), page)
+            payload["matched_site"] = str(site["name"])
+            return payload
+    return await fetch_list(settings, kind, page, query or None, theme, fmt=fmt)
 
 
 async def fetch_list(
@@ -224,9 +302,10 @@ async def fetch_list(
     query: str | None = None,
     theme: str | None = None,
     extra: dict | None = None,
+    fmt: str | None = None,
 ) -> dict:
     page = max(1, int(page))
-    params = list_params(page, query, theme)
+    params = list_params(page, query, theme, fmt)
     if extra:
         params.update(extra)
     payload = await _get_json(settings, list_path(kind), params)
@@ -244,9 +323,11 @@ def _exact_name(rows: list, name: str) -> dict | None:
 
 
 async def _named_id(settings: Settings, path: str, name: str) -> str:
-    payload = await _get_json(settings, path, {"q": name, "per_page": 20})
+    payload = await _get_json(settings, path, {"q": name, "per_page": 50})
     rows = payload.get("data") if isinstance(payload.get("data"), list) else []
     match = _exact_name(rows, name)
+    if not match and path == "/sites":
+        match = pick_site(rows, name)
     if not match:
         raise TpdbError(f"没有找到 {name}")
     return str(match["id"])

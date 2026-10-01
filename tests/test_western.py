@@ -37,6 +37,9 @@ def test_latest_page_urls():
     assert latest_page_url(base, "censored", 2) == "https://www.javbus.com/page/2"
     assert latest_page_url(base + "/", "uncensored", 1) == "https://www.javbus.com/uncensored"
     assert latest_page_url(base, "uncensored", 3) == "https://www.javbus.com/uncensored/page/3"
+    assert latest_page_url(base, "censored", 1, "vr") == "https://www.javbus.com/genre/7x"
+    assert latest_page_url(base, "censored", 2, "vr") == "https://www.javbus.com/genre/7x/2"
+    assert latest_page_url(base, "uncensored", 1, "vr") == "https://www.javbus.com/uncensored/genre/gre162"
 
 
 def test_map_tpdb_scene_uses_parent_and_minutes():
@@ -65,6 +68,7 @@ def test_map_tpdb_scene_uses_parent_and_minutes():
     assert item["background"].endswith("/b.jpg")
     assert item["date"] == "2024-05-06"
     assert item["duration"] == "61"
+    assert item["vr"] is False
     assert duration_minutes(90) == "1"
     assert duration_minutes(0) == ""
     assert duration_minutes(None) == ""
@@ -115,6 +119,89 @@ def test_western_search_terms_use_filename_date():
     assert terms[0] == "BrazzersExxtra 22.09.20"
     assert "BrazzersExxtra 2022.09.20" in terms
     assert terms[-1] == "BrazzersExxtra"
+
+
+def test_vr_studio_search_keeps_prefix_and_initials():
+    bangers = western_search_terms("VR Bangers", "Office Fantasy", ["Jane Doe"], "2024-05-06")
+    assert bangers[0] == "VRBangers 24.05.06"
+    assert "VRBangers 2024.05.06" in bangers
+    assert "VR.Bangers 24.05.06" in bangers
+    assert "BangersVR 24.05.06" in bangers
+    assert "VRB 24.05.06" in bangers
+
+    hush = western_search_terms("VR Hush", "From the Vault", ["Dani Daniels"], "2019-12-16")
+    assert hush[0] == "VRHush 19.12.16"
+    assert "VRHush 2019.12.16" in hush
+    assert "VR.Hush 19.12.16" in hush
+    assert "HushVR 19.12.16" in hush
+    assert "VRH 19.12.16" in hush
+
+    vrp = western_search_terms(
+        "Virtual Real Porn",
+        "Between Pillows And Whispers",
+        [],
+        "2026-06-07",
+    )
+    assert vrp[0] == "VirtualRealPorn 26.06.07"
+    assert "VirtualRealPorn 2026.06.07" in vrp
+    assert "Virtual.Real.Porn 26.06.07" in vrp
+    assert "VRP 26.06.07" in vrp
+
+    cosplay = western_search_terms("VR Cosplay X", "Hero", [], "2023-01-02")
+    assert cosplay[0] == "VRCosplayX 23.01.02"
+    assert "VRCX 23.01.02" in cosplay
+
+
+def test_namer_studio_filename_prefixes():
+    wankz = western_search_terms("Wankz VR", "Scene", [], "2024-01-02")
+    assert wankz[0] == "WankzVR 24.01.02"
+    badoink = western_search_terms("Badoink VR", "Scene", [], "2024-01-02")
+    assert badoink[0] == "BadoinkVR 24.01.02"
+    eighteen = western_search_terms("18 VR", "Scene", [], "2024-01-02")
+    assert eighteen[0] == "18VR 24.01.02"
+    slr = western_search_terms("Sex Like Real", "Scene", [], "2024-01-02")
+    assert slr[0] == "SexLikeReal 24.01.02"
+    assert "SLR 24.01.02" in slr
+    originals = western_search_terms("SLR Originals", "Scene", [], "2024-01-02")
+    assert originals[0] == "SLROriginals 24.01.02"
+    assert "SLR 24.01.02" in originals
+    luv = western_search_terms("All Her Luv", "Scene", [], "2024-01-02")
+    assert luv[0] == "AllHerLuv 24.01.02"
+    bex = western_search_terms("Brazzers Exxtra", "School of Cock", [], "2022-09-20")
+    assert "BEX 22.09.20" in bex
+    na = western_search_terms("Naughty America VR", "Scene", [], "2024-01-02")
+    assert na[0] == "NaughtyAmericaVR 24.01.02"
+    assert "NAVR 24.01.02" in na
+    tiny = western_search_terms("Tiny4K", "Scene", [], "2024-01-02")
+    assert tiny[0] == "Tiny4K 24.01.02"
+    assert "T4K 24.01.02" in tiny
+    digital = western_search_terms("Digital Playground", "Scene", [], "2024-01-02")
+    assert digital[0] == "DigitalPlayground 24.01.02"
+    assert "Digital.Playground 24.01.02" in digital
+    property_sex = western_search_terms("Property Sex", "Scene", [], "2024-01-02")
+    assert property_sex[0] == "PropertySex 24.01.02"
+    assert "PSE 24.01.02" in property_sex
+    doe = western_search_terms("Let's Doe It", "Scene", [], "2024-01-02")
+    assert doe[0] == "LetsDoeIt 24.01.02"
+    girl = western_search_terms("A Girl Knows", "Scene", [], "2024-01-02")
+    assert girl[0] == "AGirlKnows 24.01.02"
+    assert "AGK 24.01.02" in girl
+    sextury = western_search_terms("21 Sextury", "Scene", [], "2024-01-02")
+    assert sextury[0] == "21Sextury 24.01.02"
+    nf = western_search_terms("NF Busty", "Scene", [], "2024-01-02")
+    assert nf[0] == "NFBusty 24.01.02"
+    blacked = western_search_terms("Blacked Raw", "Scene", [], "2024-01-02")
+    assert blacked[0] == "BlackedRaw 24.01.02"
+    taxi = western_search_terms("Fake Taxi", "Scene", [], "2024-01-02")
+    assert taxi[0] == "FakeTaxi 24.01.02"
+    jules = western_search_terms("Jules Jordan", "Scene", [], "2024-01-02")
+    assert jules[0] == "JulesJordan 24.01.02"
+    white = western_search_terms("The White Boxxx", "Scene", [], "2024-01-02")
+    assert white[0] == "TheWhiteBoxxx 24.01.02"
+    assert "WhiteBoxxx 24.01.02" in white
+    aliased = western_search_terms("Brazzers Exxtra", "Scene", [], "2022-09-20", extra_names=["BrazzersExxtra", "BEX"])
+    assert aliased[0] == "BrazzersExxtra 22.09.20"
+    assert "BEX 22.09.20" in aliased
 
 
 def test_rank_keeps_same_release_day_and_prefers_the_scene():
@@ -210,6 +297,109 @@ def test_fallback_terms_use_performer_not_the_whole_studio():
     assert "TabooHeat" not in terms
 
 
+def test_vr_fallback_uses_glued_studio():
+    from app.western_magnets import western_fallback_terms
+
+    terms = western_fallback_terms("VR Bangers", "Office Fantasy", ["Jane Doe"])
+    assert terms[0] == "VRBangers Jane Doe"
+    vrp = western_fallback_terms("Virtual Real Porn", "Between Pillows And Whispers", [])
+    assert vrp == ["VirtualRealPorn Whispers"]
+
+
+def test_rank_glued_vr_studio_and_initials():
+    items = [
+        {
+            "title": "VRBangers.24.05.06.Jane.Doe.Office.Fantasy.XXX.VR180.8K",
+            "heat": 10,
+            "size": "40 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "Bangers.24.05.06.Wrong.Studio",
+            "heat": 90,
+            "size": "2 GB",
+            "info_hash": "b" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "VR Bangers",
+        "Office Fantasy",
+        ["Jane Doe"],
+        "2024-05-06",
+    )
+    assert match == "date"
+    assert [item["info_hash"] for item in ranked] == ["a" * 40]
+    assert ranked[0]["pack"] is False
+
+
+def test_rank_vr_hush_p2p_name():
+    items = [
+        {
+            "title": "VRHush.19.12.16.From.the.Vault.Dani.Daniels.XXX.VR180.2700p.MP4-VACCiNE",
+            "heat": 40,
+            "size": "4.2 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "HushVR.19.12.16.Dani.Daniels.From.the.Vault.8K",
+            "heat": 10,
+            "size": "8 GB",
+            "info_hash": "b" * 40,
+        },
+        {
+            "title": "Hush.19.12.16.Unrelated.Scene",
+            "heat": 90,
+            "size": "2 GB",
+            "info_hash": "c" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "VR Hush",
+        "From the Vault",
+        ["Dani Daniels"],
+        "2019-12-16",
+    )
+    assert match == "date"
+    hashes = [item["info_hash"] for item in ranked]
+    assert hashes == ["a" * 40, "b" * 40]
+
+
+def test_rank_virtual_real_porn_scene():
+    items = [
+        {
+            "title": "VirtualRealPorn.26.06.07.Between.Pillows.And.Whispers.XXX.VR180.8K",
+            "heat": 20,
+            "size": "35 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "VRP.26.06.07.Between.Pillows.And.Whispers.8K",
+            "heat": 15,
+            "size": "30 GB",
+            "info_hash": "b" * 40,
+        },
+        {
+            "title": "Porn.26.06.07.Unrelated",
+            "heat": 99,
+            "size": "2 GB",
+            "info_hash": "c" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Virtual Real Porn",
+        "Between Pillows And Whispers",
+        [],
+        "2026-06-07",
+    )
+    assert match == "date"
+    hashes = [item["info_hash"] for item in ranked]
+    assert hashes == ["a" * 40, "b" * 40]
+    assert all(not item["pack"] for item in ranked)
+
+
 def test_site_name_alone_does_not_count_as_the_scene():
     items = [{
         "title": "County Line Rocco Siffredi",
@@ -296,6 +486,42 @@ def test_scrape_western_moves_file_into_studio(tmp_path):
         assert list(folder.glob("*.mp4"))
         assert list(folder.glob("*.nfo"))
         assert not (torrent / "clip.mp4").exists()
+
+    asyncio.run(run())
+
+
+def test_scrape_vr_moves_file_into_vr_root(tmp_path):
+    import asyncio
+
+    from app.config import Settings
+    from app.western_archive import scrape_western_job
+
+    async def run():
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            download_dir=tmp_path / "dl",
+            media_dir=tmp_path / "media",
+            western_media_dir=str(tmp_path / "欧美"),
+            vr_media_dir=str(tmp_path / "vrporn" / "western"),
+            scrape_min_mb=0,
+        )
+        settings.ensure_dirs()
+        settings.vr_root.mkdir(parents=True)
+        torrent = settings.download_dir / "vrbangers.scene.title"
+        torrent.mkdir()
+        (torrent / "clip.mp4").write_bytes(b"x" * 80)
+        result = await scrape_western_job(
+            settings,
+            {"dest": str(settings.download_dir / "western" / "slug"), "title": "vrbangers.scene.title.xxx"},
+            {"kind": "western", "site": "VR Bangers", "title": "Office Fantasy", "date": "2024-05-06", "performers": []},
+        )
+        folder = settings.vr_root / "VRBangers"
+        assert Path(result["path"]) == folder
+        assert result["entries"][0]["shelf"] == "vr"
+        assert result["entries"][0]["path"].startswith("vr/")
+        assert list(folder.glob("*.mp4"))
+        west = settings.western_root
+        assert west is None or not west.exists() or not list(west.rglob("*.mp4"))
 
     asyncio.run(run())
 
@@ -470,8 +696,13 @@ def test_list_hides_short_scenes_and_accepts_known_themes():
     search = list_params(2, "blake", None)
     assert search["q"] == "blake"
     assert search["page"] == 2
+    vr = list_params(1, None, None, "vr")
+    assert vr["tags[503]"] == "Virtual Reality"
+    assert "tags[70]" not in vr
     assert is_too_short("")
+    assert not is_too_short("", allow_unknown=True)
     assert is_too_short("14")
+    assert is_too_short("14", allow_unknown=True)
     assert not is_too_short("15")
     html = Path("app/static/index.html").read_text(encoding="utf-8")
     for slug, (_tag_id, _tag_name, label) in THEMES.items():
@@ -483,6 +714,120 @@ def test_list_hides_short_scenes_and_accepts_known_themes():
         assert "题材" in str(exc)
     else:
         raise AssertionError("unknown theme should fail")
+
+
+def test_is_vr_studio_and_work():
+    from app.studios import is_vr_studio, is_vr_work
+
+    assert is_vr_studio("VR Bangers")
+    assert is_vr_studio("Virtual Real Porn")
+    assert is_vr_studio("SexLikeReal")
+    assert is_vr_studio("SLR Originals")
+    assert is_vr_studio("WankzVR")
+    assert is_vr_studio("Naughty America VR")
+    assert not is_vr_studio("Naughty America")
+    assert not is_vr_studio("Brazzers")
+    assert is_vr_work("Brazzers", ["Virtual Reality"], "Room") is True
+    assert is_vr_work("Brazzers", ["Anal"], "Room") is False
+
+
+def test_pick_site_virtual_real_prefers_the_porn_studio():
+    from app.sources.tpdb import pick_site
+
+    rows = [
+        {"id": "1", "name": "VirtualRealAmateur"},
+        {"id": "2", "name": "Virtual Real Porn"},
+        {"id": "3", "name": "VirtualRealGay"},
+        {"id": "4", "name": "Virtual Taboo"},
+        {"id": "5", "name": "Vixen"},
+    ]
+    picked = pick_site(rows, "Virtual Real")
+    assert picked["name"] == "Virtual Real Porn"
+    assert pick_site(rows, "Riley") is None
+    assert pick_site(rows, "Vixen")["id"] == "5"
+    assert pick_site(rows, "VirtualRealPorn")["name"] == "Virtual Real Porn"
+    bex = pick_site(
+        [{"id": "9", "name": "Brazzers Exxtra", "aliases": ["BEX", "BrazzersExxtra"]}],
+        "BrazzersExxtra",
+    )
+    assert bex["id"] == "9"
+    naughty = pick_site(
+        [
+            {"id": "n", "name": "Naughty America"},
+            {"id": "nvr", "name": "Naughty America VR"},
+        ],
+        "Naughty America",
+    )
+    assert naughty["id"] == "n"
+
+
+def test_unpack_list_folds_same_scene():
+    from app.sources.tpdb import _unpack_list
+
+    payload = {
+        "data": [
+            {
+                "id": "a",
+                "title": "Room",
+                "date": "2024-01-02",
+                "site": {"name": "Virtual Real Porn"},
+                "duration": 1200,
+            },
+            {
+                "id": "a",
+                "title": "Room",
+                "date": "2024-01-02",
+                "site": {"name": "Virtual Real Porn"},
+                "duration": 1200,
+            },
+            {
+                "id": "b",
+                "title": "Room",
+                "date": "2024-01-02",
+                "site": {"name": "VirtualRealPorn"},
+                "duration": 1800,
+            },
+            {
+                "id": "c",
+                "title": "Other",
+                "date": "2024-01-02",
+                "site": {"name": "Virtual Real Porn"},
+                "duration": 1800,
+            },
+        ],
+        "meta": {"last_page": 1},
+    }
+    items = _unpack_list(payload, "scene", 1)["items"]
+    assert [item["id"] for item in items] == ["b", "c"]
+    assert items[0]["duration"] == "30"
+
+
+def test_search_catalog_opens_the_matched_site(monkeypatch):
+    import asyncio
+
+    from app.config import Settings
+    from app.sources import tpdb
+
+    async def fake_match(settings, query):
+        assert query == "Virtual Real"
+        return {"id": "site-1", "name": "Virtual Real Porn"}
+
+    async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
+        assert kind == "scene"
+        assert facet == "site"
+        assert name == "Virtual Real Porn"
+        return {"items": [{"id": "1", "title": "Room"}], "page": page, "last_page": 3}
+
+    monkeypatch.setattr(tpdb, "match_site", fake_match)
+    monkeypatch.setattr(tpdb, "fetch_facet", fake_facet)
+
+    async def run():
+        out = await tpdb.search_catalog(Settings(), "scene", "Virtual Real", 1)
+        assert out["matched_site"] == "Virtual Real Porn"
+        assert out["items"][0]["id"] == "1"
+        assert out["last_page"] == 3
+
+    asyncio.run(run())
 
 
 def test_choose_match_uses_performer_and_release_date():

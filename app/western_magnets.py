@@ -6,8 +6,9 @@ from datetime import date
 from pathlib import Path
 
 from app.config import Settings
-from app.ranking import heat_key
+from app.ranking import heat_key, is_pack
 from app.sources.clm import MagnetSearchError, search_magnets
+from app.studios import compact_site, release_prefixes, studio_tokens
 
 _APOSTROPHE = re.compile(r"[’']")
 _WORD = re.compile(r"[A-Za-z0-9]+")
@@ -114,16 +115,39 @@ def _date_gap(scene_date: str, release_date: str | None) -> int | None:
     return abs((left - right).days)
 
 
-def _studio_forms(site: str) -> list[str]:
-    site_words = words(site)[:4]
-    if not site_words:
-        return []
-    compact = "".join(site_words)
-    spaced = " ".join(site_words)
-    forms = [compact]
-    if spaced.lower() != compact.lower():
-        forms.append(spaced)
-    return forms
+# Title matching still uses words(). Studio prefixes come from app.studios.
+
+
+def _studio_tokens(site: str) -> list[str]:
+    return studio_tokens(site)
+
+
+def _compact_alnum(text: str) -> str:
+    return compact_site(text)
+
+
+def _studio_forms(site: str, extra_names: list[str] | None = None) -> list[str]:
+    return release_prefixes(site, extra_names)
+
+
+def _studio_needles(site: str, extra_names: list[str] | None = None) -> list[str]:
+    needles: list[str] = []
+    for form in _studio_forms(site, extra_names):
+        compact = _compact_alnum(form)
+        if compact and compact not in needles:
+            needles.append(compact)
+    return needles
+
+
+def _studio_in_name(needles: list[str], hay: str, compact_hay: str) -> bool:
+    for needle in needles:
+        if len(needle) >= 5:
+            if needle in compact_hay:
+                return True
+            continue
+        if _has_token(hay, needle) or re.search(rf"{re.escape(needle)}(?=\d)", compact_hay):
+            return True
+    return False
 
 
 def _date_stamps(scene_date: str) -> list[str]:
@@ -143,18 +167,24 @@ def western_search_terms(
     title: str,
     performers: list[str] | None = None,
     scene_date: str = "",
+    extra_names: list[str] | None = None,
 ) -> list[str]:
     """Studio plus the release date used in scene filenames.
 
     Namer and Stash match `Site.YY.MM.DD`, not the torrent's upload time.
     """
     del title, performers
-    forms = _studio_forms(site)
+    forms = _studio_forms(site, extra_names)
     if not forms:
         return []
+    stamps = _date_stamps(scene_date)
     terms: list[str] = []
-    for stamp in _date_stamps(scene_date):
+    for stamp in stamps:
         terms.append(f"{forms[0]} {stamp}")
+    short = stamps[0] if stamps else ""
+    for form in forms[1:]:
+        if short:
+            terms.append(f"{form} {short}")
     terms.append(forms[0])
     return terms
 
@@ -163,9 +193,10 @@ def western_fallback_terms(
     site: str,
     title: str,
     performers: list[str] | None = None,
+    extra_names: list[str] | None = None,
 ) -> list[str]:
     """Studio plus a performer or one title word, for when the release date is absent."""
-    forms = _studio_forms(site)
+    forms = _studio_forms(site, extra_names)
     if not forms:
         return []
     studio = forms[0]
@@ -176,7 +207,7 @@ def western_fallback_terms(
             terms.append(f"{studio} {bits[0]} {bits[1]}")
         elif len(bits) == 1 and len(bits[0]) >= 4:
             terms.append(f"{studio} {bits[0]}")
-    site_words = {word.lower() for word in words(site)}
+    site_words = {word.lower() for word in _studio_tokens(site)} | {word.lower() for word in words(site)}
     distinctive = [word for word in words(title) if word.lower() not in site_words and len(word) >= 5]
     distinctive.sort(key=len, reverse=True)
     if distinctive:
@@ -192,6 +223,18 @@ def _has_token(hay: str, token: str) -> bool:
     return re.search(rf"(^|[^a-z0-9]){re.escape(token.lower())}([^a-z0-9]|$)", hay) is not None
 
 
+_VR_MARK = re.compile(
+    r"(?i)(?:(?<![a-z0-9])vr[a-z0-9]|oculus|gearvr|virtual[.\s_-]*real)"
+)
+
+
+def _western_pack(item: dict) -> bool:
+    title = item.get("title") or ""
+    if _VR_MARK.search(title):
+        return is_pack(title, 0)
+    return bool(heat_key(item)[0])
+
+
 def rank_western_magnets(
     items: list[dict],
     site: str,
@@ -199,24 +242,25 @@ def rank_western_magnets(
     performers: list[str] | None = None,
     scene_date: str = "",
     related_only: bool = False,
+    extra_names: list[str] | None = None,
 ) -> tuple[list[dict], str]:
     title_tokens = [word.lower() for word in words(title)]
-    site_tokens = [word.lower() for word in words(site)]
+    site_tokens = [word.lower() for word in _studio_tokens(site)]
     distinctive = [token for token in title_tokens if token not in site_tokens]
     person_tokens: list[str] = []
     named_people = [name for name in (performers or []) if len(words(name)) >= 2]
     for name in named_people:
         person_tokens.extend(word.lower() for word in words(name))
-    compact_site = "".join(site_tokens)
+    needles = _studio_needles(site, extra_names)
     scored: list[dict] = []
     for item in items:
         raw = _APOSTROPHE.sub("", (item.get("title") or "").lower())
         hay = re.sub(r"[^a-z0-9]+", " ", raw)
-        compact_hay = re.sub(r"[^a-z0-9]+", "", raw)
+        compact_hay = _compact_alnum(raw)
         title_hits = sum(1 for token in distinctive if _has_token(hay, token))
         person_hits = sum(1 for token in person_tokens if _has_token(hay, token))
         site_hits = sum(1 for token in site_tokens if _has_token(hay, token))
-        if site_tokens and site_hits < len(site_tokens) and compact_site not in compact_hay:
+        if site_tokens and site_hits < len(site_tokens) and not _studio_in_name(needles, hay, compact_hay):
             continue
         released = parse_release_date(item.get("title") or "")
         gap = _date_gap(scene_date, released) if scene_date else None
@@ -227,7 +271,7 @@ def rank_western_magnets(
         scored.append(row)
     def _strong(row: dict) -> int:
         title_hits, person_hits, _site_hits = row["_hits"]
-        if title_hits >= 2 or (title_hits >= 1 and person_hits > 0):
+        if title_hits >= 2 or (title_hits >= 1 and person_hits > 0) or person_hits >= 2:
             return 1
         return 0
 
@@ -241,7 +285,7 @@ def rank_western_magnets(
     limit = 24 if close else (8 if related_only else 24)
 
     pool.sort(key=lambda row: (
-        heat_key(row)[0],
+        1 if _western_pack(row) else 0,
         row["_gap"],
         -_strong(row),
         -row["_hits"][0],
@@ -261,7 +305,7 @@ def rank_western_magnets(
         row.pop("_hits", None)
         row.pop("_gap", None)
         row.pop("_kind", None)
-        row["pack"] = bool(heat_key(row)[0])
+        row["pack"] = _western_pack(row)
         row["rank"] = index
         out.append(row)
     return out, match
@@ -299,19 +343,22 @@ async def collect_western_magnets(
     title: str,
     performers: list[str] | None = None,
     scene_date: str = "",
+    extra_names: list[str] | None = None,
 ) -> tuple[list[dict], str, str | None]:
-    terms = western_search_terms(site, title, performers, scene_date)
+    terms = western_search_terms(site, title, performers, scene_date, extra_names)
     if not terms:
         return [], "none", None
     date_terms = [term for term in terms if any(char.isdigit() for char in term)]
     studio_terms = [term for term in terms if term not in date_terms]
     merged, error = await _search_terms(settings, date_terms, pages=1)
-    items, match = rank_western_magnets(merged, site, title, performers, scene_date)
+    items, match = rank_western_magnets(
+        merged, site, title, performers, scene_date, extra_names=extra_names,
+    )
     if match == "date":
         return items, match, None
     extra, extra_error = await _search_terms(
         settings,
-        western_fallback_terms(site, title, performers) or studio_terms[:1],
+        western_fallback_terms(site, title, performers, extra_names) or studio_terms[:1],
         pages=1,
     )
     combined: list[dict] = []
@@ -329,6 +376,7 @@ async def collect_western_magnets(
         performers,
         scene_date,
         related_only=True,
+        extra_names=extra_names,
     )
     if items:
         return items, match, None
