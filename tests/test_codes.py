@@ -64,3 +64,17 @@ def test_jav_vr_maker():
     assert extract_code("DANDYHQVR-015.mp4") == "DANDYHQVR-015"
     assert extract_code("3DSVR-2028") == "3DSVR-2028"
     assert extract_code("urvrsp605") == "URVRSP-605"
+
+
+def test_date_code_in_studio_folder_counts_as_jav_vr():
+    from app.codes import is_jav_vr_entry, jav_vr_maker
+
+    assert jav_vr_maker("021622-001") is None
+    assert is_jav_vr_entry("DSVR-1124")
+    assert is_jav_vr_entry("DSVR-1124", "DSVR")
+    assert not is_jav_vr_entry("SSIS-001", "202102")
+    assert not is_jav_vr_entry("092126-001", "202102")
+    assert is_jav_vr_entry("021622-001", "Caribbean")
+    assert is_jav_vr_entry("012822-01", "10mu")
+    assert not is_jav_vr_entry("021622-001")
+    assert not is_jav_vr_entry("021622-001", "")

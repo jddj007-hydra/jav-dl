@@ -21,6 +21,7 @@ async def resources(
     title: str | None = Query(None),
     performers: str | None = Query(None),
     date: str | None = Query(None),
+    vr: bool = Query(False),
 ):
     settings = request.app.state.settings
     raw_site = (site or "").strip()
@@ -37,7 +38,7 @@ async def resources(
             if found:
                 extras = site_names(found)
         items, match, error = await collect_western_magnets(
-            settings, raw_site, raw_title, people, raw_date, extras,
+            settings, raw_site, raw_title, people, raw_date, extras, vr,
         )
         return {
             "site": raw_site,

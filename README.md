@@ -67,7 +67,7 @@ aria2c --enable-rpc --rpc-listen-port=6800 --rpc-secret=jav-dl-rpc \
 1. 设置里填写 ThePornDB token（账号在 [theporndb.net](https://theporndb.net) 自己生成）。留空表示不改已保存的 token
 2. 打开「欧美」即拉场景平面最新；可切「电影」、「平面 / VR」、翻页，或用片名 / 演员 / 片商搜索。片商名对得上会直接打开该站目录
 3. 点一张看片商、演员、简介，磁链按片商去磁力猫搜。片名或演员对得上的排前面，合集和大约 15GB 以上靠后
-4. 库里已有的会标「已有」，仍可以再下。标了 suck 的不会再入队。下载目录是 `western/{片商-日期-标题}`。平面归档到 `WESTERN_MEDIA_DIR/{片商}/`，VR 归档到 `VR_MEDIA_DIR/{片商}/`（`文件名.nfo` 和 `文件名-poster.jpg`），都不写进 `YYYYMM/番号/`
+4. 库里已有的会标「已有」，仍可以再下。标了 suck 的不会再入队。下载目录是 `western/{片商-日期-标题}`。平面归档到 `WESTERN_MEDIA_DIR/{片商}/`，VR 归档到 `VR_MEDIA_DIR/western/{片商}/`（`文件名.nfo` 和 `文件名-poster.jpg`），都不写进 `YYYYMM/番号/`
 
 两边的下载都进同一个队列。点下载后到「队列」看进度。媒体库分四块：番号（按月份）、番号VR（按厂牌）、欧美（按片商）、VR（欧美 VR，按片商）。追更页可以关注女优、系列、片商，以及欧美演员和片商。
 
@@ -135,7 +135,7 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `SCRAPE_SETTLE_SECONDS` | `60` | 下完后再静置这么久才归档。设置页可改，留空保存则保留原值 |
 | `SCRAPE_MIN_MB` | `50` | 小于这个体积不当成正片。设置页可改，留空保存则保留原值 |
 | `WESTERN_MEDIA_DIR` | 空 | 欧美平面归档根目录。空则只下载不归档。设置页可改，留空保存则保留原值 |
-| `VR_MEDIA_DIR` | 空 | 欧美 VR 归档根目录，现网是 `vrporn/western`。空则 VR 欧美退回欧美平面目录。设置页可改，留空保存则保留原值。番号 VR 用它的上一级下的 `jav/`（例如 `vrporn/western` → `vrporn/jav`） |
+| `VR_MEDIA_DIR` | 空 | VR 归档根目录，现网是 `vrporn`。番号 VR 进 `jav/{厂牌}/{番号}/`，欧美 VR 进 `western/{片商}/`。空则番号 VR 进平面库，欧美 VR 退回欧美平面目录。旧值若写成 `vrporn/western` 仍按上一级理解。设置页可改，留空保存则保留原值 |
 | `TPDB_API_KEY` | 空 | ThePornDB token，也可只在设置页填写 |
 | `NOTIFY_CHANNEL` | 空 | `telegram`、`bark`、`serverchan` 之一。空则不通知 |
 | `NOTIFY_TELEGRAM_TOKEN` / `NOTIFY_TELEGRAM_CHAT` | 空 | Telegram 机器人 token 和 chat id |
@@ -158,7 +158,7 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 
 追更在单独一页。女优可以写名字，系列和片商粘贴 JavBus 页面。欧美填演员或片商名字。第一次检查只记下现有作品。之后的新作默认只提醒；打开自动下载后，才按无码破解、中字和体积入队。库里或队列里已有的不重复下。
 
-刮削在设置页开关。带番号的视频：平面进 `MEDIA_DIR/YYYYMM/番号/`，番号 VR（厂牌名带 VR，或 DSVR / SAVR / MKCK 这一类）进 `vrporn/jav/{厂牌}/{番号}/`。`downloads/western/` 整目录按欧美处理：平面进 `WESTERN_MEDIA_DIR/{片商}/`，VR 进 `VR_MEDIA_DIR/{片商}/`。归档目录可改成和别的库共用；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。番号平面的月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。已经进错目录的 VR，可用 `app/rehome.py` 迁到 vrporn 再重扫媒体库。
+刮削在设置页开关。带番号的视频：平面进 `MEDIA_DIR/YYYYMM/番号/`，番号 VR（厂牌名带 VR，或 DSVR / SAVR / MKCK 这一类）进 `VR_MEDIA_DIR/jav/{厂牌}/{番号}/`。`downloads/western/` 整目录按欧美处理：平面进 `WESTERN_MEDIA_DIR/{片商}/`，VR 进 `VR_MEDIA_DIR/western/{片商}/`。归档目录可改成和别的库共用；若另一边也在监控同一下载目录，请关掉其中一边，避免抢文件。番号平面的月份取自发行日期，没有则用刮削当天。完成后再静置约 60 秒才搬文件。已经进错目录的 VR，可用 `app/rehome.py` 迁到 vrporn 再重扫媒体库。
 
 ## 测试
 

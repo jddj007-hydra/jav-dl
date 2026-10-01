@@ -1,3 +1,5 @@
+import json
+
 from app.config import Settings, _overlay, browser_http_url, normalize_downloader, panel_links, save_user_config
 from app.models import SettingsUpdate
 
@@ -89,9 +91,39 @@ def test_scrape_timing_and_western_dir_roundtrip(tmp_path):
     assert kept.scrape_settle_seconds == 15
     assert kept.public_dict()["scrape_min_mb"] == 0
 
-    vr = save_user_config(kept, {"vr_media_dir": str(tmp_path / "vrporn" / "western")})
-    assert vr.vr_media_dir == str(tmp_path / "vrporn" / "western")
-    assert vr.public_dict()["vr_media_dir"] == str(tmp_path / "vrporn" / "western")
+    vrporn = tmp_path / "vrporn"
+    vr = save_user_config(kept, {"vr_media_dir": str(vrporn / "western")})
+    assert vr.vr_media_dir == str(vrporn)
+    assert vr.vrporn_root == vrporn
+    assert vr.vr_root == vrporn / "western"
+    assert vr.jav_vr_root == vrporn / "jav"
+    assert vr.public_dict()["vr_media_dir"] == str(vrporn)
+
+
+def test_vr_media_dir_is_vrporn_root(tmp_path):
+    from app.config import vrporn_root_from_raw
+
+    vrporn = tmp_path / "vrporn"
+    assert vrporn_root_from_raw("") is None
+    assert vrporn_root_from_raw(".") is None
+    assert vrporn_root_from_raw("western") is None
+    assert vrporn_root_from_raw(str(vrporn)) == vrporn
+    assert vrporn_root_from_raw(str(vrporn / "western")) == vrporn
+
+    root = Settings(vr_media_dir=str(vrporn))
+    assert root.vr_root == vrporn / "western"
+    assert root.jav_vr_root == vrporn / "jav"
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "config.json").write_text(
+        json.dumps({"vr_media_dir": str(vrporn / "western")}),
+        encoding="utf-8",
+    )
+    over = _overlay(Settings(data_dir=data, download_dir=tmp_path / "dl"))
+    assert over.vr_media_dir == str(vrporn)
+    assert over.vr_root == vrporn / "western"
+    assert over.jav_vr_root == vrporn / "jav"
 
 
 def test_backup_search_domain_normalizes_and_blank_clears(tmp_path):

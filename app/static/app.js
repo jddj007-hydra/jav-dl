@@ -1856,6 +1856,7 @@ async function openWestern(id, kind, known = null) {
   if (listed && listed.performers && listed.performers.length) {
     magnetParams.set("performers", listed.performers.slice(0, 3).join(","));
   }
+  if ((listed && listed.vr) || westernFormat === "vr") magnetParams.set("vr", "1");
   const magnetPath = magnetParams.toString();
   const [detail, magnets] = await Promise.allSettled([
     api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),

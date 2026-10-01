@@ -109,6 +109,19 @@ def test_scan_media_accepts_fanart_as_poster(tmp_path):
     assert row["poster"] == "DSVR/DSVR-1124/fanart.jpg"
 
 
+def test_scan_media_indexes_uncensored_date_codes(tmp_path):
+    from app.catalog import movie_shelf
+
+    folder = tmp_path / "Caribbean" / "021622-001"
+    folder.mkdir(parents=True)
+    (folder / "021622-001.mp4").write_bytes(b"x")
+    row = scan_media(tmp_path)[0]
+    assert row["code"] == "021622-001"
+    assert row["month"] == "Caribbean"
+    assert row["path"] == "Caribbean/021622-001"
+    assert movie_shelf(row["code"], row["month"]) == "vr"
+
+
 def test_scan_prefers_newer_month(tmp_path):
     old = tmp_path / "202101" / "SSIS-001"
     new = tmp_path / "202102" / "SSIS-001"
@@ -196,6 +209,9 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         await db.upsert_library({
             "code": "DSVR-1124", "month": "DSVR", "path": "DSVR/DSVR-1124", "has_video": 1,
         })
+        await db.upsert_library({
+            "code": "021622-001", "month": "Caribbean", "path": "Caribbean/021622-001", "has_video": 1,
+        })
         await lib.remember_western({"entries": [{
             "path": "Brazzers/a.mp4",
             "tpdb_id": "abc",
@@ -207,8 +223,9 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings, db=db)))
         body = await library_page(request)
         assert [group["month"] for group in body["jav"]] == ["202102", "202101"]
-        assert [group["month"] for group in body["jav_vr"]] == ["DSVR"]
-        assert body["jav_vr"][0]["items"][0]["code"] == "DSVR-1124"
+        assert [group["month"] for group in body["jav_vr"]] == ["Caribbean", "DSVR"]
+        assert body["jav_vr"][0]["items"][0]["code"] == "021622-001"
+        assert body["jav_vr"][1]["items"][0]["code"] == "DSVR-1124"
         first = body["jav"][0]["items"][0]
         assert first["full_path"].endswith("202102/SSIS-001")
         assert first["title"] == "Title"

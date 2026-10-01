@@ -8,7 +8,7 @@ from pathlib import Path
 from app.config import Settings
 from app.ranking import heat_key, is_pack
 from app.sources.clm import MagnetSearchError, search_magnets
-from app.studios import compact_site, release_prefixes, studio_tokens
+from app.studios import compact_site, release_prefixes, studio_tokens, uses_slr_names
 
 _APOSTROPHE = re.compile(r"[’']")
 _WORD = re.compile(r"[A-Za-z0-9]+")
@@ -150,6 +150,44 @@ def _studio_in_name(needles: list[str], hay: str, compact_hay: str) -> bool:
     return False
 
 
+def _name_bits(name: str) -> list[str]:
+    """Keep initials so Nancy A can glue to NancyA in SLR filenames."""
+    cleaned = _APOSTROPHE.sub("", name or "")
+    return [word.lower() for word in _WORD.findall(cleaned) if word]
+
+
+def _hits_in_name(tokens: list[str], hay: str, compact_hay: str) -> int:
+    """Count title/performer words, including SLR glued chunks like JaneDoe."""
+    if not tokens:
+        return 0
+    found = [False] * len(tokens)
+    for i, token in enumerate(tokens):
+        if _has_token(hay, token):
+            found[i] = True
+    for i in range(len(tokens) - 1):
+        glued = tokens[i] + tokens[i + 1]
+        if len(glued) >= 6 and glued in compact_hay:
+            found[i] = True
+            found[i + 1] = True
+    for i, token in enumerate(tokens):
+        if not found[i] and len(token) >= 5 and token in compact_hay:
+            found[i] = True
+    return sum(1 for ok in found if ok)
+
+
+def _person_hits(performers: list[str] | None, hay: str, compact_hay: str) -> int:
+    total = 0
+    for name in performers or []:
+        raw = _name_bits(name)
+        if len(raw) >= 2:
+            glued = "".join(raw)
+            if len(glued) >= 6 and glued in compact_hay:
+                total += 2
+                continue
+        total += _hits_in_name([tok for tok in raw if len(tok) >= 3], hay, compact_hay)
+    return total
+
+
 def _date_stamps(scene_date: str) -> list[str]:
     try:
         parsed = date.fromisoformat((scene_date or "")[:10])
@@ -194,6 +232,7 @@ def western_fallback_terms(
     title: str,
     performers: list[str] | None = None,
     extra_names: list[str] | None = None,
+    vr: bool = False,
 ) -> list[str]:
     """Studio plus a performer or one title word, for when the release date is absent."""
     forms = _studio_forms(site, extra_names)
@@ -203,20 +242,33 @@ def western_fallback_terms(
     terms: list[str] = []
     for name in (performers or [])[:2]:
         bits = words(name)
+        raw = [w for w in _WORD.findall(_APOSTROPHE.sub("", name or "")) if w]
         if len(bits) >= 2:
             terms.append(f"{studio} {bits[0]} {bits[1]}")
         elif len(bits) == 1 and len(bits[0]) >= 4:
             terms.append(f"{studio} {bits[0]}")
+        if len(raw) >= 2:
+            glued = "".join(raw[:2])
+            if len(glued) >= 5:
+                terms.append(f"{studio} {glued}")
+    slr = uses_slr_names(site, extra_names, vr)
+    if slr:
+        terms.append(f"SLR {studio}")
     site_words = {word.lower() for word in _studio_tokens(site)} | {word.lower() for word in words(site)}
-    distinctive = [word for word in words(title) if word.lower() not in site_words and len(word) >= 5]
+    title_words = [word for word in words(title) if word.lower() not in site_words]
+    distinctive = [word for word in title_words if len(word) >= 5]
     distinctive.sort(key=len, reverse=True)
     if distinctive:
         terms.append(f"{studio} {distinctive[0]}")
+    if slr and len(title_words) >= 2:
+        glued_title = title_words[0] + title_words[1]
+        if len(glued_title) >= 8:
+            terms.append(f"{studio} {glued_title}")
     out: list[str] = []
     for term in terms:
         if term not in out:
             out.append(term)
-    return out[:3]
+    return out[:4]
 
 
 def _has_token(hay: str, token: str) -> bool:
@@ -247,18 +299,14 @@ def rank_western_magnets(
     title_tokens = [word.lower() for word in words(title)]
     site_tokens = [word.lower() for word in _studio_tokens(site)]
     distinctive = [token for token in title_tokens if token not in site_tokens]
-    person_tokens: list[str] = []
-    named_people = [name for name in (performers or []) if len(words(name)) >= 2]
-    for name in named_people:
-        person_tokens.extend(word.lower() for word in words(name))
     needles = _studio_needles(site, extra_names)
     scored: list[dict] = []
     for item in items:
         raw = _APOSTROPHE.sub("", (item.get("title") or "").lower())
         hay = re.sub(r"[^a-z0-9]+", " ", raw)
         compact_hay = _compact_alnum(raw)
-        title_hits = sum(1 for token in distinctive if _has_token(hay, token))
-        person_hits = sum(1 for token in person_tokens if _has_token(hay, token))
+        title_hits = _hits_in_name(distinctive, hay, compact_hay)
+        person_hits = _person_hits(performers, hay, compact_hay)
         site_hits = sum(1 for token in site_tokens if _has_token(hay, token))
         if site_tokens and site_hits < len(site_tokens) and not _studio_in_name(needles, hay, compact_hay):
             continue
@@ -344,6 +392,7 @@ async def collect_western_magnets(
     performers: list[str] | None = None,
     scene_date: str = "",
     extra_names: list[str] | None = None,
+    vr: bool = False,
 ) -> tuple[list[dict], str, str | None]:
     terms = western_search_terms(site, title, performers, scene_date, extra_names)
     if not terms:
@@ -358,7 +407,7 @@ async def collect_western_magnets(
         return items, match, None
     extra, extra_error = await _search_terms(
         settings,
-        western_fallback_terms(site, title, performers, extra_names) or studio_terms[:1],
+        western_fallback_terms(site, title, performers, extra_names, vr) or studio_terms[:1],
         pages=1,
     )
     combined: list[dict] = []

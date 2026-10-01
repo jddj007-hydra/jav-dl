@@ -320,8 +320,8 @@
             <label>欧美归档目录
               <input name="western_media_dir" placeholder="留空表示不改" />
             </label>
-            <label>欧美 VR 归档目录
-              <input name="vr_media_dir" placeholder="留空表示不改" />
+            <label>VR 归档目录
+              <input name="vr_media_dir" placeholder="vrporn 根目录，留空表示不改" />
             </label>
           </div>
           <div class="field-row">
@@ -334,8 +334,8 @@
           </div>
           <details class="help">
             <summary>归档怎么做</summary>
-            <p>监控下载目录，文件静置够久后按番号写 NFO、poster.jpg、fanart.jpg。平面进 YYYYMM/番号/，番号 VR 进 vrporn/jav/厂牌/番号/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
-            <p>小于最小体积的文件不当正片。静置、最小体积和归档目录留空保存会保留原值。欧美平面进欧美目录，欧美 VR 进 vrporn/western。</p>
+            <p>监控下载目录，文件静置够久后按番号写 NFO、poster.jpg、fanart.jpg。平面进 YYYYMM/番号/。VR 归档目录填 vrporn 根目录：番号 VR 进 jav/厂牌/番号/，欧美 VR 进 western/片商/。迅雷面板里手动加的任务也会刮，只要文件名或文件夹带番号。</p>
+            <p>小于最小体积的文件不当正片。静置、最小体积和归档目录留空保存会保留原值。欧美平面进欧美目录。没配 VR 目录时，番号 VR 会进平面库，欧美 VR 会进欧美平面目录。</p>
           </details>
         </fieldset>
         <fieldset class="group">
@@ -395,6 +395,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=43"></script>
+  <script src="/static/app.js?v=44"></script>
 </body>
 </html>

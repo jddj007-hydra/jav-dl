@@ -169,6 +169,7 @@ def _western_work(scene: dict, sub: dict) -> dict | None:
             "title": scene.get("title") or scene_id,
             "date": scene.get("date") or "",
             "performers": scene.get("performers") or [],
+            "vr": bool(scene.get("vr")),
         },
     }
 
@@ -260,6 +261,7 @@ async def _download(manager, sub: dict, work: dict) -> tuple[str, str]:
             info.get("title") or "",
             info.get("performers") or [],
             info.get("date") or "",
+            vr=bool(info.get("vr")),
         )
         if error and not items:
             return "no_magnet", error

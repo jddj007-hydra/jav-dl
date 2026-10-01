@@ -4,7 +4,7 @@ import hashlib
 import json
 from urllib.parse import quote
 
-from app.codes import jav_vr_maker
+from app.codes import is_jav_vr_entry
 
 MOVIE_SORTS = {
     "release": "premiered",
@@ -54,8 +54,8 @@ def poster_url(kind: str, path: str) -> str:
     return f"/api/library/poster?kind={kind}&path={quote(path, safe='')}"
 
 
-def movie_shelf(code: str) -> str:
-    return "vr" if jav_vr_maker(code) else "flat"
+def movie_shelf(code: str, month: str = "") -> str:
+    return "vr" if is_jav_vr_entry(code, month) else "flat"
 
 
 def scene_shelf(row: dict) -> str:
@@ -90,7 +90,7 @@ def movie_item(row: dict) -> dict:
         "poster_url": poster_url("jav", folder) if poster or row.get("has_poster") else "",
         "outline": row.get("outline") or "",
         "added_at": row.get("added_at") or 0,
-        "shelf": movie_shelf(code),
+        "shelf": movie_shelf(code, row.get("month") or ""),
         "last_played_at": _unix(row.get("last_played_at")),
     }
 

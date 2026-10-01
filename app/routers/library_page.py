@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-from app.codes import jav_vr_maker
+from app.codes import is_jav_vr_entry
 from app.library import archived_jav_path, poster_file
 from app.models import SuckMark
 from app.suck import mark_work, parse_suck
@@ -42,7 +42,7 @@ async def library_page(request: Request):
             "release_date": row.get("release_date") or "",
             "added_at": row.get("added_at") or 0,
         }
-        bucket = vr_months if jav_vr_maker(row.get("code") or "") else months
+        bucket = vr_months if is_jav_vr_entry(row.get("code") or "", row.get("month") or "") else months
         bucket.setdefault(row.get("month") or "", []).append(item)
     jav_groups = []
     for month in sorted(months, reverse=True):

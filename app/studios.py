@@ -13,9 +13,18 @@ _GENERIC_TAIL = {
     "entertainment", "network", "official", "studio", "studios", "com",
 }
 _GENERIC_SITE_TAIL = {"porn", "xxx", "vr", "official", "originals", "com"}
+# VR-first studios whose names do not contain vr / virtual / slr.
+# xbvr's official SLR list plus common TPDB names. Names with those
+# markers are detected in is_vr_studio without being listed here.
 _VR_COMPACT = {
-    "sexlikereal", "slroriginals", "virtualtaboo", "povr", "vrconk",
-    "hologirlsvr", "stasyqvr", "baberoticavr", "amateurcouplesvr",
+    "sexlikereal", "lustreality", "hornyhostel", "erotiquesex",
+    "eroticsinners", "realitylovers", "swallowbay", "dezyred",
+    "virtualtaboo", "astrodomina", "blondehexe", "blusherotica",
+    "bravomodelsmedia", "casanova", "covertjapan", "deepinsex",
+    "emilybloom", "heathering", "jimmydraws", "kinkygirlsberlin",
+    "peepingthom", "petersmax", "sweetlonglips", "tadpolexxxstudio",
+    "thatrandomeditor", "povr", "baberoticavr", "amateurcouplesvr",
+    "hologirlsvr", "stasyqvr",
 }
 _VR_TAG_NAMES = {
     "virtual reality", "vr glasses", "180°", "180", "360°", "360", "oculus",
@@ -34,6 +43,14 @@ _KNOWN_PREFIXES = {
     "virtualrealporn": ["VRP"],
     "wankzvr": ["WVR"],
     "badoinkvr": ["BVR"],
+    "sexbabesvr": ["SBVR"],
+    "18vr": ["18VR"],
+    "realjamvr": ["RJVR"],
+    "povr": ["POVR"],
+    "vrconk": ["VRC"],
+    "darkroomvr": ["DRVR"],
+    "fuckpassvr": ["FPVR"],
+    "tmwvrnet": ["TMW"],
     "czechvr": ["CVR"],
     "passionhd": ["PHD"],
     "tiny4k": ["T4K"],
@@ -204,15 +221,24 @@ def pick_site(rows: list, query: str) -> dict | None:
 def is_vr_studio(site: str) -> bool:
     tokens = [tok.lower() for tok in studio_tokens(site)]
     compact = compact_site(site)
-    if "vr" in tokens:
+    if "vr" in tokens or "vr" in compact:
         return True
-    if compact.startswith("vr") or compact.endswith("vr"):
-        return True
-    if "virtualreal" in compact:
+    if "virtual" in compact:
         return True
     if compact.startswith("slr") or compact in _VR_COMPACT:
         return True
     return False
+
+
+def is_slr_studio(site: str) -> bool:
+    """SLR dumps look like SLR_SexBabesVR_NancyA_Title, not Site.YY.MM.DD."""
+    return is_vr_studio(site)
+
+
+def uses_slr_names(site: str, extra_names: list[str] | None = None, vr: bool = False) -> bool:
+    if vr or is_vr_studio(site):
+        return True
+    return any(is_vr_studio(name) for name in extra_names or [])
 
 
 def is_vr_work(site: str = "", tags: list | None = None, title: str = "") -> bool:

@@ -318,8 +318,96 @@ def test_vr_fallback_uses_glued_studio():
 
     terms = western_fallback_terms("VR Bangers", "Office Fantasy", ["Jane Doe"])
     assert terms[0] == "VRBangers Jane Doe"
+    assert "VRBangers JaneDoe" in terms
+    assert "SLR VRBangers" in terms
     vrp = western_fallback_terms("Virtual Real Porn", "Between Pillows And Whispers", [])
-    assert vrp == ["VirtualRealPorn Whispers"]
+    assert vrp[0] == "SLR VirtualRealPorn"
+    assert "VirtualRealPorn Whispers" in vrp
+
+
+def test_slr_fallback_uses_glued_names_and_prefix():
+    from app.western_magnets import western_fallback_terms
+
+    sexbabes = western_fallback_terms("SexBabesVR", "Romantic Evening", ["Nancy A"])
+    assert "SexBabesVR Nancy" in sexbabes
+    assert "SexBabesVR NancyA" in sexbabes
+    assert "SLR SexBabesVR" in sexbabes
+    lust = western_fallback_terms("LustReality", "Wake Up Sex", ["Jenny Doll"])
+    assert "LustReality Jenny Doll" in lust
+    assert "LustReality JennyDoll" in lust
+    hostel = western_fallback_terms("Horny Hostel", "Room Service", ["Jane Doe"])
+    assert "HornyHostel JaneDoe" in hostel
+    assert "SLR HornyHostel" in hostel
+    badoink = western_fallback_terms("Badoink VR", "Office Fantasy", ["Jane Doe"])
+    assert "BadoinkVR JaneDoe" in badoink
+    assert "SLR BadoinkVR" in badoink
+    erotique = western_fallback_terms("Erotique Sex", "Night Walk", ["Jane Doe"])
+    assert "ErotiqueSex JaneDoe" in erotique
+    assert "SLR ErotiqueSex" in erotique
+    tagged = western_fallback_terms("Unknown Indie", "Night Walk", ["Jane Doe"], vr=True)
+    assert "SLR UnknownIndie" in tagged
+    assert "UnknownIndie JaneDoe" in tagged
+
+
+def test_rank_slr_glued_scene_names():
+    cases = [
+        (
+            "SexBabesVR",
+            "Romantic Evening",
+            ["Nancy A"],
+            "SLR_SexBabesVR_NancyA_RomanticEvening_1920p_180_LR_180x180_3dh",
+            "SLR_SexBabesVR_OtherGirl_DifferentScene_8K",
+        ),
+        (
+            "LustReality",
+            "Wake Up Sex",
+            ["Jenny Doll"],
+            "SLR_LustReality_JennyDoll_WakeUpSex_2900p_180_LR",
+            "SLR_LustReality_OtherGirl_OtherTitle_8K",
+        ),
+        (
+            "perVRt",
+            "Horny Hostel Room Service",
+            ["Jane Doe"],
+            "SLR_perVRt_HornyHostel_JaneDoe_RoomService_8K",
+            "SLR_perVRt_OtherSeries_SomeoneElse_8K",
+        ),
+        (
+            "Horny Hostel",
+            "Room Service",
+            ["Jane Doe"],
+            "SLR_perVRt_HornyHostel_JaneDoe_RoomService_8K",
+            "SLR_perVRt_OtherSeries_SomeoneElse_8K",
+        ),
+        (
+            "Badoink VR",
+            "Office Fantasy",
+            ["Jane Doe"],
+            "SLR_BadoinkVR_JaneDoe_OfficeFantasy_8K_180_LR",
+            "SLR_BadoinkVR_OtherGirl_OtherTitle_8K",
+        ),
+        (
+            "Erotique Sex",
+            "Night Walk",
+            ["Jane Doe"],
+            "SLR_ErotiqueSex_JaneDoe_NightWalk_8K_180_LR",
+            "SLR_ErotiqueSex_OtherGirl_OtherTitle_8K",
+        ),
+    ]
+    for site, title, performers, keep, drop in cases:
+        ranked, match = rank_western_magnets(
+            [
+                {"title": keep, "heat": 20, "size": "8 GB", "info_hash": "a" * 40},
+                {"title": drop, "heat": 90, "size": "10 GB", "info_hash": "b" * 40},
+            ],
+            site,
+            title,
+            performers,
+            "2024-03-15",
+            related_only=True,
+        )
+        assert match == "title", site
+        assert [item["info_hash"] for item in ranked] == ["a" * 40], site
 
 
 def test_rank_glued_vr_studio_and_initials():
@@ -518,7 +606,7 @@ def test_scrape_vr_moves_file_into_vr_root(tmp_path):
             download_dir=tmp_path / "dl",
             media_dir=tmp_path / "media",
             western_media_dir=str(tmp_path / "欧美"),
-            vr_media_dir=str(tmp_path / "vrporn" / "western"),
+            vr_media_dir=str(tmp_path / "vrporn"),
             scrape_min_mb=0,
         )
         settings.ensure_dirs()
@@ -801,6 +889,17 @@ def test_is_vr_studio_and_work():
     assert is_vr_studio("SLR Originals")
     assert is_vr_studio("WankzVR")
     assert is_vr_studio("Naughty America VR")
+    assert is_vr_studio("SexBabesVR")
+    assert is_vr_studio("LustReality")
+    assert is_vr_studio("perVRt")
+    assert is_vr_studio("Horny Hostel")
+    assert is_vr_studio("Badoink VR")
+    assert is_vr_studio("Erotique Sex")
+    assert is_vr_studio("RealityLovers")
+    assert is_vr_studio("SwallowBay")
+    assert is_vr_studio("VirtualTaboo")
+    assert is_vr_studio("Dezyred")
+    assert is_vr_studio("EmilyBloom")
     assert not is_vr_studio("Naughty America")
     assert not is_vr_studio("Brazzers")
     assert is_vr_work("Brazzers", ["Virtual Reality"], "Room") is True

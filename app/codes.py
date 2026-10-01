@@ -148,6 +148,9 @@ def code_maker(code: str) -> str:
     return normalized.split("-", 1)[0]
 
 
+_MONTH_DIR = re.compile(r"^\d{6}$")
+
+
 def jav_vr_maker(code: str) -> str | None:
     maker = code_maker(code)
     if not maker or maker.isdigit():
@@ -155,3 +158,11 @@ def jav_vr_maker(code: str) -> str | None:
     if maker in _JAV_VR_MAKERS or "VR" in maker:
         return maker
     return None
+
+
+def is_jav_vr_entry(code: str, month: str = "") -> bool:
+    """番号 VR 厂牌，或 vrporn/jav 下按片商归档的无码（Caribbean / 10mu 日期番号）。"""
+    if jav_vr_maker(code):
+        return True
+    bucket = (month or "").strip()
+    return bool(bucket) and _MONTH_DIR.fullmatch(bucket) is None

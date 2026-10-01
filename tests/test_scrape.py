@@ -212,7 +212,7 @@ def test_scrape_job_sends_jav_vr_to_vrporn(tmp_path, monkeypatch):
         data_dir=data,
         download_dir=root,
         media_dir=media,
-        vr_media_dir=str(vrporn / "western"),
+        vr_media_dir=str(vrporn),
         scrape_min_mb=0,
     )
     settings.ensure_dirs()

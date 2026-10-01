@@ -35,6 +35,19 @@ USER_KEYS = (
 DOWNLOADERS = ("aria2", "xunlei")
 
 
+def vrporn_root_from_raw(raw: str | None) -> Path | None:
+    """VR 归档根目录。旧配置若写成 .../western，当成它的上一级。"""
+    text = (raw or "").strip()
+    if not text or text == ".":
+        return None
+    path = Path(text)
+    if path.name.lower() == "western":
+        path = path.parent
+    if not str(path).strip() or str(path) == ".":
+        return None
+    return path
+
+
 def normalize_downloader(value: str | None) -> str:
     v = (value or "aria2").strip().lower()
     return v if v in DOWNLOADERS else "aria2"
@@ -139,17 +152,18 @@ class Settings(BaseSettings):
         return Path(raw)
 
     @property
+    def vrporn_root(self) -> Path | None:
+        return vrporn_root_from_raw(self.vr_media_dir)
+
+    @property
     def vr_root(self) -> Path | None:
-        raw = (self.vr_media_dir or "").strip()
-        if not raw or raw == ".":
-            return None
-        return Path(raw)
+        root = self.vrporn_root
+        return None if root is None else root / "western"
 
     @property
     def jav_vr_root(self) -> Path | None:
-        if self.vr_root is None:
-            return None
-        return self.vr_root.parent / "jav"
+        root = self.vrporn_root
+        return None if root is None else root / "jav"
 
     @property
     def db_path(self) -> Path:
@@ -177,7 +191,7 @@ class Settings(BaseSettings):
             "scrape_enabled": bool(self.scrape_enabled),
             "media_dir": str(self.media_dir),
             "western_media_dir": self.western_media_dir or "",
-            "vr_media_dir": self.vr_media_dir or "",
+            "vr_media_dir": str(self.vrporn_root) if self.vrporn_root else "",
             "scrape_settle_seconds": int(self.scrape_settle_seconds),
             "scrape_min_mb": int(self.scrape_min_mb),
             "auth_enabled": bool(self.auth_user and self.auth_pass),
@@ -207,10 +221,11 @@ def _keep_paths(allowed: dict) -> None:
             allowed["western_media_dir"] = raw
     if "vr_media_dir" in allowed:
         raw = str(allowed["vr_media_dir"]).strip()
-        if not raw:
+        root = vrporn_root_from_raw(raw)
+        if root is None:
             allowed.pop("vr_media_dir")
         else:
-            allowed["vr_media_dir"] = raw
+            allowed["vr_media_dir"] = str(root)
     # 备用域留空表示关掉。非法地址不覆盖原来的值。
     if "clm_search_backup" in allowed:
         raw = str(allowed["clm_search_backup"]).strip()
