@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from urllib.parse import quote
+
+from app.codes import jav_vr_maker
 
 MOVIE_SORTS = {
     "release": "premiered",
@@ -51,11 +54,23 @@ def poster_url(kind: str, path: str) -> str:
     return f"/api/library/poster?kind={kind}&path={quote(path, safe='')}"
 
 
+def movie_shelf(code: str) -> str:
+    return "vr" if jav_vr_maker(code) else "flat"
+
+
+def scene_shelf(row: dict) -> str:
+    path = row.get("path") or ""
+    if (row.get("shelf") or "").strip() == "vr" or str(path).startswith("vr/"):
+        return "vr"
+    return "flat"
+
+
 def movie_item(row: dict) -> dict:
     folder = row.get("path") or ""
     poster = row.get("poster") or ""
+    code = row.get("code") or ""
     return {
-        "code": row.get("code") or "",
+        "code": code,
         "title": row.get("title") or "",
         "actors": names(row.get("actors")),
         "genres": names(row.get("genres")),
@@ -75,6 +90,7 @@ def movie_item(row: dict) -> dict:
         "poster_url": poster_url("jav", folder) if poster or row.get("has_poster") else "",
         "outline": row.get("outline") or "",
         "added_at": row.get("added_at") or 0,
+        "shelf": movie_shelf(code),
         "last_played_at": _unix(row.get("last_played_at")),
     }
 
@@ -99,18 +115,30 @@ def scene_item(row: dict) -> dict:
         "release_name": name.rsplit(".", 1)[0] if name else "",
         "tpdb_id": row.get("tpdb_id") or "",
         "added_at": row.get("added_at") or 0,
+        "shelf": scene_shelf(row),
         "last_played_at": _unix(row.get("last_played_at")),
     }
 
 
+def library_stamp(movie_rows: list[dict], scene_rows: list[dict]) -> dict:
+    movies = [movie_item(row) for row in movie_rows]
+    scenes = [scene_item(row) for row in scene_rows]
+    return {
+        "catalog": _digest(_catalog_payload(movies, scenes)),
+        "played": _digest(_played_payload(movie_rows, scene_rows)),
+        "movies": len(movies),
+        "scenes": len(scenes),
+    }
+
+
 def query_movies(rows: list[dict], spec: dict) -> dict:
-    items = [movie_item(row) for row in rows]
+    items = _keep_shelf([movie_item(row) for row in rows], spec)
     matched = [item for item in items if _movie_matches(item, spec)]
     return _page(items, matched, spec, "code")
 
 
 def query_scenes(rows: list[dict], spec: dict) -> dict:
-    items = [scene_item(row) for row in rows]
+    items = _keep_shelf([scene_item(row) for row in rows], spec)
     matched = [item for item in items if _scene_matches(item, spec)]
     return _page(items, matched, spec, "video")
 
@@ -237,3 +265,57 @@ def _scene_text(item: dict, needle: str) -> bool:
         " ".join(item["performers"]),
     ]).casefold()
     return needle.casefold() in haystack
+
+
+def _keep_shelf(items: list[dict], spec: dict) -> list[dict]:
+    fmt = (spec.get("format") or "all").strip().lower() or "all"
+    if fmt not in ("flat", "vr"):
+        return items
+    return [item for item in items if item["shelf"] == fmt]
+
+
+def _catalog_payload(movies: list[dict], scenes: list[dict]) -> dict:
+    return {
+        "movies": [
+            _without_played(item)
+            for item in sorted(movies, key=lambda item: str(item.get("code") or ""))
+        ],
+        "scenes": [
+            _without_played(item)
+            for item in sorted(scenes, key=lambda item: str(item.get("video") or ""))
+        ],
+    }
+
+
+def _played_payload(movie_rows: list[dict], scene_rows: list[dict]) -> list[dict]:
+    marks = []
+    for kind, key_name, rows in (
+        ("jav", "code", movie_rows),
+        ("western", "tpdb_id", scene_rows),
+    ):
+        for row in rows:
+            played = _unix(row.get("last_played_at"))
+            if not played:
+                continue
+            marks.append({
+                "kind": kind,
+                "key": row.get(key_name) or "",
+                "last_played_at": played,
+            })
+    marks.sort(key=lambda mark: (mark["kind"], mark["key"]))
+    return marks
+
+
+def _without_played(item: dict) -> dict:
+    return {key: value for key, value in item.items() if key != "last_played_at"}
+
+
+def _digest(value) -> str:
+    blob = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()

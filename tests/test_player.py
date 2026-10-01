@@ -4,12 +4,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.catalog import movie_facets, query_movies, query_scenes
+from app.catalog import library_stamp, movie_facets, movie_item, query_movies, query_scenes, scene_item
 from app.config import Settings
 from app.db import Database
 from app.library import Library, scan_media, scan_western
 from app.models import PlayMark
-from app.routers.player import player_movies, player_played
+from app.routers.player import player_movies, player_played, player_scenes, player_stamp
 
 
 def test_scan_media_keeps_the_feature_and_skips_the_sample(tmp_path):
@@ -138,6 +138,7 @@ def test_player_query_filters_subtitle_and_actor():
     assert item["video"] == "202102/SSIS-001/SSIS-001-C.mp4"
     assert item["poster_url"].startswith("/api/library/poster?kind=jav&path=")
     assert item["runtime_min"] == 120
+    assert item["shelf"] == "flat"
     assert movie_facets(rows)["studios"] == [
         {"name": "IdeaPocket", "count": 1},
         {"name": "S1", "count": 1},
@@ -168,6 +169,7 @@ def test_player_query_filters_subtitle_and_actor():
     assert scenes["matched"] == 1
     assert scenes["items"][0]["release_name"] == "clip.1080p"
     assert scenes["items"][0]["folder"] == "Brazzers"
+    assert scenes["items"][0]["shelf"] == "flat"
     assert "full_path" not in scenes["items"][0]
 
 
@@ -198,6 +200,7 @@ def test_player_route_reads_the_scanned_library(tmp_path):
         assert body["items"][0]["studio"] == "S1"
         assert body["items"][0]["video"] == "202102/SSIS-001/SSIS-001.mp4"
         assert body["items"][0]["last_played_at"] == 0
+        assert body["items"][0]["shelf"] == "flat"
         played = await player_played(PlayMark(kind="jav", key="ssis-001"), request)
         assert played["key"] == "SSIS-001"
         assert played["last_played_at"] > 0
@@ -211,6 +214,167 @@ def test_player_route_reads_the_scanned_library(tmp_path):
         assert missing.value.status_code == 404
         with pytest.raises(HTTPException) as exc:
             await player_movies(request, sort="nope")
+        assert exc.value.status_code == 400
+
+    asyncio.run(run())
+
+
+def test_player_items_carry_shelf():
+    assert movie_item({"code": "SSIS-001", "path": "202102/DSVR-999"})["shelf"] == "flat"
+    assert movie_item({"code": "DSVR-1124"})["shelf"] == "vr"
+    assert scene_item({"path": "DSVR/clip.mp4", "shelf": "western"})["shelf"] == "flat"
+    assert scene_item({"path": "vr/Studio/x.mp4"})["shelf"] == "vr"
+    assert scene_item({"path": "Studio/x.mp4", "shelf": "western"})["shelf"] == "flat"
+
+
+def test_player_query_can_filter_by_shelf():
+    rows = [
+        {"code": "SSIS-001", "title": "平面", "path": "202102/SSIS-001"},
+        {"code": "DSVR-1124", "title": "headset", "path": "DSVR/DSVR-1124"},
+    ]
+    spec = {
+        "q": "",
+        "actor": "",
+        "genre": "",
+        "studio": "",
+        "year_month": "",
+        "subtitle": False,
+        "uncensored": False,
+        "cracked": False,
+        "sort_field": "code",
+        "descending": False,
+        "offset": 0,
+        "limit": 0,
+    }
+    whole = query_movies(rows, spec)
+    assert [item["code"] for item in whole["items"]] == ["DSVR-1124", "SSIS-001"]
+    vr = query_movies(rows, {**spec, "format": "vr"})
+    assert vr["total"] == 1
+    assert vr["items"][0]["code"] == "DSVR-1124"
+    assert vr["items"][0]["shelf"] == "vr"
+    flat = query_movies(rows, {**spec, "format": "flat"})
+    assert [item["code"] for item in flat["items"]] == ["SSIS-001"]
+    scenes = [
+        {"path": "Brazzers/clip.mp4", "shelf": "western", "title": "flat-scene"},
+        {"path": "vr/Studio/x.mp4", "shelf": "vr", "title": "headset"},
+    ]
+    scene_spec = {
+        "q": "",
+        "performer": "",
+        "site": "",
+        "year": 0,
+        "sort_field": "title",
+        "descending": False,
+        "offset": 0,
+        "limit": 0,
+    }
+    vr_scenes = query_scenes(scenes, {**scene_spec, "format": "vr"})
+    assert vr_scenes["total"] == 1
+    assert vr_scenes["items"][0]["video"] == "vr/Studio/x.mp4"
+    assert vr_scenes["items"][0]["shelf"] == "vr"
+    all_scenes = query_scenes(scenes, {**scene_spec, "format": "all"})
+    assert all_scenes["total"] == 2
+
+
+def test_player_stamp_tracks_catalog_not_playback():
+    empty = library_stamp([], [])
+    assert empty["movies"] == 0
+    assert empty["scenes"] == 0
+    assert empty == library_stamp([], [])
+    movie = {
+        "code": "SSIS-001",
+        "path": "202102/SSIS-001",
+        "title": "正片",
+        "video": "202102/SSIS-001/SSIS-001.mp4",
+        "video_size": 10,
+        "added_at": 20,
+    }
+    added = library_stamp([movie], [])
+    assert added["catalog"] != empty["catalog"]
+    assert added["played"] == empty["played"]
+    assert added["movies"] == 1
+    watched = library_stamp([{**movie, "last_played_at": 99}], [])
+    assert watched["catalog"] == added["catalog"]
+    assert watched["played"] != added["played"]
+    scraped = library_stamp([{**movie, "title": "新标题"}], [])
+    assert scraped["catalog"] != added["catalog"]
+    assert scraped["played"] == added["played"]
+
+
+def test_player_stamp_route_follows_library_changes(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "west"),
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
+        empty = await player_stamp(request)
+        movies = await player_movies(request)
+        scenes = await player_scenes(request)
+        assert empty["movies"] == 0
+        assert empty["scenes"] == 0
+        assert movies["catalog"] == empty["catalog"]
+        assert movies["played"] == empty["played"]
+        assert movies["movies"] == 0
+        assert scenes["catalog"] == empty["catalog"]
+        assert scenes["scenes"] == 0
+        await db.upsert_library({
+            "code": "SSIS-001",
+            "month": "202102",
+            "path": "202102/SSIS-001",
+            "title": "正片",
+            "video": "202102/SSIS-001/SSIS-001.mp4",
+            "video_size": 10,
+        })
+        await db.upsert_library({
+            "code": "DSVR-1124",
+            "month": "202401",
+            "path": "DSVR/DSVR-1124",
+            "title": "headset",
+            "video": "DSVR/DSVR-1124/DSVR-1124.mp4",
+            "video_size": 8,
+        })
+        await db.upsert_western({
+            "path": "vr/Studio/x.mp4",
+            "shelf": "vr",
+            "studio": "Studio",
+            "title": "headset",
+            "tpdb_id": "west-1",
+        })
+        added = await player_stamp(request)
+        listed = await player_movies(request)
+        vr_only = await player_movies(request, format="vr")
+        vr_scenes = await player_scenes(request, format="vr")
+        assert added["catalog"] != empty["catalog"]
+        assert added["played"] == empty["played"]
+        assert added["movies"] == 2
+        assert added["scenes"] == 1
+        assert listed["catalog"] == added["catalog"]
+        assert listed["played"] == added["played"]
+        assert listed["movies"] == 2
+        assert listed["scenes"] == 1
+        assert {item["code"]: item["shelf"] for item in listed["items"]} == {
+            "SSIS-001": "flat",
+            "DSVR-1124": "vr",
+        }
+        assert vr_only["total"] == 1
+        assert vr_only["items"][0]["code"] == "DSVR-1124"
+        assert vr_only["catalog"] == added["catalog"]
+        assert vr_scenes["items"][0]["shelf"] == "vr"
+        assert vr_scenes["items"][0]["video"] == "vr/Studio/x.mp4"
+        played = await player_played(PlayMark(kind="jav", key="ssis-001"), request)
+        after = await player_stamp(request)
+        assert after["catalog"] == added["catalog"]
+        assert after["played"] != added["played"]
+        assert int(played["last_played_at"]) > 0
+        with pytest.raises(HTTPException) as exc:
+            await player_movies(request, format="nope")
         assert exc.value.status_code == 400
 
     asyncio.run(run())

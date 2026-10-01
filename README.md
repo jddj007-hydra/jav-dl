@@ -88,6 +88,7 @@ FastAPI :8787
    ├── /api/downloads/events  队列状态推送。页面在后台时断开，断线后退回大约 30 秒拉一次
    ├── /api/subscriptions     追更：女优、系列、片商、欧美演员和片商。默认只提醒
    ├── /api/library           媒体库：番号按月份，番号VR按厂牌，欧美 / VR 按片商
+   ├── /api/player            播放器片库 movies / scenes / stamp（shelf；format=flat|vr|all，默认 all）
    ├── /api/img               封面代理 + 磁盘缓存
    ├── /api/settings          代理、站点、ThePornDB token（写入 data/config.json）
    └── /api/health            aria2 / 迅雷 / JavBus / 磁力猫 / token 是否已填
