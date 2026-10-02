@@ -52,6 +52,208 @@ let queueFilter = "all";
 let pendingItems = [];
 let pendingSignature = "";
 let pendingBusy = false;
+let javGenre = "";
+let libraryActor = "";
+let libraryStudio = "";
+let librarySeries = "";
+let libraryDensity = "";
+let navIndex = 0;
+let appliedHash = "";
+let javLoadedKey = "";
+let westernLoadedKey = "";
+const browseNames = new Map();
+const westernTagIds = new Map();
+
+const JAV_KINDS = ["censored", "uncensored"];
+const MEDIA_FORMATS = ["flat", "vr"];
+const WESTERN_KINDS = ["scene", "movie"];
+const WESTERN_FACETS = ["performer", "site", "tag"];
+const LIB_KINDS = ["jav", "jav_vr", "western", "vr", "suck"];
+const LIB_SORT_VALUES = ["group", "added", "release", "name"];
+
+function hashNow() {
+  return location.hash || "#/";
+}
+
+function parseHash(hash = hashNow()) {
+  const raw = String(hash || "").replace(/^#/, "");
+  const body = raw.startsWith("/") ? raw.slice(1) : raw;
+  const cut = body.indexOf("?");
+  const path = (cut === -1 ? body : body.slice(0, cut)).replace(/\/+$/, "");
+  const query = new URLSearchParams(cut === -1 ? "" : body.slice(cut + 1));
+  let name = path || "jav";
+  if (name === "search") name = "jav";
+  if (!["jav", "western", "library", "follow", "queue", "settings"].includes(name)) name = "jav";
+  return { name, query };
+}
+
+function qget(query, key) {
+  return (query.get(key) || "").trim();
+}
+
+function oneOf(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function pageNum(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, 50);
+}
+
+function buildHash(name, fields) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (!text) continue;
+    params.set(key, text);
+  }
+  const qs = params.toString();
+  return `#/${name}${qs ? `?${qs}` : ""}`;
+}
+
+function knownThemes() {
+  return [...document.querySelectorAll("#western-themes button")].map((btn) => btn.dataset.theme || "");
+}
+
+function canonicalFromParsed(parsed) {
+  if (parsed.name === "queue" || parsed.name === "follow" || parsed.name === "settings") {
+    return `#/${parsed.name}`;
+  }
+  if (parsed.name === "library") {
+    const density = qget(parsed.query, "density") === "compact" ? "compact" : "";
+    return buildHash("library", {
+      kind: oneOf(qget(parsed.query, "kind"), LIB_KINDS, "jav"),
+      sort: oneOf(qget(parsed.query, "sort"), LIB_SORT_VALUES, "group"),
+      q: qget(parsed.query, "q"),
+      actor: qget(parsed.query, "actor"),
+      studio: qget(parsed.query, "studio"),
+      series: qget(parsed.query, "series"),
+      density,
+    });
+  }
+  if (parsed.name === "western") {
+    const theme = qget(parsed.query, "theme");
+    const facet = oneOf(qget(parsed.query, "facet"), WESTERN_FACETS, "");
+    return buildHash("western", {
+      kind: oneOf(qget(parsed.query, "kind"), WESTERN_KINDS, "scene"),
+      format: oneOf(qget(parsed.query, "format"), MEDIA_FORMATS, "flat"),
+      page: String(pageNum(qget(parsed.query, "page"))),
+      theme: knownThemes().includes(theme) ? theme : "",
+      facet,
+      id: qget(parsed.query, "id"),
+    });
+  }
+  const browse = qget(parsed.query, "browse");
+  return buildHash("jav", {
+    kind: oneOf(qget(parsed.query, "kind"), JAV_KINDS, "censored"),
+    format: oneOf(qget(parsed.query, "format"), MEDIA_FORMATS, "flat"),
+    page: String(pageNum(qget(parsed.query, "page"))),
+    genre: qget(parsed.query, "genre"),
+    browse: /^https?:\/\//i.test(browse) ? browse : "",
+    code: qget(parsed.query, "code"),
+  });
+}
+
+function javListKey() {
+  return JSON.stringify({
+    kind: javKind,
+    format: javFormat,
+    page: javPage,
+    browse: (javBrowse && javBrowse.url) || "",
+    genre: javGenre,
+  });
+}
+
+function westernListKey() {
+  return JSON.stringify({
+    kind: westernKind,
+    format: westernFormat,
+    page: westernPage,
+    theme: westernTheme,
+    facet: (westernBrowse && westernBrowse.facet) || "",
+    id: (westernBrowse && westernBrowse.name) || "",
+  });
+}
+
+function writeHash(hash, mode) {
+  const canonical = canonicalFromParsed(parseHash(hash));
+  if (mode === "push" && hashNow() !== canonical) navIndex += 1;
+  const state = { javdl: navIndex };
+  if (mode === "push" && hashNow() !== canonical) history.pushState(state, "", canonical);
+  else history.replaceState(state, "", canonical);
+  appliedHash = canonical;
+  return canonical;
+}
+
+function pushHash(hash) {
+  const canonical = canonicalFromParsed(parseHash(hash));
+  if (hashNow() === canonical) {
+    applyHash(true);
+    return;
+  }
+  writeHash(canonical, "push");
+  applyHash(true);
+}
+
+function replaceHash(hash) {
+  const canonical = canonicalFromParsed(parseHash(hash));
+  if (hashNow() === canonical && appliedHash === canonical) return;
+  writeHash(canonical, "replace");
+  applyHash(true);
+}
+
+function parentHash() {
+  const parsed = parseHash();
+  if (parsed.name === "jav") {
+    if (qget(parsed.query, "code")) {
+      parsed.query.delete("code");
+      return canonicalFromParsed(parsed);
+    }
+    if (qget(parsed.query, "browse")) {
+      parsed.query.delete("browse");
+      return canonicalFromParsed(parsed);
+    }
+    return "#/jav?kind=censored&format=flat&page=1";
+  }
+  if (parsed.name === "western") {
+    if (qget(parsed.query, "id") && !qget(parsed.query, "facet")) {
+      parsed.query.delete("id");
+      return canonicalFromParsed(parsed);
+    }
+    if (qget(parsed.query, "facet")) {
+      parsed.query.delete("facet");
+      parsed.query.delete("id");
+      return canonicalFromParsed(parsed);
+    }
+    return "#/western?kind=scene&format=flat&page=1";
+  }
+  if (parsed.name === "library") return "#/library?kind=jav&sort=group";
+  return "#/jav?kind=censored&format=flat&page=1";
+}
+
+function appBack() {
+  if (navIndex > 0) {
+    history.back();
+    return;
+  }
+  const parent = parentHash();
+  if (parent === hashNow()) return;
+  replaceHash(parent);
+}
+
+function libraryHash() {
+  return buildHash("library", {
+    kind: libraryKind,
+    sort: librarySort,
+    q: libraryQuery,
+    actor: libraryActor,
+    studio: libraryStudio,
+    series: librarySeries,
+    density: libraryDensity,
+  });
+}
 
 const STATUS_LABEL = {
   queued: "排队",
@@ -90,35 +292,55 @@ async function loadPanelLinks() {
   }
 }
 
-function route() {
-  const hash = location.hash.replace("#/", "") || "search";
-  const name = hash.startsWith("queue")
-    ? "queue"
-    : hash.startsWith("settings")
-      ? "settings"
-      : hash.startsWith("follow")
-        ? "follow"
-        : hash.startsWith("library")
-          ? "library"
-          : hash.startsWith("western")
-            ? "western"
-            : "search";
-  Object.entries(views).forEach(([k, el]) => { el.hidden = k !== name; });
-  document.querySelectorAll("nav a").forEach((a) => {
-    a.classList.toggle("active", a.dataset.nav === name);
+function showNamedView(name) {
+  const viewName = name === "jav" ? "search" : name;
+  Object.entries(views).forEach(([key, el]) => { el.hidden = key !== viewName; });
+  document.querySelectorAll("nav a").forEach((link) => {
+    link.classList.toggle("active", link.dataset.nav === viewName);
   });
-  if (name === "queue") {
+  if (viewName === "queue") {
     refreshQueue();
     refreshPending();
     startQueueStream();
   } else {
     stopQueueStream();
   }
-  if (name === "follow") loadFollow();
-  if (name === "settings") loadSettings();
-  if (name === "library") loadLibrary();
-  if (name === "search") ensureJavLatest();
-  if (name === "western") ensureWesternLatest();
+  return viewName;
+}
+
+function applyHash(force) {
+  const canonical = canonicalFromParsed(parseHash());
+  if (hashNow() !== canonical) {
+    history.replaceState({ javdl: navIndex }, "", canonical);
+  }
+  if (!force && appliedHash === canonical) return;
+  appliedHash = canonical;
+  const parsed = parseHash(canonical);
+  const viewName = showNamedView(parsed.name);
+  window.scrollTo(0, 0);
+  if (viewName === "queue" || viewName === "follow" || viewName === "settings") {
+    if (viewName === "follow") loadFollow();
+    if (viewName === "settings") loadSettings();
+    return;
+  }
+  if (parsed.name === "library") {
+    applyLibrary(parsed.query);
+    return;
+  }
+  if (parsed.name === "western") {
+    applyWestern(parsed.query);
+    return;
+  }
+  applyJav(parsed.query);
+}
+
+function route() {
+  if (!history.state || typeof history.state.javdl !== "number") {
+    history.replaceState({ javdl: navIndex }, "", canonicalFromParsed(parseHash()));
+  } else {
+    navIndex = history.state.javdl;
+  }
+  applyHash(true);
 }
 
 async function api(path, opts = {}) {
@@ -502,6 +724,78 @@ function showWorksList() {
   );
 }
 
+function javPageHash(page, browse) {
+  return buildHash("jav", {
+    kind: javKind,
+    format: javFormat,
+    page: String(page),
+    genre: javGenre,
+    browse: browse || "",
+  });
+}
+
+function showJavListSurface() {
+  fromWorks = false;
+  clearDetail();
+  $("jav-feed").hidden = false;
+  $("works-wrap").hidden = false;
+  const browsing = javMode === "browse" && javBrowse;
+  $("works-heading").textContent = browsing ? (javBrowse.name || "目录") : "作品";
+  showBack(Boolean(browsing) || navIndex > 0);
+  $("code-input").value = browsing ? "" : lastWorksQuery;
+  renderWorks(lastWorks);
+  if (javMode === "search") $("jav-pager").innerHTML = "";
+  else javPager(javPage, browsing ? javBrowse.url : "");
+  const n = lastWorks.length;
+  if (browsing) {
+    setStatus($("search-status"), n ? `${javBrowse.name} 的作品` : "没有更多了", n ? "good" : "bad");
+    return;
+  }
+  const fmt = javFormat === "vr" ? "VR" : "平面";
+  const latest = javMode === "latest";
+  setStatus(
+    $("search-status"),
+    n ? (latest ? `${fmt} · 最新 ${n} 部` : `找到 ${n} 部作品，点一张看磁链`) : (latest ? "没有更多了" : "没有搜到作品"),
+    n ? "good" : "bad",
+  );
+}
+
+function javPager(page, browse) {
+  renderPager($("jav-pager"), page, null, (next) => pushHash(javPageHash(next, browse)));
+}
+
+function applyJav(query) {
+  javKind = oneOf(qget(query, "kind"), JAV_KINDS, "censored");
+  javFormat = oneOf(qget(query, "format"), MEDIA_FORMATS, "flat");
+  javPage = pageNum(qget(query, "page"));
+  javGenre = qget(query, "genre");
+  const browse = qget(query, "browse");
+  const code = qget(query, "code");
+  markSeg("jav-kind", javKind);
+  markSeg("jav-format", javFormat);
+  if (browse) {
+    javMode = "browse";
+    javBrowse = { url: browse, name: browseNames.get(browse) || "目录", page: javPage };
+  } else {
+    javBrowse = null;
+    if (!code) javMode = "latest";
+  }
+  if (code) {
+    $("code-input").value = code;
+    runCodeSearch(code, { fromList: true });
+    return;
+  }
+  if (javListKey() === javLoadedKey && lastWorks.length) {
+    showJavListSurface();
+    return;
+  }
+  if (browse) {
+    loadJavBrowse(browse, javBrowse.name, javPage);
+    return;
+  }
+  loadJavFeed(javPage);
+}
+
 function markSeg(id, kind) {
   document.querySelectorAll(`#${id} button`).forEach((btn) => {
     const value = btn.dataset.kind || btn.dataset.format || btn.dataset.lib || "";
@@ -633,7 +927,8 @@ async function loadJavBrowse(url, name, page) {
     const items = data.items || [];
     rememberWorks(name, items);
     renderWorks(items);
-    renderPager($("jav-pager"), page, null, (next) => loadJavBrowse(url, name, next));
+    javLoadedKey = javListKey();
+    javPager(page, url);
     if (!items.length) {
       const buttons = $("jav-pager").querySelectorAll("button");
       if (buttons[1]) buttons[1].disabled = true;
@@ -668,7 +963,8 @@ async function loadJavFeed(page) {
     const items = data.items || [];
     rememberWorks("", items);
     renderWorks(items);
-    renderPager($("jav-pager"), page, null, (next) => loadJavFeed(next));
+    javLoadedKey = javListKey();
+    javPager(page, "");
     if (!items.length) {
       $("jav-pager").querySelectorAll("button")[1].disabled = true;
     }
@@ -717,6 +1013,7 @@ async function runCodeSearch(code, { fromList = false } = {}) {
       clearDetail();
       $("jav-feed").hidden = false;
       javMode = "search";
+      javLoadedKey = "";
       $("jav-pager").innerHTML = "";
       renderWorks(lastWorks);
       const n = lastWorks.length;
@@ -758,6 +1055,16 @@ $("search-form").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button");
   btn.disabled = true;
   setStatus($("search-status"), "查询中…");
+  if (looksLikeCode(q)) {
+    pushHash(buildHash("jav", {
+      kind: javKind,
+      format: javFormat,
+      page: "1",
+      code: q,
+    }));
+    btn.disabled = false;
+    return;
+  }
   leaveJavBrowse();
   javMode = "search";
   $("jav-pager").innerHTML = "";
@@ -765,21 +1072,23 @@ $("search-form").addEventListener("submit", async (e) => {
   showBack(false);
   clearDetail();
   clearWorksView();
+  writeHash(javPageHash(1, ""), "replace");
   try {
-    if (looksLikeCode(q)) {
-      await runCodeSearch(q, { fromList: false });
-      return;
-    }
     const data = await api("/api/search?q=" + encodeURIComponent(q) + "&format=" + encodeURIComponent(javFormat));
     if (data.mode === "code") {
-      await runCodeSearch(data.code, { fromList: false });
+      pushHash(buildHash("jav", {
+        kind: javKind,
+        format: javFormat,
+        page: "1",
+        code: data.code,
+      }));
       return;
     }
     const items = data.items || [];
     rememberWorks(q, items);
     leaveJavBrowse();
     javMode = "search";
-    history.replaceState({ javdl: "works", q }, "", location.hash || "#/");
+    javLoadedKey = "";
     renderWorks(items);
     setStatus(
       $("search-status"),
@@ -797,72 +1106,48 @@ $("jav-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-kind]");
   if (!btn) return;
   javKind = btn.dataset.kind;
-  markSeg("jav-kind", javKind);
-  loadJavFeed(1);
+  javGenre = "";
+  javBrowse = null;
+  pushHash(javPageHash(1, ""));
 });
 
 $("jav-format").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-format]");
   if (!btn) return;
   javFormat = btn.dataset.format || "flat";
-  markSeg("jav-format", javFormat);
-  if (javMode === "browse" && javBrowse) {
-    loadJavBrowse(javBrowse.url, javBrowse.name, 1).catch((err) => {
-      setStatus($("search-status"), err.message, "bad");
-    });
-    return;
-  }
   if (javMode === "search") {
+    markSeg("jav-format", javFormat);
+    writeHash(javPageHash(1, ""), "replace");
     $("search-form").requestSubmit();
     return;
   }
-  loadJavFeed(1);
+  const browse = javMode === "browse" && javBrowse ? javBrowse.url : "";
+  pushHash(javPageHash(1, browse));
 });
 
-$("jav-latest").addEventListener("click", () => loadJavFeed(1));
+$("jav-latest").addEventListener("click", () => {
+  javGenre = "";
+  javBrowse = null;
+  pushHash(javPageHash(1, ""));
+});
 
 $("works-list").addEventListener("click", (e) => {
   const card = e.target.closest("[data-code]");
   if (!card) return;
   const code = card.dataset.code;
   $("code-input").value = code;
-  if (javMode === "browse") {
-    javTrail.push(javListFrame());
-    runCodeSearch(code, { fromList: true });
-    return;
-  }
-  history.pushState({ javdl: "code", code, q: lastWorksQuery }, "", location.hash || "#/");
-  runCodeSearch(code, { fromList: true });
+  const browse = javMode === "browse" && javBrowse ? javBrowse.url : "";
+  pushHash(buildHash("jav", {
+    kind: javKind,
+    format: javFormat,
+    page: String(javPage),
+    genre: javGenre,
+    browse,
+    code,
+  }));
 });
 
-$("back-to-works").addEventListener("click", () => {
-  if (javTrail.length) {
-    restoreJavFrame(javTrail.pop());
-    return;
-  }
-  if (fromWorks && lastWorks.length) {
-    showWorksList();
-    return;
-  }
-  if (history.state && history.state.javdl === "code") {
-    history.back();
-    return;
-  }
-  showWorksList();
-});
-
-window.addEventListener("popstate", (e) => {
-  const hash = location.hash.replace("#/", "") || "";
-  if (hash.startsWith("queue") || hash.startsWith("settings") || hash.startsWith("western") || hash.startsWith("library") || hash.startsWith("follow")) return;
-  if (e.state && e.state.javdl === "code") {
-    $("code-input").value = e.state.code || "";
-    runCodeSearch(e.state.code, { fromList: true });
-    return;
-  }
-  if (e.state && e.state.javdl === "works" && lastWorks.length) {
-    showWorksList();
-  }
-});
+$("back-to-works").addEventListener("click", () => appBack());
 
 let batchPreview = [];
 
@@ -1617,8 +1902,16 @@ $("meta-card").addEventListener("click", (e) => {
   }
   const browse = e.target.closest("[data-browse-url]");
   if (browse && browse.dataset.browseUrl) {
-    javTrail.push(javDetailFrame());
-    loadJavBrowse(browse.dataset.browseUrl, browse.dataset.browseName || "", 1);
+    const url = browse.dataset.browseUrl;
+    const name = browse.dataset.browseName || "目录";
+    browseNames.set(url, name);
+    pushHash(buildHash("jav", {
+      kind: javKind,
+      format: javFormat,
+      page: "1",
+      genre: javGenre,
+      browse: url,
+    }));
     return;
   }
   const img = e.target.closest("img[data-full]");
@@ -1874,11 +2167,8 @@ async function loadWesternBrowse(facet, name, page, tagId) {
     westernItems = data.items || [];
     westernLastPage = data.last_page || page;
     renderWesternWorks(westernItems);
-    renderPager($("western-pager"), data.page || page, westernLastPage, (next) => {
-      loadWesternBrowse(facet, name, next, ident).catch((err) => {
-        setStatus($("western-status"), err.message, "bad");
-      });
-    });
+    westernLoadedKey = westernListKey();
+    westernPager(data.page || page, westernLastPage, facet, name);
     const n = westernItems.length;
     setStatus(
       $("western-status"),
@@ -1893,14 +2183,111 @@ async function loadWesternBrowse(facet, name, page, tagId) {
 }
 
 function showWesternList() {
-  $("western-back").hidden = true;
+  showWesternListSurface();
+}
+
+function westernPageHash(page, facet, id) {
+  return buildHash("western", {
+    kind: westernKind,
+    format: westernFormat,
+    page: String(page),
+    theme: westernTheme,
+    facet: facet || "",
+    id: id || "",
+  });
+}
+
+function westernPager(page, lastPage, facet, id) {
+  renderPager($("western-pager"), page, lastPage, (next) => {
+    pushHash(westernPageHash(next, facet, id));
+  });
+}
+
+function showWesternListSurface() {
+  const browsing = westernMode === "browse" && westernBrowse;
+  $("western-back").hidden = !(browsing || navIndex > 0);
   $("western-meta").hidden = true;
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
-  $("western-themes").hidden = westernMode === "browse";
-  $("western-heading").textContent = westernMode === "browse" && westernBrowse ? westernBrowse.name : "作品";
+  $("western-themes").hidden = Boolean(browsing);
+  $("western-heading").textContent = browsing ? (westernBrowse.name || "目录") : "作品";
   renderWesternWorks(westernItems);
-  setStatus($("western-status"), westernCountStatus(westernItems.length, westernMode === "latest"), westernItems.length ? "good" : "bad");
+  if (browsing) {
+    westernPager(westernPage, westernLastPage, westernBrowse.facet, westernBrowse.name);
+    setStatus($("western-status"), `${westernBrowse.name} 的作品`, westernItems.length ? "good" : "bad");
+    return;
+  }
+  if (westernMode === "search") {
+    setStatus($("western-status"), westernCountStatus(westernItems.length, false), westernItems.length ? "good" : "bad");
+    return;
+  }
+  westernPager(westernPage, westernLastPage, "", "");
+  setStatus($("western-status"), westernCountStatus(westernItems.length, true), westernItems.length ? "good" : "bad");
+}
+
+function applyWestern(query) {
+  westernKind = oneOf(qget(query, "kind"), WESTERN_KINDS, "scene");
+  westernFormat = oneOf(qget(query, "format"), MEDIA_FORMATS, "flat");
+  westernPage = pageNum(qget(query, "page"));
+  const theme = qget(query, "theme");
+  westernTheme = knownThemes().includes(theme) ? theme : "";
+  const facet = oneOf(qget(query, "facet"), WESTERN_FACETS, "");
+  const id = qget(query, "id");
+  markSeg("western-kind", westernKind);
+  markSeg("western-format", westernFormat);
+  markThemes();
+  if (id && !facet) {
+    westernBrowse = null;
+    loadWesternDetail(id, westernKind);
+    return;
+  }
+  if (facet && id) {
+    westernMode = "browse";
+    westernBrowse = { facet, name: id, page: westernPage, tagId: westernTagIds.get(id) || "" };
+    if (westernListKey() === westernLoadedKey && westernItems.length) {
+      showWesternListSurface();
+      return;
+    }
+    loadWesternBrowse(facet, id, westernPage, westernBrowse.tagId);
+    return;
+  }
+  westernBrowse = null;
+  westernMode = "latest";
+  if (westernListKey() === westernLoadedKey && westernItems.length) {
+    showWesternListSurface();
+    return;
+  }
+  loadWesternFeed(westernPage);
+}
+
+async function loadWesternDetail(id, kind) {
+  westernBootstrapped = true;
+  const first = kind === "movie" ? "movie" : "scene";
+  const order = [first, first === "scene" ? "movie" : "scene"];
+  let error = "";
+  for (const itemKind of order) {
+    try {
+      const data = await api(`/api/western/${itemKind}/${encodeURIComponent(id)}`);
+      if (data.item) {
+        if (itemKind !== kind) {
+          westernKind = itemKind;
+          writeHash(westernPageHash(westernPage, "", id), "replace");
+        }
+        await openWestern(id, itemKind, { ...data.item, kind: itemKind });
+        return;
+      }
+      error = data.error || error;
+    } catch (err) {
+      error = err.message;
+    }
+  }
+  $("western-works-wrap").hidden = true;
+  $("western-feed").hidden = true;
+  $("western-themes").hidden = true;
+  $("western-back").hidden = false;
+  renderWesternMeta(null);
+  renderWesternResources([]);
+  setStatus($("western-status"), error || "ThePornDB 里找不到这部", "bad");
 }
 
 function westernParams(page, q) {
@@ -1937,7 +2324,8 @@ async function loadWesternFeed(page) {
     westernItems = data.items || [];
     westernLastPage = data.last_page || page;
     renderWesternWorks(westernItems);
-    renderPager($("western-pager"), data.page || page, westernLastPage, (next) => loadWesternFeed(next));
+    westernLoadedKey = westernListKey();
+    westernPager(data.page || page, westernLastPage, "", "");
     const n = westernItems.length;
     setStatus(
       $("western-status"),
@@ -2048,6 +2436,7 @@ async function loadWesternSearch(q, page) {
   if (view !== westernView) return;
   westernItems = data.items || [];
   westernLastPage = data.last_page || page;
+  westernLoadedKey = "";
   renderWesternWorks(westernItems);
   renderPager(
     $("western-pager"),
@@ -2068,63 +2457,63 @@ $("western-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-kind]");
   if (!btn) return;
   westernKind = btn.dataset.kind;
-  markSeg("western-kind", westernKind);
-  if (westernMode === "browse" && westernBrowse) {
-    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1, westernBrowse.tagId || "").catch((err) => {
-      setStatus($("western-status"), err.message, "bad");
-    });
-    return;
-  }
-  if (westernMode === "search") {
+  if (westernMode === "search" && $("western-input").value.trim()) {
+    markSeg("western-kind", westernKind);
+    writeHash(westernPageHash(1, "", ""), "replace");
     $("western-form").requestSubmit();
     return;
   }
-  loadWesternFeed(1);
+  const facet = westernMode === "browse" && westernBrowse ? westernBrowse.facet : "";
+  const id = westernMode === "browse" && westernBrowse ? westernBrowse.name : "";
+  pushHash(westernPageHash(1, facet, id));
 });
 
 $("western-format").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-format]");
   if (!btn) return;
   westernFormat = btn.dataset.format || "flat";
-  markSeg("western-format", westernFormat);
-  if (westernMode === "browse" && westernBrowse) {
-    loadWesternBrowse(westernBrowse.facet, westernBrowse.name, 1, westernBrowse.tagId || "").catch((err) => {
-      setStatus($("western-status"), err.message, "bad");
-    });
-    return;
-  }
-  if (westernMode === "search") {
+  if (westernMode === "search" && $("western-input").value.trim()) {
+    markSeg("western-format", westernFormat);
+    writeHash(westernPageHash(1, "", ""), "replace");
     $("western-form").requestSubmit();
     return;
   }
-  loadWesternFeed(1);
+  const facet = westernMode === "browse" && westernBrowse ? westernBrowse.facet : "";
+  const id = westernMode === "browse" && westernBrowse ? westernBrowse.name : "";
+  pushHash(westernPageHash(1, facet, id));
 });
 
 $("western-latest").addEventListener("click", () => {
   $("western-input").value = "";
-  loadWesternFeed(1);
+  westernBrowse = null;
+  westernTheme = "";
+  pushHash(westernPageHash(1, "", ""));
 });
 
 $("western-themes").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-theme]");
   if (!btn || !$("western-themes").contains(btn)) return;
   westernTheme = btn.dataset.theme || "";
-  markThemes();
   const q = $("western-input").value.trim();
   if (westernMode === "search" && q) {
+    markThemes();
+    writeHash(westernPageHash(1, "", ""), "replace");
     loadWesternSearch(q, 1).catch((err) => setStatus($("western-status"), err.message, "bad"));
     return;
   }
-  loadWesternFeed(1);
+  westernBrowse = null;
+  pushHash(westernPageHash(1, "", ""));
 });
 
 $("western-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("western-input").value.trim();
   if (!q) {
-    loadWesternFeed(1);
+    westernBrowse = null;
+    pushHash(westernPageHash(1, "", ""));
     return;
   }
+  writeHash(westernPageHash(1, "", ""), "replace");
   const btn = e.target.querySelector("button");
   btn.disabled = true;
   try {
@@ -2139,44 +2528,24 @@ $("western-form").addEventListener("submit", async (e) => {
 $("western-works").addEventListener("click", (e) => {
   const card = e.target.closest("[data-id]");
   if (!card) return;
-  if (westernMode === "browse") westernTrail.push(westernListFrame());
-  openWestern(card.dataset.id, card.dataset.kind || westernKind);
+  pushHash(buildHash("western", {
+    kind: card.dataset.kind || westernKind,
+    format: westernFormat,
+    page: String(westernPage),
+    theme: westernTheme,
+    id: card.dataset.id,
+  }));
 });
 
-$("western-back-btn").addEventListener("click", () => {
-  if (westernTrail.length) {
-    restoreWestern(westernTrail.pop());
-    return;
-  }
-  if (westernItems.length) showWesternList();
-  else loadWesternFeed(1);
-});
+$("western-back-btn").addEventListener("click", () => appBack());
 
-async function openWesternById(id) {
-  westernBootstrapped = true;
-  leaveWesternBrowse();
-  location.hash = "#/western";
-  $("western-works-wrap").hidden = true;
-  $("western-feed").hidden = true;
-  $("western-themes").hidden = true;
-  $("western-back").hidden = false;
-  renderWesternMeta(null);
-  renderWesternResources([]);
-  setStatus($("western-status"), "查询详情…");
-  let error = "";
-  for (const kind of ["scene", "movie"]) {
-    try {
-      const data = await api(`/api/western/${kind}/${encodeURIComponent(id)}`);
-      if (data.item) {
-        await openWestern(id, kind, { ...data.item, kind });
-        return;
-      }
-      error = data.error || error;
-    } catch (err) {
-      error = err.message;
-    }
-  }
-  setStatus($("western-status"), error || "ThePornDB 里找不到这部", "bad");
+function openWesternById(id) {
+  pushHash(buildHash("western", {
+    kind: westernKind || "scene",
+    format: westernFormat || "flat",
+    page: "1",
+    id,
+  }));
 }
 
 $("western-resources").addEventListener("click", async (e) => {
@@ -2229,10 +2598,17 @@ $("western-meta").addEventListener("click", (e) => {
   }
   const browse = e.target.closest("[data-browse-facet]");
   if (browse && browse.dataset.browseName) {
-    westernTrail.push(westernDetailFrame());
-    loadWesternBrowse(browse.dataset.browseFacet, browse.dataset.browseName, 1, browse.dataset.tagId || "").catch((err) => {
-      setStatus($("western-status"), err.message, "bad");
-    });
+    const facet = browse.dataset.browseFacet || "";
+    const name = browse.dataset.browseName || "";
+    if (browse.dataset.tagId) westernTagIds.set(name, browse.dataset.tagId);
+    pushHash(buildHash("western", {
+      kind: westernKind,
+      format: westernFormat,
+      page: "1",
+      theme: westernTheme,
+      facet,
+      id: name,
+    }));
     return;
   }
   const img = e.target.closest("img[data-full]");
@@ -2276,6 +2652,13 @@ function libraryMatches(item, words) {
   if (!words.length) return true;
   const hay = [item.code, item.title, item.group, ...(item.actors || [])].join(" ").toLowerCase();
   return words.every((word) => hay.includes(word));
+}
+
+function libraryFacetMatch(item) {
+  if (libraryActor && !(item.actors || []).includes(libraryActor)) return false;
+  if (libraryStudio && (item.studio || "") !== libraryStudio) return false;
+  if (librarySeries && (item.series || "") !== librarySeries) return false;
+  return true;
 }
 
 function sortLibrary(items) {
@@ -2410,8 +2793,9 @@ function renderLibrary() {
   const more = $("library-more");
   const all = libraryItems();
   const words = libraryQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const items = sortLibrary(all.filter((item) => libraryMatches(item, words)));
-  $("library-count").textContent = words.length ? `${items.length} / ${all.length} 部` : (all.length ? `共 ${all.length} 部` : "");
+  const narrowed = words.length || libraryActor || libraryStudio || librarySeries;
+  const items = sortLibrary(all.filter((item) => libraryMatches(item, words) && libraryFacetMatch(item)));
+  $("library-count").textContent = narrowed ? `${items.length} / ${all.length} 部` : (all.length ? `共 ${all.length} 部` : "");
   if (!items.length) {
     list.innerHTML = "";
     more.hidden = true;
@@ -2473,18 +2857,46 @@ async function loadLibrary() {
 }
 
 function openCodeDetail(code) {
-  javBootstrapped = true;
-  leaveJavBrowse();
-  javMode = "search";
-  $("jav-pager").innerHTML = "";
-  $("code-input").value = code;
-  fromWorks = false;
-  showBack(false);
-  clearDetail();
-  clearWorksView();
-  setStatus($("search-status"), "查询中…");
-  location.hash = "#/";
-  runCodeSearch(code).catch((err) => setStatus($("search-status"), err.message, "bad"));
+  const format = libraryKind === "jav_vr" && views.library && !views.library.hidden ? "vr" : "flat";
+  pushHash(buildHash("jav", {
+    kind: "censored",
+    format,
+    page: "1",
+    code,
+  }));
+}
+
+let libraryFilterKey = "";
+let libraryTyping = null;
+
+function applyLibrary(query) {
+  const nextKind = oneOf(qget(query, "kind"), LIB_KINDS, "jav");
+  const nextSort = oneOf(qget(query, "sort"), LIB_SORT_VALUES, "group");
+  const nextQuery = qget(query, "q");
+  const nextActor = qget(query, "actor");
+  const nextStudio = qget(query, "studio");
+  const nextSeries = qget(query, "series");
+  const nextDensity = qget(query, "density") === "compact" ? "compact" : "";
+  const filterKey = JSON.stringify([nextKind, nextSort, nextQuery, nextActor, nextStudio, nextSeries]);
+  if (filterKey !== libraryFilterKey) libraryLimit = LIB_PAGE;
+  libraryFilterKey = filterKey;
+  libraryKind = nextKind;
+  librarySort = nextSort;
+  libraryQuery = nextQuery;
+  libraryActor = nextActor;
+  libraryStudio = nextStudio;
+  librarySeries = nextSeries;
+  libraryDensity = nextDensity;
+  document.body.dataset.density = libraryDensity;
+  for (const child of $("library-kind").querySelectorAll("button")) {
+    child.classList.toggle("on", child.dataset.lib === libraryKind);
+  }
+  $("library-sort").hidden = libraryKind === "suck";
+  $("library-q").value = libraryQuery;
+  $("library-q").placeholder = libraryKind === "suck" ? "搜番号或标题" : "搜番号、标题或演员";
+  if (libraryKind !== "suck") fillLibrarySort();
+  if (libraryPayload) renderLibrary();
+  else loadLibrary();
 }
 
 $("library-kind").addEventListener("click", (e) => {
@@ -2492,30 +2904,23 @@ $("library-kind").addEventListener("click", (e) => {
   if (!btn) return;
   libraryKind = btn.dataset.lib;
   librarySort = "group";
-  libraryLimit = LIB_PAGE;
-  for (const child of $("library-kind").querySelectorAll("button")) {
-    child.classList.toggle("on", child === btn);
-  }
-  $("library-sort").hidden = libraryKind === "suck";
-  $("library-q").placeholder = libraryKind === "suck" ? "搜番号或标题" : "搜番号、标题或演员";
-  if (libraryKind !== "suck") fillLibrarySort();
-  if (libraryPayload) renderLibrary();
+  libraryActor = "";
+  libraryStudio = "";
+  librarySeries = "";
+  pushHash(libraryHash());
 });
 
-let libraryTyping = null;
 $("library-q").addEventListener("input", (e) => {
   clearTimeout(libraryTyping);
   libraryTyping = setTimeout(() => {
     libraryQuery = e.target.value;
-    libraryLimit = LIB_PAGE;
-    if (libraryPayload) renderLibrary();
+    replaceHash(libraryHash());
   }, 150);
 });
 
 $("library-sort").addEventListener("change", (e) => {
   librarySort = e.target.value;
-  libraryLimit = LIB_PAGE;
-  if (libraryPayload) renderLibrary();
+  pushHash(libraryHash());
 });
 
 $("library-more").querySelector("button").addEventListener("click", showMoreLibrary);
@@ -2642,7 +3047,25 @@ function syncHeaderHeight() {
 window.addEventListener("resize", syncHeaderHeight);
 syncHeaderHeight();
 
-window.addEventListener("hashchange", route);
+let applyQueued = false;
+function scheduleApply() {
+  if (applyQueued) return;
+  applyQueued = true;
+  queueMicrotask(() => {
+    applyQueued = false;
+    if (history.state && typeof history.state.javdl === "number") navIndex = history.state.javdl;
+    applyHash(true);
+  });
+}
+window.addEventListener("hashchange", () => {
+  if (!history.state || typeof history.state.javdl !== "number") navIndex = 0;
+  scheduleApply();
+});
+window.addEventListener("popstate", () => {
+  if (history.state && typeof history.state.javdl === "number") navIndex = history.state.javdl;
+  else navIndex = 0;
+  scheduleApply();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopQueueStream();
