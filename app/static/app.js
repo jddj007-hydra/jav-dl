@@ -1906,13 +1906,15 @@ function renderFollow(data) {
   $("follow-empty").hidden = hits.length > 0;
   $("follow-hits").innerHTML = hits.map((hit) => {
     const jav = !String(kindOf[hit.sub_id] || "").startsWith("western");
-    const code = jav
-      ? `<a class="code" href="#/" data-hit-code="${escapeHtml(hit.code)}">${escapeHtml(hit.code)}</a>`
-      : `<span class="code">${escapeHtml(hit.code)}</span>`;
+    const codeText = escapeHtml(hit.code);
+    const titleText = escapeHtml(hit.title || "");
+    const head = jav
+      ? `<a class="code" href="#/" data-hit-code="${codeText}">${codeText}</a> ${titleText}`
+      : `<a href="#/follow"><span class="code">${codeText}</span>${titleText ? ` ${titleText}` : ""}</a>`;
     return `
     <li class="${hit.seen ? "" : "unread"}">
       <div class="row">
-        <span class="title">${code} ${escapeHtml(hit.title || "")}</span>
+        <span class="title"${jav ? "" : ` data-hit-western="${codeText}"`}>${head}</span>
         <span class="state h-${escapeHtml(hit.status)}">${escapeHtml(HIT_STATUS[hit.status] || hit.status)}</span>
       </div>
       ${hit.detail ? `<p class="hint">${escapeHtml(hit.detail)}</p>` : ""}
@@ -1997,7 +1999,50 @@ $("follow-list").addEventListener("click", async (e) => {
   }
 });
 
+function westernHitMissing(error) {
+  const text = String(error || "");
+  return text === "没有这条作品" || /HTTP 404\b/.test(text);
+}
+
+async function openWesternHit(id) {
+  const code = String(id || "").trim();
+  if (!code) return;
+  setStatus($("follow-status"), "正在打开详情…");
+  const errors = [];
+  for (const kind of ["scene", "movie"]) {
+    try {
+      const data = await api(`/api/western/${kind}/${encodeURIComponent(code)}`);
+      if (data && data.item) {
+        setStatus($("follow-status"), "");
+        pushHash(buildHash("western", {
+          kind,
+          format: "flat",
+          page: "1",
+          id: code,
+          density: libraryDensity,
+        }));
+        return;
+      }
+      errors.push((data && data.error) || "");
+    } catch (err) {
+      errors.push(err.message || "");
+    }
+  }
+  const missed = errors.length > 0 && errors.every(westernHitMissing);
+  setStatus(
+    $("follow-status"),
+    missed ? "ThePornDB 里找不到这部" : (errors.filter(Boolean).pop() || "ThePornDB 里找不到这部"),
+    "bad",
+  );
+}
+
 $("follow-hits").addEventListener("click", async (e) => {
+  const western = e.target.closest("[data-hit-western]");
+  if (western) {
+    e.preventDefault();
+    await openWesternHit(western.dataset.hitWestern);
+    return;
+  }
   const link = e.target.closest("[data-hit-code]");
   if (link) {
     e.preventDefault();
