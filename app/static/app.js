@@ -1858,7 +1858,7 @@ const FOLLOW_KIND = {
 const HIT_STATUS = {
   new: "新作",
   queued: "已入队",
-  no_magnet: "没有符合规则的磁链",
+  no_magnet: "暂无符合规则的磁链",
 };
 
 function timeAgo(ts) {
@@ -1918,6 +1918,7 @@ function renderFollow(data) {
         <span class="state h-${escapeHtml(hit.status)}">${escapeHtml(HIT_STATUS[hit.status] || hit.status)}</span>
       </div>
       ${hit.detail ? `<p class="hint">${escapeHtml(hit.detail)}</p>` : ""}
+      ${hit.status === "no_magnet" ? `<p class="hint">14 天内还会再试</p>` : ""}
       ${hit.seen ? "" : `<button type="button" class="ghost small" data-hit-read="${hit.id}">知道了</button>`}
     </li>`;
   }).join("");

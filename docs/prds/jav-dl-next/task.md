@@ -21,4 +21,4 @@
 | M5-T1 | 关注卡显示已记下的部数 | P1 | M5 | done | | `app/db.py` `list_subscriptions` 增加 `known`；`app/static/app.js` `renderFollow` | 有 seen 行的订阅显示对应「已记下 N 部」。新建后的首次提示还在。检查后没有新作时数字不被清零 | D1。N 为 `subscription_seen` 行数 |
 | M5-T2 | 详情和女优墙一键关注 | P1 | M5 | done | | `app/static/app.js` 女优按钮和女优 browse 标题；`POST /api/subscriptions`；`app/routers/follow.py` 对已有 target 返回已有订阅 | 点一次后追更页出现该女优，规则是只提醒，名字与页面一致。再点显示已关注，条数不加。不打开自动下载。系列和片商详情没有这个按钮 | D2。`kind=actress`，名字和 target 用页面上已有的 |
 | M5-T3 | 追更里的欧美新作打开详情 | P1 | M5 | done | | `app/static/app.js` `renderFollow`；欧美详情请求 | 欧美未读新作能打开详情（标题、演员、磁链区）。JAV 番号仍进番号详情。「知道了」仍标记已读。scene 和 movie 都找不到时有说明，列表还在 | D3。`western_*` 订阅先按 scene 打开，404 再试 movie。M4 已完成时走同一 hash |
-| M5-T4 | 没磁链的状态写明还会再试 | P1 | M5 | doing | | `app/static/app.js` `HIT_STATUS.no_magnet` 和 hit 行说明 | 该行能读到「暂无符合规则的磁链」以及 14 天内会再试。入队后文案变为「已入队」。后端 `_retry_codes` 行为不变 | D4。14 天与 `app/follow.py` 的 `FOLLOW_RETRY_FOR` 保持一致 |
+| M5-T4 | 没磁链的状态写明还会再试 | P1 | M5 | done | | `app/static/app.js` `HIT_STATUS.no_magnet` 和 hit 行说明 | 该行能读到「暂无符合规则的磁链」以及 14 天内会再试。入队后文案变为「已入队」。后端 `_retry_codes` 行为不变 | D4。14 天与 `app/follow.py` 的 `FOLLOW_RETRY_FOR` 保持一致 |
