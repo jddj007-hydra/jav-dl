@@ -558,3 +558,84 @@ def test_maybe_scrape_skipped_when_disabled(tmp_path):
         assert out["scrape_status"] == "skipped"
 
     asyncio.run(run())
+
+
+def _solid_jpeg(width: int, height: int, left_color: tuple[int, int, int], right_color: tuple[int, int, int], split: int) -> bytes:
+    import io
+
+    from PIL import Image
+
+    image = Image.new("RGB", (width, height), left_color)
+    if 0 < split < width:
+        image.paste(right_color, (split, 0, width, height))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=95)
+    return buf.getvalue()
+
+
+def test_write_images_keeps_fanart_and_crops_poster_from_the_right(tmp_path):
+    import io
+
+    from PIL import Image
+
+    from app.scrape import write_images
+
+    width, height = 900, 600
+    crop_w = (height * 2) // 3
+    raw = _solid_jpeg(width, height, (220, 20, 20), (20, 20, 220), width - crop_w)
+    dest = tmp_path / "SSIS-001"
+    dest.mkdir()
+
+    has_poster, has_fanart = write_images(dest, raw)
+
+    assert has_poster and has_fanart
+    assert (dest / "fanart.jpg").read_bytes() == raw
+    poster_bytes = (dest / "poster.jpg").read_bytes()
+    assert poster_bytes != raw
+    with Image.open(io.BytesIO(poster_bytes)) as poster:
+        assert poster.size == (crop_w, height)
+        assert abs(poster.size[0] / poster.size[1] - 2 / 3) < 0.01
+        pixel = poster.getpixel((crop_w - 8, height // 2))
+    assert pixel[2] > 180 and pixel[0] < 80
+
+
+def test_write_images_copies_original_when_not_wider_than_poster(tmp_path):
+    from app.scrape import write_images
+
+    portrait = _solid_jpeg(200, 600, (10, 180, 40), (10, 180, 40), 200)
+    exact = _solid_jpeg(400, 600, (30, 30, 30), (30, 30, 30), 400)
+    for name, raw in (("portrait", portrait), ("exact", exact)):
+        dest = tmp_path / name
+        dest.mkdir()
+        write_images(dest, raw)
+        assert (dest / "fanart.jpg").read_bytes() == raw
+        assert (dest / "poster.jpg").read_bytes() == raw
+
+
+def test_write_images_copies_original_when_decode_fails(tmp_path):
+    from app.scrape import write_images
+
+    raw = b"not-a-jpeg"
+    dest = tmp_path / "bad"
+    dest.mkdir()
+
+    has_poster, has_fanart = write_images(dest, raw)
+
+    assert has_poster and has_fanart
+    assert (dest / "fanart.jpg").read_bytes() == raw
+    assert (dest / "poster.jpg").read_bytes() == raw
+
+
+def test_write_images_does_not_replace_existing_files(tmp_path):
+    from app.scrape import write_images
+
+    dest = tmp_path / "kept"
+    dest.mkdir()
+    (dest / "poster.jpg").write_bytes(b"old-poster")
+    (dest / "fanart.jpg").write_bytes(b"old-fanart")
+    raw = _solid_jpeg(900, 600, (220, 20, 20), (20, 20, 220), 500)
+
+    write_images(dest, raw)
+
+    assert (dest / "poster.jpg").read_bytes() == b"old-poster"
+    assert (dest / "fanart.jpg").read_bytes() == b"old-fanart"

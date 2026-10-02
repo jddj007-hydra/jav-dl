@@ -7,3 +7,4 @@ aiosqlite>=0.20
 pydantic-settings>=2.0
 python-multipart>=0.0.9
 pytest>=8.0
+pillow>=10.4

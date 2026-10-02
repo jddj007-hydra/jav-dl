@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import logging
 import re
 import shutil
@@ -412,18 +413,50 @@ async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = 
     return r.content
 
 
+def crop_jav_poster(image_bytes: bytes) -> bytes | None:
+    """Return a right-edge 2:3 JPEG, or None so the caller keeps the original bytes.
+
+    Uncensored covers can branch here later. This phase always crops from the right.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        log.warning("未安装 Pillow，海报使用原图")
+        return None
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.load()
+            width, height = image.size
+            if width <= 0 or height <= 0 or width * 3 <= height * 2:
+                return None
+            crop_w = (height * 2) // 3
+            if crop_w < 1 or crop_w >= width:
+                return None
+            cropped = image.crop((width - crop_w, 0, width, height))
+            if cropped.mode != "RGB":
+                cropped = cropped.convert("RGB")
+            out = io.BytesIO()
+            cropped.save(out, format="JPEG", quality=95)
+            data = out.getvalue()
+    except Exception:
+        log.warning("海报右裁失败，改用原图", exc_info=True)
+        return None
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    return data
+
+
 def write_images(dest_dir: Path, poster_bytes: bytes | None) -> tuple[bool, bool]:
-    if not poster_bytes:
-        poster = dest_dir / "poster.jpg"
-        fanart = dest_dir / "fanart.jpg"
-        return poster.is_file() and poster.stat().st_size > 0, fanart.is_file() and fanart.stat().st_size > 0
     poster = dest_dir / "poster.jpg"
     fanart = dest_dir / "fanart.jpg"
-    if not poster.exists() or poster.stat().st_size == 0:
-        poster.write_bytes(poster_bytes)
-    if not fanart.exists() or fanart.stat().st_size == 0:
-        fanart.write_bytes(poster_bytes)
-    return True, True
+    if poster_bytes:
+        if not fanart.exists() or fanart.stat().st_size == 0:
+            fanart.write_bytes(poster_bytes)
+        if not poster.exists() or poster.stat().st_size == 0:
+            poster.write_bytes(crop_jav_poster(poster_bytes) or poster_bytes)
+    has_poster = poster.is_file() and poster.stat().st_size > 0
+    has_fanart = fanart.is_file() and fanart.stat().st_size > 0
+    return has_poster, has_fanart
 
 
 def archive_videos(
