@@ -35,6 +35,13 @@ class ClearDownloads(BaseModel):
     status: str
 
 
+class WesternConfirm(BaseModel):
+    path: str = ""
+    job_id: str = ""
+    tpdb_id: str = ""
+    kind: str = "scene"
+
+
 class BatchText(BaseModel):
     text: str = ""
 

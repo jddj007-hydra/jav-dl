@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.library import attach_western, library_info
+from app.models import WesternConfirm
+from app.scrape import ScrapeError
 from app.sources.tpdb import (
     TpdbError,
     fetch_detail,
@@ -216,6 +218,22 @@ async def western_search(
     return await _cached_list(
         request, _kind(kind), page, query, _theme(theme), _fmt(format), exclude_orientation=True,
     )
+
+
+@router.post("/api/western/pending/confirm")
+async def confirm_pending(request: Request, body: WesternConfirm):
+    try:
+        item = await request.app.state.jobs.confirm_western_pending(
+            path=(body.path or "").strip(),
+            job_id=(body.job_id or "").strip(),
+            tpdb_id=(body.tpdb_id or "").strip(),
+            kind=(body.kind or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ScrapeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"item": item}
 
 
 @router.get("/api/western/{kind}/{item_id}")

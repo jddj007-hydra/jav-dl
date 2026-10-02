@@ -762,6 +762,35 @@ class Database:
     async def has_western_pending(self, path: str) -> bool:
         return await self.western_pending(path) is not None
 
+    async def western_pending_for_job(self, job_id: str) -> list[dict]:
+        if not job_id:
+            return []
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM western_pending WHERE job_id = ? ORDER BY updated_at DESC",
+                (job_id,),
+            )
+            rows = await cur.fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                parsed = json.loads(item.get("candidates") or "[]")
+            except json.JSONDecodeError:
+                parsed = []
+            item["candidates"] = parsed if isinstance(parsed, list) else []
+            out.append(item)
+        return out
+
+    async def delete_western_pending(self, path: str = "", job_id: str = "") -> None:
+        async with aiosqlite.connect(self.path) as db:
+            if path:
+                await db.execute("DELETE FROM western_pending WHERE path = ?", (path,))
+            if job_id:
+                await db.execute("DELETE FROM western_pending WHERE job_id = ?", (job_id,))
+            await db.commit()
+
     async def western_has_id(self, tpdb_id: str) -> bool:
         if not tpdb_id:
             return False

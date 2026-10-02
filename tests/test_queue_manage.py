@@ -1,5 +1,6 @@
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -259,6 +260,91 @@ def test_queue_western_without_id_stops_asking_tpdb(tmp_path, monkeypatch):
         again = await mgr.maybe_scrape(await db.get_job("job1"))
         assert again["scrape_error"] == "待确认"
         assert len(calls) == first
+
+    asyncio.run(run())
+
+
+def test_confirm_pending_writes_only_the_chosen_candidate(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.library import Library
+    from app.models import WesternConfirm
+    from app.routers.western import confirm_pending
+
+    async def fake_meta(settings, info):
+        return {
+            "title": info.get("title") or "Ann",
+            "release_date": info.get("date") or "2024-01-02",
+            "studio": info.get("site") or "Brazzers",
+            "actors": info.get("performers") or [],
+            "cover": "https://cdn.theporndb.net/p.jpg",
+            "uniqueid": info.get("tpdb_id") or "",
+            "uniqueid_type": "tpdb",
+            "genres": [],
+            "plot": "",
+            "runtime": "20",
+            "url": "",
+            "code": "",
+        }
+
+    async def fake_cover(settings, url, referer=None):
+        return b"poster-bytes"
+
+    monkeypatch.setattr("app.western_archive.western_metadata", fake_meta)
+    monkeypatch.setattr("app.western_archive.fetch_cover_bytes", fake_cover)
+    settings = _settings(tmp_path)
+    video = settings.download_dir / "Brazzers.24.01.02.Ann.Example.mp4"
+    video.write_bytes(b"x" * 80)
+    candidates = [
+        {
+            "id": "keep",
+            "kind": "scene",
+            "title": "Ann Example",
+            "site": "Brazzers",
+            "date": "2024-01-02",
+            "performers": ["Ann"],
+        },
+        {
+            "id": "drop",
+            "kind": "scene",
+            "title": "Other",
+            "site": "Other",
+            "date": "2024-01-02",
+            "performers": ["Bea"],
+        },
+    ]
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.save_western_pending(str(video), video.name, "", candidates)
+        mgr = JobManager(settings, db, object(), library=Library(settings, db))
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(jobs=mgr)))
+        with pytest.raises(ValueError, match="没有这条候选"):
+            await mgr.confirm_western_pending(path=str(video), tpdb_id="drop", kind="movie")
+        body = await confirm_pending(
+            request,
+            WesternConfirm(path=str(video), tpdb_id="keep", kind="scene"),
+        )
+        assert not video.exists()
+        assert await db.western_pending(str(video)) is None
+        folder = next(settings.western_root.iterdir())
+        nfo = next(folder.glob("*.nfo")).read_text(encoding="utf-8")
+        poster = next(folder.glob("*-poster.jpg"))
+        assert "keep" in nfo
+        assert "drop" not in nfo
+        assert poster.read_bytes() == b"poster-bytes"
+        assert poster.name.endswith("-poster.jpg")
+        assert "keep" in await db.western_by_ids(["keep"])
+        assert body["item"]["entries"]
+        await db.save_western_pending(str(video), video.name, "", candidates)
+        with pytest.raises(HTTPException) as caught:
+            await confirm_pending(
+                request,
+                WesternConfirm(path=str(video), tpdb_id="keep", kind="scene"),
+            )
+        assert caught.value.status_code == 400
+        assert "不在下载目录" in str(caught.value.detail)
 
     asyncio.run(run())
 

@@ -1004,6 +1004,70 @@ class JobManager:
             self._aria2_settled.clear()
         return deleted
 
+    async def confirm_western_pending(
+        self,
+        *,
+        path: str = "",
+        job_id: str = "",
+        tpdb_id: str = "",
+        kind: str = "",
+    ) -> dict:
+        """Archive one chosen candidate. Other candidates are not written."""
+        rows: list[dict] = []
+        if path:
+            one = await self.db.western_pending(path)
+            if one:
+                rows.append(one)
+        if job_id:
+            for extra in await self.db.western_pending_for_job(job_id):
+                if extra["path"] not in {item["path"] for item in rows}:
+                    rows.append(extra)
+        if not rows:
+            raise ValueError("没有这条待确认")
+        row = next((item for item in rows if Path(item["path"]).exists()), rows[0])
+        src = Path(row["path"])
+        if not src.exists():
+            raise ValueError("文件已经不在下载目录")
+        item_id = (tpdb_id or "").strip()
+        item_kind = (kind or "").strip().lower()
+        if item_kind not in ("scene", "movie"):
+            raise ValueError("类型无效")
+        match = next(
+            (
+                candidate for candidate in row["candidates"]
+                if str(candidate.get("id") or "") == item_id
+                and str(candidate.get("kind") or "") == item_kind
+            ),
+            None,
+        )
+        if not match:
+            raise ValueError("没有这条候选")
+        info = {
+            "kind": "western",
+            "tpdb_id": item_id,
+            "tpdb_kind": item_kind,
+            "site": match.get("site") or "",
+            "title": match.get("title") or src.stem,
+            "date": match.get("date") or "",
+            "performers": list(match.get("performers") or []),
+        }
+        stored = None
+        if row.get("job_id"):
+            stored = await self.db.get_job(row["job_id"])
+        job = stored or {
+            "id": row.get("job_id") or "",
+            "dest": row["path"],
+            "title": info["title"],
+            "code": "",
+        }
+        result = await scrape_western_job(self.settings, job, info)
+        await self.db.delete_western_pending(row["path"], str(row.get("job_id") or ""))
+        if self.library and isinstance(result, dict):
+            await self.library.remember_western(result)
+        if stored:
+            await self._mark_archived(stored, str(result.get("path") or ""))
+        return result
+
     async def rescrape(self, job_id: str) -> dict:
         job = await self._require(job_id)
         if job.get("status") != "complete":
