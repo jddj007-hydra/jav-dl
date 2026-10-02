@@ -206,6 +206,7 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         await db.upsert_library({
             "code": "SSIS-001", "month": "202102", "path": "202102/SSIS-001", "has_video": 1,
             "title": "Title", "actors": [{"name": "葵つかさ"}], "release_date": "2021-02-18",
+            "studio": "S1", "series": "S1 Girls",
         })
         await db.upsert_library({
             "code": "IPX-001", "month": "202101", "path": "202101/IPX-001", "has_video": 1,
@@ -234,10 +235,14 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         assert first["full_path"].endswith("202102/SSIS-001")
         assert first["title"] == "Title"
         assert first["actors"] == ["葵つかさ"]
+        assert first["studio"] == "S1"
+        assert first["series"] == "S1 Girls"
         assert first["release_date"] == "2021-02-18"
         assert first["added_at"] > 0
         assert body["western"][0]["studio"] == "Brazzers"
         assert body["western"][0]["items"][0]["full_path"].endswith("Brazzers/a.mp4")
+        assert body["western"][0]["items"][0]["studio"] == "Brazzers"
+        assert "series" not in body["western"][0]["items"][0]
         assert (await db.western_by_ids(["abc"]))["abc"]["title"] == "Scene"
 
     asyncio.run(run())

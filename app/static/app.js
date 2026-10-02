@@ -2794,8 +2794,14 @@ function libraryItems() {
       : (libraryKind === "vr" ? (data.vr || []) : (data.western || []));
   return groups.flatMap((group) => (group.items || []).map((item) => ({
     ...item,
+    studio: item.studio || (javLike ? "" : (group.studio || "")),
+    series: javLike ? (item.series || "") : "",
     group: javLike ? monthLabel(group.month) : (group.studio || "未知片商"),
   })));
+}
+
+function librarySeriesOn() {
+  return libraryKind === "jav" || libraryKind === "jav_vr";
 }
 
 function libraryMatches(item, words) {
@@ -2807,7 +2813,7 @@ function libraryMatches(item, words) {
 function libraryFacetMatch(item) {
   if (libraryActor && !(item.actors || []).includes(libraryActor)) return false;
   if (libraryStudio && (item.studio || "") !== libraryStudio) return false;
-  if (librarySeries && (item.series || "") !== librarySeries) return false;
+  if (librarySeriesOn() && librarySeries && (item.series || "") !== librarySeries) return false;
   return true;
 }
 
@@ -2833,12 +2839,21 @@ function libraryCard(item) {
     item.has_poster ? "" : '<span class="flag">缺封面</span>',
     item.has_nfo ? "" : '<span class="flag">缺 NFO</span>',
   ].join("");
-  const actors = (item.actors || []).join("、");
   const date = item.release_date || "";
+  const site = !jav && item.studio
+    ? `<button type="button" class="work-site" data-lib-studio="${escapeHtml(item.studio)}">${escapeHtml(item.group)}</button>`
+    : `<span class="work-site">${escapeHtml(item.group)}</span>`;
   const head = jav
     ? `<span class="code">${escapeHtml(item.code)}</span><span class="work-date">${escapeHtml(date)}</span>`
-    : `<span class="work-site">${escapeHtml(item.group)}</span><span class="work-date">${escapeHtml(date)}</span>`;
+    : `${site}<span class="work-date">${escapeHtml(date)}</span>`;
   const title = jav ? (item.title || "") : name;
+  const facets = [
+    ...(item.actors || []).map((name) => (
+      `<button type="button" class="text-link" data-lib-actor="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+    )),
+    jav && item.studio ? `<button type="button" class="text-link" data-lib-studio="${escapeHtml(item.studio)}">${escapeHtml(item.studio)}</button>` : "",
+    librarySeriesOn() && item.series ? `<button type="button" class="text-link" data-lib-series="${escapeHtml(item.series)}">${escapeHtml(item.series)}</button>` : "",
+  ].filter(Boolean).join("");
   return `
     <article class="lib-card${jav ? "" : " wide"}" tabindex="0"
       ${jav ? `data-code="${escapeHtml(item.code)}"` : ""}
@@ -2852,7 +2867,7 @@ function libraryCard(item) {
       <div class="lib-info">
         <div class="lib-line">${head}</div>
         ${title ? `<div class="work-title">${escapeHtml(title)}</div>` : ""}
-        ${actors ? `<div class="work-people">${escapeHtml(actors)}</div>` : ""}
+        ${facets ? `<div class="lib-facets">${facets}</div>` : ""}
         ${libraryCardActions(item)}
       </div>
     </article>`;
@@ -2888,7 +2903,31 @@ async function commitDropVersion(el) {
   }
 }
 
+function renderLibraryFacets() {
+  const bar = $("library-facets");
+  if (!bar) return;
+  if (libraryKind === "suck") {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  const chips = [];
+  if (libraryActor) chips.push(["actor", "演员", libraryActor]);
+  if (libraryStudio) chips.push(["studio", "片商", libraryStudio]);
+  if (librarySeriesOn() && librarySeries) chips.push(["series", "系列", librarySeries]);
+  if (!chips.length) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  bar.hidden = false;
+  bar.innerHTML = chips.map(([kind, label, value]) => (
+    `<button type="button" data-facet-clear="${kind}">${label} ${escapeHtml(value)}</button>`
+  )).join("") + `<button type="button" data-facet-clear="all">清除</button>`;
+}
+
 function renderSuck() {
+  renderLibraryFacets();
   const data = libraryPayload || {};
   $("library-root").textContent = "标过 suck 的片子不会再下载";
   const list = $("library-list");
@@ -2929,6 +2968,7 @@ function renderLibrary() {
     renderSuck();
     return;
   }
+  renderLibraryFacets();
   const data = libraryPayload || { jav: [], jav_vr: [], western: [], vr: [], jav_root: "", jav_vr_root: "", western_root: "", vr_root: "" };
   const jav = libraryKind === "jav" || libraryKind === "jav_vr";
   $("library-root").textContent = libraryKind === "jav"
@@ -3049,6 +3089,16 @@ function applyLibrary(query) {
   else loadLibrary();
 }
 
+$("library-facets").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-facet-clear]");
+  if (!btn) return;
+  const which = btn.dataset.facetClear;
+  if (which === "actor" || which === "all") libraryActor = "";
+  if (which === "studio" || which === "all") libraryStudio = "";
+  if (which === "series" || which === "all") librarySeries = "";
+  pushHash(libraryHash());
+});
+
 $("library-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-lib]");
   if (!btn) return;
@@ -3156,6 +3206,14 @@ async function commitSuck(el) {
 }
 
 $("library-list").addEventListener("click", async (e) => {
+  const facet = e.target.closest("[data-lib-actor], [data-lib-studio], [data-lib-series]");
+  if (facet) {
+    if (facet.dataset.libActor) libraryActor = facet.dataset.libActor;
+    if (facet.dataset.libStudio) libraryStudio = facet.dataset.libStudio;
+    if (facet.dataset.libSeries) librarySeries = facet.dataset.libSeries;
+    pushHash(libraryHash());
+    return;
+  }
   const drop = e.target.closest("[data-drop-version]");
   if (drop) {
     commitDropVersion(drop);

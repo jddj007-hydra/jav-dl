@@ -39,6 +39,8 @@ async def library_page(request: Request):
             "has_poster": bool(row.get("has_poster")),
             "title": row.get("title") or "",
             "actors": _actors(row.get("actors")),
+            "studio": row.get("studio") or "",
+            "series": row.get("series") or "",
             "release_date": row.get("release_date") or "",
             "added_at": row.get("added_at") or 0,
         }
@@ -75,6 +77,7 @@ async def library_page(request: Request):
             "has_nfo": bool(row.get("has_nfo")),
             "has_poster": bool(row.get("has_poster")),
             "actors": _actors(row.get("actors")),
+            "studio": row.get("studio") or "",
             "release_date": row.get("release_date") or "",
             "added_at": row.get("added_at") or 0,
         }

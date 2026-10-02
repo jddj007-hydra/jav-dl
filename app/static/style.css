@@ -539,6 +539,16 @@ button.actor-card:hover span { color: var(--accent-2); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+button.work-site {
+  background: none;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  font-weight: 600;
+}
+button.work-site:hover { filter: none; text-decoration: underline; text-underline-offset: 3px; }
+.lib-facets { display: flex; flex-wrap: wrap; gap: 2px 8px; }
+.lib-facets button { font-size: 12px; }
 .work-title {
   font-size: 13px;
   line-height: 1.4;
