@@ -19,8 +19,9 @@ from app.sources.tpdb import is_excluded_orientation
 
 router = APIRouter()
 
-# One actress wall page. JavBus lists about 30 credits per page, newest first.
-_ACTRESS_PAGE = 30
+# One actress wall page. JavBus lists about 30 credits per page, newest first;
+# 42 tiles the desktop grid (7×6 or 6×7) after omnibus discs are dropped.
+_ACTRESS_PAGE = 42
 # Stop scanning so a star with hundreds of omnibus discs cannot walk the whole catalog.
 _ACTRESS_SCAN_CAP = 20
 

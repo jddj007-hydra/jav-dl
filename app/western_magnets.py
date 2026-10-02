@@ -20,6 +20,11 @@ _STOP = {
     "the", "and", "with", "for", "vol", "volume", "part", "episode",
     "scene", "from", "into", "your", "her", "his", "you", "that", "this",
 }
+_RELEASE_JUNK = {
+    "xxx", "mp4", "mkv", "avi", "wmv", "mov", "webm", "hevc", "x264", "x265",
+    "h264", "h265", "webrip", "webdl", "bluray", "hdr", "p2p", "slr",
+    "sbs", "3dh", "oculus", "gearvr", "lr",
+}
 
 
 def words(text: str) -> list[str]:
@@ -113,6 +118,12 @@ def _date_gap(scene_date: str, release_date: str | None) -> int | None:
     except ValueError:
         return None
     return abs((left - right).days)
+
+
+# Same-day P2P names win first. A dated torrent more than two weeks off is a
+# different scene unless the title still overlaps.
+_RELATED_DATE_SLACK = 14
+_NO_RELEASE_DATE = 10_000
 
 
 # Title matching still uses words(). Studio prefixes come from app.studios.
@@ -227,6 +238,72 @@ def western_search_terms(
     return terms
 
 
+def _magnet_remainder(
+    magnet_title: str,
+    distinctive: list[str],
+    site: str,
+    site_tokens: list[str],
+    performers: list[str] | None,
+) -> str:
+    """Letters left after subtracting studio, cast, and the catalog title."""
+    blob = compact_site(magnet_title)
+    blob = re.sub(
+        r"(?:19|20)\d{2}|(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])|"
+        r"\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])",
+        "",
+        blob,
+    )
+    pieces = [compact_site(site)]
+    pieces.extend(token.lower() for token in site_tokens)
+    pieces.extend(token.lower() for token in distinctive)
+    for index, left in enumerate(distinctive[:-1]):
+        pieces.append(left + distinctive[index + 1])
+    for name in performers or []:
+        bits = _name_bits(name)
+        pieces.extend(bits)
+        if bits:
+            pieces.append("".join(bits))
+    pieces.extend(_RELEASE_JUNK)
+    for piece in sorted({part for part in pieces if len(part) >= 2}, key=len, reverse=True):
+        blob = blob.replace(piece, "")
+    return re.sub(r"\d+", "", blob)
+
+
+def _foreign_title(remainder: str) -> bool:
+    return re.search(r"[a-z]{5,}", remainder or "") is not None
+
+
+def _fallback_studio(forms: list[str]) -> str | None:
+    """Shorter brand still sitting inside the catalog name, if any."""
+    full = compact_site(forms[0])
+    candidates: list[tuple[int, str]] = []
+    for form in forms:
+        if "." in form:
+            continue
+        key = compact_site(form)
+        if 5 <= len(key) < len(full) and key in full:
+            candidates.append((len(key), form))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0])
+    return candidates[0][1]
+
+
+def _fallback_people(title: str, performers: list[str] | None) -> list[str]:
+    """Names mentioned in the title first, then billing order."""
+    people = [str(name).strip() for name in (performers or []) if str(name).strip()]
+    title_l = (title or "").casefold()
+    named: list[str] = []
+    rest: list[str] = []
+    for name in people:
+        bits = words(name)
+        if bits and any(word.lower() in title_l for word in bits):
+            named.append(name)
+        else:
+            rest.append(name)
+    return [*named, *rest]
+
+
 def western_fallback_terms(
     site: str,
     title: str,
@@ -238,37 +315,43 @@ def western_fallback_terms(
     forms = _studio_forms(site, extra_names)
     if not forms:
         return []
-    studio = forms[0]
+    primary = forms[0]
+    studios = [primary]
+    peeled = _fallback_studio(forms)
+    if peeled and peeled not in studios:
+        studios.append(peeled)
     terms: list[str] = []
-    for name in (performers or [])[:2]:
-        bits = words(name)
-        raw = [w for w in _WORD.findall(_APOSTROPHE.sub("", name or "")) if w]
-        if len(bits) >= 2:
-            terms.append(f"{studio} {bits[0]} {bits[1]}")
-        elif len(bits) == 1 and len(bits[0]) >= 4:
-            terms.append(f"{studio} {bits[0]}")
-        if len(raw) >= 2:
-            glued = "".join(raw[:2])
-            if len(glued) >= 5:
-                terms.append(f"{studio} {glued}")
+    people = _fallback_people(title, performers)[:3]
+    for studio in studios:
+        for name in people:
+            bits = words(name)
+            raw = [w for w in _WORD.findall(_APOSTROPHE.sub("", name or "")) if w]
+            if len(bits) >= 2:
+                terms.append(f"{studio} {bits[0]} {bits[1]}")
+            elif len(bits) == 1 and len(bits[0]) >= 4:
+                terms.append(f"{studio} {bits[0]}")
+            if len(raw) >= 2:
+                glued = "".join(raw[:2])
+                if len(glued) >= 5:
+                    terms.append(f"{studio} {glued}")
     slr = uses_slr_names(site, extra_names, vr)
     if slr:
-        terms.append(f"SLR {studio}")
+        terms.append(f"SLR {primary}")
     site_words = {word.lower() for word in _studio_tokens(site)} | {word.lower() for word in words(site)}
     title_words = [word for word in words(title) if word.lower() not in site_words]
     distinctive = [word for word in title_words if len(word) >= 5]
     distinctive.sort(key=len, reverse=True)
     if distinctive:
-        terms.append(f"{studio} {distinctive[0]}")
+        terms.append(f"{primary} {distinctive[0]}")
     if slr and len(title_words) >= 2:
         glued_title = title_words[0] + title_words[1]
         if len(glued_title) >= 8:
-            terms.append(f"{studio} {glued_title}")
+            terms.append(f"{primary} {glued_title}")
     out: list[str] = []
     for term in terms:
         if term not in out:
             out.append(term)
-    return out[:4]
+    return out[:6]
 
 
 def _has_token(hay: str, token: str) -> bool:
@@ -314,20 +397,38 @@ def rank_western_magnets(
         gap = _date_gap(scene_date, released) if scene_date else None
         row = dict(item)
         row["release_date"] = released or ""
+        extra = _magnet_remainder(
+            item.get("title") or "", distinctive, site, site_tokens, performers,
+        )
         row["_hits"] = (title_hits, person_hits, site_hits)
-        row["_gap"] = gap if gap is not None else 10_000
+        row["_gap"] = gap if gap is not None else _NO_RELEASE_DATE
+        row["_extra"] = extra
         scored.append(row)
+
     def _strong(row: dict) -> int:
         title_hits, person_hits, _site_hits = row["_hits"]
         if title_hits >= 2 or (title_hits >= 1 and person_hits > 0) or person_hits >= 2:
             return 1
         return 0
 
+    def _related(row: dict) -> bool:
+        if not _strong(row):
+            return False
+        gap = row["_gap"]
+        title_hits = row["_hits"][0]
+        if gap <= _RELATED_DATE_SLACK:
+            return True
+        if title_hits >= 1:
+            return True
+        if _foreign_title(row["_extra"]):
+            return False
+        return gap >= _NO_RELEASE_DATE
+
     close = [row for row in scored if scene_date and row["_gap"] <= 1]
     if close:
         pool = close
     elif related_only:
-        pool = [row for row in scored if _strong(row)]
+        pool = [row for row in scored if _related(row)]
     else:
         pool = scored
     limit = 24 if close else (8 if related_only else 24)
@@ -352,6 +453,7 @@ def rank_western_magnets(
     for index, row in enumerate(pool[:limit], 1):
         row.pop("_hits", None)
         row.pop("_gap", None)
+        row.pop("_extra", None)
         row.pop("_kind", None)
         row["pack"] = _western_pack(row)
         row["rank"] = index

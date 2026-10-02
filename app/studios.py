@@ -11,6 +11,7 @@ _WORD = re.compile(r"[A-Za-z0-9]+")
 _GENERIC_TAIL = {
     "porn", "porno", "xxx", "media", "films", "film", "productions",
     "entertainment", "network", "official", "studio", "studios", "com",
+    "compilations", "compilation", "collection", "collections", "anthology",
 }
 _GENERIC_SITE_TAIL = {"porn", "xxx", "vr", "official", "originals", "com"}
 # VR-first studios whose names do not contain vr / virtual / slr.
@@ -116,6 +117,18 @@ def _vr_swapped(tokens: list[str]) -> str | None:
     return swapped
 
 
+def _core_tokens(tokens: list[str]) -> list[str]:
+    """Peel catalog filler from either end of a studio name."""
+    body = list(tokens)
+    if len(body) >= 2 and body[0].lower() == "the":
+        body = body[1:]
+    if len(body) >= 3 and body[1].lower() == "of" and len(body[0]) <= 4:
+        body = body[2:]
+    while len(body) >= 2 and body[-1].lower() in _GENERIC_TAIL:
+        body = body[:-1]
+    return body
+
+
 def _forms_for_name(name: str) -> list[str]:
     tokens = studio_tokens(name)
     if not tokens:
@@ -132,7 +145,7 @@ def _forms_for_name(name: str) -> list[str]:
         _add_form(forms, "".join(tokens[1:]))
     if tokens[-1].lower() in _GENERIC_TAIL and len(tokens) >= 2:
         trimmed = "".join(tokens[:-1])
-        if len(compact_site(trimmed)) >= 8:
+        if len(compact_site(trimmed)) >= 5:
             _add_form(forms, trimmed)
     initials = "".join(word if len(word) <= 2 else word[0] for word in tokens)
     if len(initials) >= 3:
@@ -141,6 +154,10 @@ def _forms_for_name(name: str) -> list[str]:
         _add_form(forms, tokens[0])
     for alias in _KNOWN_PREFIXES.get(compact_site(compact), []):
         _add_form(forms, alias)
+    core = _core_tokens(tokens)
+    if core != tokens and len(compact_site("".join(core))) >= 5:
+        for form in _forms_for_name(" ".join(core)):
+            _add_form(forms, form)
     return forms
 
 

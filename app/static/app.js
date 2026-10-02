@@ -1854,7 +1854,7 @@ async function openWestern(id, kind, known = null) {
   if (listed && listed.title) magnetParams.set("title", listed.title);
   if (listed && listed.date) magnetParams.set("date", listed.date);
   if (listed && listed.performers && listed.performers.length) {
-    magnetParams.set("performers", listed.performers.slice(0, 3).join(","));
+    magnetParams.set("performers", listed.performers.slice(0, 8).join(","));
   }
   if ((listed && listed.vr) || westernFormat === "vr") magnetParams.set("vr", "1");
   const magnetPath = magnetParams.toString();
@@ -1940,7 +1940,7 @@ async function loadWesternSearch(q, page) {
   );
   setStatus(
     $("western-status"),
-    data.error || westernCountStatus(westernItems.length, false, data.matched_site || ""),
+    data.error || westernCountStatus(westernItems.length, false, data.matched_site || data.matched_performer || ""),
     westernItems.length && !data.error ? "good" : "bad",
   );
 }

@@ -218,6 +218,13 @@ def test_namer_studio_filename_prefixes():
     aliased = western_search_terms("Brazzers Exxtra", "Scene", [], "2022-09-20", extra_names=["BrazzersExxtra", "BEX"])
     assert aliased[0] == "BrazzersExxtra 22.09.20"
     assert "BEX 22.09.20" in aliased
+    compilations = western_search_terms("Vixen Compilations", "Vol 3", [], "2026-09-20")
+    assert compilations[0] == "VixenCompilations 26.09.20"
+    assert "Vixen 26.09.20" in compilations
+    best = western_search_terms("Best Of LetsDoeIt", "Part 8", [], "2026-09-24")
+    assert best[0] == "BestOfLetsDoeIt 26.09.24"
+    assert "LetsDoeIt 26.09.24" in best
+    assert "LDI 26.09.24" in best
 
 
 def test_rank_keeps_same_release_day_and_prefers_the_scene():
@@ -301,6 +308,63 @@ def test_related_only_drops_unrelated_studio_magnets():
     assert [item["info_hash"] for item in ranked] == ["b" * 40]
 
 
+def test_related_only_drops_old_dated_same_performer():
+    items = [
+        {
+            "title": "Parasited.23.06.02.Ellie.Luna.And.Eve.Sweet.Bedtime.Possession.XXX.1080p",
+            "heat": 90,
+            "size": "2 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "[中文字幕]Parasited Eve Sweet The Camp Remaster 1080p",
+            "heat": 10,
+            "size": "2 GB",
+            "info_hash": "b" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Parasited",
+        "The Camp - Remaster",
+        ["Alissa Foxy", "Eve Sweet"],
+        "2026-09-18",
+        related_only=True,
+    )
+    assert match == "title"
+    assert [item["info_hash"] for item in ranked] == ["b" * 40]
+
+
+def test_related_only_ignores_cast_overlap_on_compilations():
+    items = [
+        {
+            "title": "Hope Heaven, Ashby Winter, Eve Sweet - Club Vixen Summit_2160p.mp4",
+            "heat": 90,
+            "size": "6 GB",
+            "info_hash": "a" * 40,
+        },
+        {
+            "title": "LetsDoeIt.LatinaMILF.Blondie.Fesser.Fuck.on.the.beach.2022.1080p",
+            "heat": 80,
+            "size": "2 GB",
+            "info_hash": "b" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Vixen Compilations",
+        "Vixen 10 Year Anniversary Vol 3",
+        [
+            "Ashby Winter", "Bella Spark", "Christy White", "Eva Lovia",
+            "Eve Sweet", "Gabbie Carter", "Hope Heaven", "Blondie Fesser",
+        ],
+        "2026-09-20",
+        related_only=True,
+    )
+    assert ranked == []
+    assert match == "none"
+
+
 def test_fallback_terms_use_performer_not_the_whole_studio():
     from app.western_magnets import western_fallback_terms
 
@@ -347,6 +411,26 @@ def test_slr_fallback_uses_glued_names_and_prefix():
     tagged = western_fallback_terms("Unknown Indie", "Night Walk", ["Jane Doe"], vr=True)
     assert "SLR UnknownIndie" in tagged
     assert "UnknownIndie JaneDoe" in tagged
+
+
+def test_fallback_prefers_performers_named_in_the_title():
+    from app.western_magnets import western_fallback_terms
+
+    terms = western_fallback_terms(
+        "Blacked",
+        "Flawless Besties Eve And Kelly Ride BBC",
+        ["Jax Slayher", "Eve Sweet", "Kelly Collins"],
+    )
+    assert terms[0] == "Blacked Eve Sweet"
+    assert "Blacked EveSweet" in terms
+    assert "Blacked Kelly Collins" in terms
+    compilations = western_fallback_terms(
+        "Vixen Compilations",
+        "Vixen 10 Year Anniversary Vol 3",
+        ["Ashby Winter", "Eve Sweet"],
+    )
+    assert "Vixen Ashby Winter" in compilations
+    assert "VixenCompilations Ashby Winter" in compilations
 
 
 def test_rank_slr_glued_scene_names():
@@ -1001,6 +1085,38 @@ def test_search_catalog_opens_the_matched_site(monkeypatch):
         assert out["matched_site"] == "Virtual Real Porn"
         assert out["items"][0]["id"] == "1"
         assert out["last_page"] == 3
+
+    asyncio.run(run())
+
+
+def test_search_catalog_opens_the_matched_performer(monkeypatch):
+    import asyncio
+
+    from app.config import Settings
+    from app.sources import tpdb
+
+    async def fake_site(settings, query):
+        return None
+
+    async def fake_person(settings, query):
+        assert query == "Eve Sweet"
+        return {"id": "perf-1", "name": "Eve Sweet"}
+
+    async def fake_facet(settings, kind, facet, name, page=1, tag_id=""):
+        assert kind == "scene"
+        assert facet == "performer"
+        assert name == "Eve Sweet"
+        return {"items": [{"id": "1", "title": "Wedding Guest"}], "page": page, "last_page": 10}
+
+    monkeypatch.setattr(tpdb, "match_site", fake_site)
+    monkeypatch.setattr(tpdb, "match_performer", fake_person)
+    monkeypatch.setattr(tpdb, "fetch_facet", fake_facet)
+
+    async def run():
+        out = await tpdb.search_catalog(Settings(), "scene", "Eve Sweet", 1)
+        assert out["matched_performer"] == "Eve Sweet"
+        assert out["items"][0]["id"] == "1"
+        assert out["last_page"] == 10
 
     asyncio.run(run())
 

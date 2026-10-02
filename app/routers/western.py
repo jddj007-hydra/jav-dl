@@ -89,7 +89,8 @@ async def _cached_list(
             visible = _visible(
                 cached["items"],
                 exclude_orientation=exclude_orientation,
-                allow_unknown_duration=allow_unknown or bool(cached.get("matched_site")),
+                allow_unknown_duration=allow_unknown
+                or bool(cached.get("matched_site") or cached.get("matched_performer")),
                 fmt=fmt,
             )
             return {**cached, "items": await _mark_library(request, visible), "error": None, "format": fmt}
@@ -112,6 +113,7 @@ async def _cached_list(
         "last_page": payload["last_page"],
         "items": payload["items"],
         "matched_site": payload.get("matched_site") or "",
+        "matched_performer": payload.get("matched_performer") or "",
         "format": fmt,
     }
     if cache_key:
@@ -119,7 +121,8 @@ async def _cached_list(
     visible = _visible(
         body["items"],
         exclude_orientation=exclude_orientation,
-        allow_unknown_duration=allow_unknown or bool(body.get("matched_site")),
+        allow_unknown_duration=allow_unknown
+        or bool(body.get("matched_site") or body.get("matched_performer")),
         fmt=fmt,
     )
     return {**body, "items": await _mark_library(request, visible), "error": None}

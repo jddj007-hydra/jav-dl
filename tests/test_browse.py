@@ -409,7 +409,7 @@ def test_fetch_facet_asks_theporndb_by_id(monkeypatch):
 
     async def fake_json(settings, path, params=None):
         assert path == "/sites/site-1/movies"
-        assert params == {"page": 1, "per_page": 24}
+        assert params == {"page": 1, "per_page": 42}
         return {"data": [{"id": "m1", "title": "Movie", "duration": 2000}], "meta": {"last_page": 2}}
 
     monkeypatch.setattr("app.sources.tpdb._named_id", fake_named)

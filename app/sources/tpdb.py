@@ -26,7 +26,8 @@ def is_excluded_orientation(tags: list[str] | None = None, title: str = "") -> b
     return bool(_EXCLUDED_ORIENTATION.search(blob))
 
 
-PER_PAGE = 24
+# 42 tiles the desktop wall: 7 columns × 6 rows, or 6 columns × 7.
+PER_PAGE = 42
 ORDER_LATEST = "recently_released"
 ORDER_SEARCH = "recently_released"
 # Trailers, BTS, and clip-site shorts sit under this. On /scenes, unset duration
@@ -282,6 +283,15 @@ async def match_site(settings: Settings, query: str) -> dict | None:
     return pick_site(rows, query)
 
 
+async def match_performer(settings: Settings, query: str) -> dict | None:
+    query = (query or "").strip()
+    if len(query) < 3:
+        return None
+    payload = await _get_json(settings, "/performers", {"q": query, "per_page": 50})
+    rows = payload.get("data") if isinstance(payload.get("data"), list) else []
+    return _exact_name(rows, query)
+
+
 async def search_catalog(
     settings: Settings,
     kind: str,
@@ -290,7 +300,7 @@ async def search_catalog(
     theme: str | None = None,
     fmt: str | None = None,
 ) -> dict:
-    """Studio names open that site's list. A title still goes through keyword search."""
+    """Studio or performer names open that list. A title still goes through keyword search."""
     query = (query or "").strip()
     page = max(1, int(page))
     if query and not theme:
@@ -298,6 +308,11 @@ async def search_catalog(
         if site and site.get("name"):
             payload = await fetch_facet(settings, kind, "site", str(site["name"]), page)
             payload["matched_site"] = str(site["name"])
+            return payload
+        performer = await match_performer(settings, query)
+        if performer and performer.get("name"):
+            payload = await fetch_facet(settings, kind, "performer", str(performer["name"]), page)
+            payload["matched_performer"] = str(performer["name"])
             return payload
     return await fetch_list(settings, kind, page, query or None, theme, fmt=fmt)
 
