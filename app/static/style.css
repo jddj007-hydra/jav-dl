@@ -713,6 +713,7 @@ img.is-fallback,
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+.res-reason { overflow-wrap: anywhere; }
 .res-actions {
   display: flex;
   gap: 6px;

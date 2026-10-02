@@ -379,11 +379,21 @@ function genreHtml(genres) {
   return chips.length ? `<div class="genre-row">${chips.join("")}</div>` : "";
 }
 
-function tagHtml(item) {
-  const tags = [...(item.tags || [])];
-  if (item.pack) tags.push("pack");
-  if (!tags.length) return "";
-  return `<div class="tags">${tags.map((t) => `<span class="tag ${t}">${t}</span>`).join("")}</div>`;
+function magnetReason(item, western) {
+  const parts = [];
+  if (!western) {
+    const tags = Array.isArray(item.tags) ? item.tags : [];
+    const ordered = [];
+    if (tags.includes("UC")) ordered.push("UC");
+    for (const tag of tags) {
+      if (tag && tag !== "UC" && !ordered.includes(tag)) ordered.push(String(tag));
+    }
+    parts.push(...ordered);
+  }
+  if (item.pack) parts.push("pack");
+  parts.push(`热度 ${item.heat ?? 0}`);
+  parts.push(item.size || "?");
+  return parts.join(" · ");
 }
 
 function renderWorks(items) {
@@ -423,9 +433,7 @@ function renderResources(items) {
       <div class="res-body">
         <div class="res-title">${escapeHtml(it.title || "")}</div>
         <div class="res-meta">
-          ${tagHtml(it)}
-          <span>${escapeHtml(it.size || "?")}</span>
-          <span>热度 ${it.heat ?? 0}</span>
+          <span class="res-reason">${escapeHtml(magnetReason(it, false))}</span>
           <span>${escapeHtml(it.date || "")}</span>
         </div>
       </div>
@@ -1618,8 +1626,7 @@ function renderWesternResources(items) {
       <div class="res-body">
         <div class="res-title">${escapeHtml(it.title || "")}</div>
         <div class="res-meta">
-          <span>${escapeHtml(it.size || "?")}</span>
-          <span>热度 ${it.heat ?? 0}</span>
+          <span class="res-reason">${escapeHtml(magnetReason(it, true))}</span>
           <span>${it.release_date ? "发行 " + escapeHtml(it.release_date) : "发行日未知"}</span>
           <span>${it.date ? "收录 " + escapeHtml(it.date) : ""}</span>
         </div>
