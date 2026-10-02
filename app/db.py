@@ -762,6 +762,24 @@ class Database:
     async def has_western_pending(self, path: str) -> bool:
         return await self.western_pending(path) is not None
 
+    async def list_western_pending(self) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM western_pending ORDER BY updated_at DESC, path"
+            )
+            rows = await cur.fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                parsed = json.loads(item.get("candidates") or "[]")
+            except json.JSONDecodeError:
+                parsed = []
+            item["candidates"] = parsed if isinstance(parsed, list) else []
+            out.append(item)
+        return out
+
     async def western_pending_for_job(self, job_id: str) -> list[dict]:
         if not job_id:
             return []

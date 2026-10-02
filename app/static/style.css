@@ -797,6 +797,16 @@ button.queue-title:focus-visible { filter: none; color: var(--accent-2); }
 .queue .meta-line { color: var(--muted); font-size: 13px; display: flex; gap: 14px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .queue .row-actions { margin-top: 10px; }
 .queue .row-actions button { padding: 6px 12px; font-size: 13px; }
+.pending-file { font-weight: 600; overflow-wrap: anywhere; }
+.pending-picks { display: grid; gap: 6px; margin-top: 10px; }
+.pending-picks button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  padding: 8px 12px;
+  font-size: 13px;
+}
 
 /* ---------- follow ---------- */
 .fold {

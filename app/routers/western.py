@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.library import attach_western, library_info
@@ -218,6 +220,71 @@ async def western_search(
     return await _cached_list(
         request, _kind(kind), page, query, _theme(theme), _fmt(format), exclude_orientation=True,
     )
+
+
+def _candidate_public(item: dict) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    item_id = str(item.get("id") or "").strip()
+    kind = str(item.get("kind") or "").strip().lower()
+    if not item_id or kind not in ("scene", "movie"):
+        return None
+    performers = item.get("performers") or []
+    if not isinstance(performers, list):
+        performers = []
+    return {
+        "id": item_id,
+        "kind": kind,
+        "title": str(item.get("title") or ""),
+        "site": str(item.get("site") or ""),
+        "date": str(item.get("date") or "")[:10],
+        "performers": [str(name) for name in performers if str(name).strip()],
+    }
+
+
+def _pending_public(row: dict) -> dict:
+    candidates = []
+    for item in row.get("candidates") or []:
+        public = _candidate_public(item)
+        if public:
+            candidates.append(public)
+    return {
+        "path": str(row.get("path") or ""),
+        "name": str(row.get("name") or ""),
+        "job_id": str(row.get("job_id") or ""),
+        "candidates": candidates,
+    }
+
+
+def _pending_rank(row: dict) -> tuple[bool, bool]:
+    path = Path(str(row.get("path") or ""))
+    try:
+        exists = path.exists()
+        is_file = exists and path.is_file()
+    except OSError:
+        return False, False
+    return is_file, exists
+
+
+def collapse_pending(rows: list[dict]) -> list[dict]:
+    """One card per job. Watcher rows have no job id, so each path stays."""
+    grouped: dict[str, dict] = {}
+    order: list[str] = []
+    for row in rows:
+        job_id = str(row.get("job_id") or "").strip()
+        key = f"job:{job_id}" if job_id else f"path:{row.get('path')}"
+        current = grouped.get(key)
+        if current is None or _pending_rank(row) > _pending_rank(current):
+            grouped[key] = row
+        if current is None:
+            order.append(key)
+    return [_pending_public(grouped[key]) for key in order]
+
+
+@router.get("/api/western/pending")
+async def list_pending(request: Request):
+    rows = await request.app.state.db.list_western_pending()
+    return {"items": collapse_pending(rows)}
 
 
 @router.post("/api/western/pending/confirm")

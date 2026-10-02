@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=32" />
+  <link rel="stylesheet" href="/static/style.css?v=33" />
 </head>
 <body>
   <header class="top">
@@ -238,6 +238,11 @@
       </div>
       <p id="queue-note" class="status" hidden></p>
       <p id="queue-follow" class="status" hidden></p>
+      <div class="sub-head"><h3>待确认</h3><span class="lib-count" id="pending-count"></span></div>
+      <p class="hint">文件名对不上时停在这里。点一条候选就归档这一部。</p>
+      <p id="pending-note" class="status" hidden></p>
+      <div id="pending-empty" class="empty small">没有待确认的文件</div>
+      <ul id="pending-list" class="queue"></ul>
       <div id="queue-empty" class="empty" hidden>还没有任务</div>
       <ul id="queue-list" class="queue"></ul>
     </section>
@@ -395,6 +400,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=47"></script>
+  <script src="/static/app.js?v=48"></script>
 </body>
 </html>

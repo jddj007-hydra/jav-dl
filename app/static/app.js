@@ -49,6 +49,9 @@ let westernResources = [];
 let westernCurrent = null;
 let queueItems = [];
 let queueFilter = "all";
+let pendingItems = [];
+let pendingSignature = "";
+let pendingBusy = false;
 
 const STATUS_LABEL = {
   queued: "排队",
@@ -106,6 +109,7 @@ function route() {
   });
   if (name === "queue") {
     refreshQueue();
+    refreshPending();
     startQueueStream();
   } else {
     stopQueueStream();
@@ -1080,6 +1084,61 @@ function renderQueue() {
     </li>`).join("");
 }
 
+function pendingCandidateLine(item) {
+  const kind = item.kind === "movie" ? "电影" : "场景";
+  const people = (item.performers || []).filter(Boolean).join("、");
+  const bits = [item.title, item.site, item.date, people].filter(Boolean);
+  return `${kind} · ${bits.join(" · ")}`;
+}
+
+function renderPending() {
+  const list = $("pending-list");
+  const empty = $("pending-empty");
+  const count = $("pending-count");
+  const signature = JSON.stringify(pendingItems);
+  count.textContent = pendingItems.length ? `${pendingItems.length} 个` : "";
+  if (!pendingItems.length) {
+    pendingSignature = signature;
+    empty.hidden = false;
+    empty.textContent = "没有待确认的文件";
+    list.innerHTML = "";
+    return;
+  }
+  empty.hidden = true;
+  if (signature === pendingSignature) return;
+  pendingSignature = signature;
+  list.innerHTML = pendingItems.map((row) => {
+    const picks = (row.candidates || []).map((item) => `
+      <button type="button" class="ghost" data-pending-pick
+        data-path="${escapeHtml(row.path || "")}"
+        data-job="${escapeHtml(row.job_id || "")}"
+        data-id="${escapeHtml(item.id || "")}"
+        data-kind="${escapeHtml(item.kind || "")}">${escapeHtml(pendingCandidateLine(item))}</button>`).join("");
+    const body = picks
+      ? `<div class="pending-picks">${picks}</div>`
+      : `<p class="status">没有候选，文件还留在下载目录</p>`;
+    return `<li>
+      <div class="pending-file">${escapeHtml(row.name || row.path || "")}</div>
+      ${body}
+    </li>`;
+  }).join("");
+}
+
+async function refreshPending() {
+  if (pendingBusy || views.queue.hidden) return;
+  try {
+    const data = await api("/api/western/pending");
+    pendingItems = data.items || [];
+    renderPending();
+  } catch (err) {
+    pendingItems = [];
+    pendingSignature = "";
+    $("pending-count").textContent = "";
+    $("pending-empty").hidden = true;
+    $("pending-list").innerHTML = `<li class="status bad">${escapeHtml(err.message)}</li>`;
+  }
+}
+
 function applyQueuePayload(data) {
   queueItems = data.items || [];
   renderQueue();
@@ -1115,7 +1174,10 @@ function stopQueueStream() {
 function startQueueSlow() {
   if (queueSlow || document.hidden || views.queue.hidden) return;
   queueSlow = setInterval(() => {
-    if (!views.queue.hidden && !document.hidden) refreshQueue();
+    if (!views.queue.hidden && !document.hidden) {
+      refreshQueue();
+      refreshPending();
+    }
   }, 30000);
 }
 
@@ -1138,6 +1200,7 @@ function startQueueStream() {
     } catch {
       /* ignore a bad event */
     }
+    refreshPending();
   };
   source.onerror = () => {
     if (queueSource !== source) return;
@@ -1180,6 +1243,34 @@ $("queue-clear-finished").addEventListener("click", () => {
   clearQueue("finished", "删除已完成、失败和已取消的记录？进行中的任务会留下。").catch((err) => {
     setStatus($("queue-note"), err.message, "bad");
   });
+});
+
+$("pending-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-pending-pick]");
+  if (!btn || pendingBusy) return;
+  pendingBusy = true;
+  btn.disabled = true;
+  setStatus($("pending-note"), "");
+  try {
+    await api("/api/western/pending/confirm", {
+      method: "POST",
+      body: JSON.stringify({
+        path: btn.dataset.path || "",
+        job_id: btn.dataset.job || "",
+        tpdb_id: btn.dataset.id || "",
+        kind: btn.dataset.kind || "",
+      }),
+    });
+    pendingBusy = false;
+    pendingSignature = "";
+    await refreshPending();
+    await refreshQueue();
+  } catch (err) {
+    setStatus($("pending-note"), err.message, "bad");
+    btn.disabled = false;
+  } finally {
+    pendingBusy = false;
+  }
 });
 
 $("queue-list").addEventListener("click", async (e) => {
@@ -2557,7 +2648,10 @@ document.addEventListener("visibilitychange", () => {
     stopQueueStream();
     return;
   }
-  if (!views.queue.hidden) startQueueStream();
+  if (!views.queue.hidden) {
+    startQueueStream();
+    refreshPending();
+  }
 });
 route();
 loadPanelLinks();

@@ -349,6 +349,54 @@ def test_confirm_pending_writes_only_the_chosen_candidate(tmp_path, monkeypatch)
     asyncio.run(run())
 
 
+def test_list_pending_shows_files_and_collapses_one_job(tmp_path):
+    from app.routers.western import list_pending
+
+    settings = _settings(tmp_path)
+    video = settings.download_dir / "Brazzers.24.01.02.Ann.Example.mp4"
+    video.write_bytes(b"x" * 80)
+    planned = settings.download_dir / "jav-dl" / "western" / "ann"
+    other = settings.download_dir / "Vixen.24.02.02.Bea.Clip.mp4"
+    other.write_bytes(b"y" * 80)
+    candidates = [
+        {
+            "id": "keep",
+            "kind": "scene",
+            "title": "Ann Example",
+            "site": "Brazzers",
+            "date": "2024-01-02",
+            "performers": ["Ann"],
+        },
+        {"id": "", "kind": "scene", "title": "skip"},
+        "not-a-candidate",
+    ]
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.save_western_pending(str(planned), planned.name, "job1", candidates)
+        await db.save_western_pending(str(video), video.name, "job1", candidates)
+        await db.save_western_pending(str(other), other.name, "", [])
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=db)))
+        body = await list_pending(request)
+        assert [item["path"] for item in body["items"]] == [str(other), str(video)]
+        picked = body["items"][1]
+        assert picked["name"] == video.name
+        assert picked["job_id"] == "job1"
+        assert picked["candidates"] == [{
+            "id": "keep",
+            "kind": "scene",
+            "title": "Ann Example",
+            "site": "Brazzers",
+            "date": "2024-01-02",
+            "performers": ["Ann"],
+        }]
+        assert body["items"][0]["candidates"] == []
+        assert body["items"][0]["job_id"] == ""
+
+    asyncio.run(run())
+
+
 def test_delete_finished_job_and_reject_active(tmp_path):
     settings = _settings(tmp_path)
 
