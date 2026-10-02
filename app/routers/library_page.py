@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.codes import is_jav_vr_entry
-from app.library import archived_jav_path, poster_file
-from app.models import SuckMark
+from app.library import archived_jav_path, drop_archived_version, poster_file
+from app.models import LibraryRemove, SuckMark
 from app.suck import mark_work, parse_suck
 from app.western_archive import western_fs_rel
 
@@ -112,6 +112,20 @@ async def library_page(request: Request):
         "western_root": str(west_root) if west_root else "",
         "vr_root": str(vr_root) if vr_root else "",
     }
+
+
+@router.post("/api/library/remove")
+async def remove_version(request: Request, body: LibraryRemove):
+    try:
+        item = await drop_archived_version(
+            request.app.state.db,
+            request.app.state.settings,
+            kind=body.kind,
+            key=body.key,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"item": item}
 
 
 @router.post("/api/suck")

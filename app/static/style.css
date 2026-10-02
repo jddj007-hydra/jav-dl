@@ -528,6 +528,8 @@ button.actor-card:hover span { color: var(--accent-2); }
   border-radius: 999px;
   vertical-align: 1px;
 }
+.lib-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lib-actions .lib-suck { margin-top: 0; }
 .lib-suck { margin-top: 8px; }
 .work-card .code, .lib-line .code { font-size: 12px; margin: 0; }
 .work-site {

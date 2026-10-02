@@ -339,3 +339,134 @@ def test_refresh_does_not_rewrite_an_existing_poster(tmp_path):
     assert (folder / "poster.jpg").read_bytes() == b"keep-poster"
     assert (folder / "fanart.jpg").read_bytes() == b"keep-fanart"
     assert (folder / "DSVR-1124.mp4").read_bytes() == b"video"
+
+
+def test_drop_version_removes_files_and_keeps_suck_and_plays(tmp_path):
+    import aiosqlite
+    import httpx
+    from fastapi import FastAPI
+
+    from app.routers import downloads, library_page
+
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "west"),
+    )
+    settings.ensure_dirs()
+    folder = settings.media_dir / "202102" / "SSIS-001"
+    folder.mkdir(parents=True)
+    (folder / "SSIS-001.mp4").write_bytes(b"video")
+    (folder / "SSIS-001.nfo").write_text("<movie></movie>", encoding="utf-8")
+    (folder / "poster.jpg").write_bytes(b"p")
+    kept = settings.media_dir / "202102" / "IPX-001"
+    kept.mkdir()
+    (kept / "IPX-001.mp4").write_bytes(b"keep")
+    studio = settings.western_root / "Studio"
+    studio.mkdir(parents=True)
+    (studio / "clip.mp4").write_bytes(b"w")
+    (studio / "clip.nfo").write_text("n", encoding="utf-8")
+    (studio / "clip-poster.jpg").write_bytes(b"p")
+    (studio / "other.mp4").write_bytes(b"o")
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "x").write_text("no", encoding="utf-8")
+
+    class Jobs:
+        def __init__(self):
+            self.called = False
+
+        async def prepare_files(self, *args, **kwargs):
+            self.called = True
+            return {"mode": "direct", "job": {"id": "job", "dest": str(settings.download_dir)}}
+
+        async def enqueue(self, *args, **kwargs):
+            self.called = True
+            return {"id": "job"}
+
+        async def cancel_files(self, token):
+            self.called = True
+
+    jobs = Jobs()
+    app = FastAPI()
+    app.include_router(library_page.router)
+    app.include_router(downloads.router)
+
+    async def plays(db):
+        async with aiosqlite.connect(db.path) as conn:
+            cur = await conn.execute("SELECT kind, key FROM plays ORDER BY kind, key")
+            return await cur.fetchall()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.upsert_library({
+            "code": "SSIS-001",
+            "month": "202102",
+            "path": "202102/SSIS-001",
+            "has_video": 1,
+            "title": "旧版",
+        })
+        await db.upsert_library({
+            "code": "SSIS-009",
+            "month": "202102",
+            "path": "../secret",
+            "has_video": 1,
+            "title": "越界",
+        })
+        await db.upsert_western({
+            "path": "Studio/clip.mp4",
+            "tpdb_id": "scene-1",
+            "studio": "Studio",
+            "title": "Clip",
+            "has_nfo": 1,
+            "has_poster": 1,
+        })
+        await db.mark_played("jav", "SSIS-001")
+        await db.mark_played("western", "scene-1")
+        app.state.db = db
+        app.state.settings = settings
+        app.state.jobs = jobs
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            removed = await client.post("/api/library/remove", json={"kind": "jav", "key": "ssis001"})
+            assert removed.status_code == 200
+            assert removed.json()["item"]["removed"] is True
+            west = await client.post("/api/library/remove", json={"kind": "western", "key": "scene-1"})
+            assert west.status_code == 200
+            escaped = await client.post("/api/library/remove", json={"kind": "jav", "key": "SSIS-009"})
+            assert escaped.status_code == 400
+            again = await client.post("/api/downloads/files", json={
+                "code": "SSIS-001",
+                "info_hash": "a" * 40,
+                "title": "旧版",
+            })
+            assert again.status_code == 200
+            page = await client.get("/api/library")
+            body = page.json()
+        assert await db.get_library("SSIS-001") is None
+        assert await db.get_library("SSIS-009") is not None
+        assert (await db.western_by_ids(["scene-1"])) == {}
+        assert await db.list_suck() == []
+        assert await plays(db) == [("jav", "SSIS-001"), ("western", "scene-1")]
+        assert body["suck"] == []
+        assert jobs.called is True
+
+    asyncio.run(run())
+    assert not folder.exists()
+    assert (kept / "IPX-001.mp4").read_bytes() == b"keep"
+    assert not (studio / "clip.mp4").exists()
+    assert not (studio / "clip.nfo").exists()
+    assert not (studio / "clip-poster.jpg").exists()
+    assert (studio / "other.mp4").read_bytes() == b"o"
+    assert (secret / "x").read_text(encoding="utf-8") == "no"
+
+
+def test_library_card_offers_delete_without_removing_rescrape():
+    root = __import__("pathlib").Path(__file__).resolve().parents[1] / "app" / "static"
+    script = (root / "app.js").read_text(encoding="utf-8")
+    assert "删除此版本" in script
+    assert "文件会删掉" in script
+    assert 'data-act="rescrape"' in script
+    assert "/api/library/remove" in script

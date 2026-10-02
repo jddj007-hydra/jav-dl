@@ -61,6 +61,11 @@ class SuckMark(BaseModel):
     remove: bool = False
 
 
+class LibraryRemove(BaseModel):
+    kind: str = ""
+    key: str = ""
+
+
 class DownloadRequest(BaseModel):
     code: str = ""
     info_hash: str

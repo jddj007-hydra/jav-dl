@@ -424,6 +424,54 @@ def remove_archived(root: Path | None, rel: str, kind: str) -> bool:
     return True
 
 
+def library_target(kind: str, key: str) -> tuple[str, str]:
+    kind = (kind or "").strip().lower()
+    if kind not in ("jav", "western"):
+        raise ValueError("类型无效")
+    raw = (key or "").strip()
+    if kind == "jav":
+        code = normalize_code(raw)
+        if not code:
+            raise ValueError("番号格式无效")
+        return kind, code
+    if not raw or any(ch in raw for ch in "/\\") or len(raw) > 80:
+        raise ValueError("缺少作品 id")
+    return kind, raw
+
+
+def _remove_row_files(settings: Settings, kind: str, row: dict) -> bool:
+    path = row.get("path") or ""
+    if kind == "jav":
+        if remove_archived(settings.media_dir, path, "jav"):
+            return True
+        if settings.jav_vr_root is not None:
+            return remove_archived(settings.jav_vr_root, path, "jav")
+        return False
+    shelf = (row.get("shelf") or "").strip()
+    if shelf == "vr" or str(path).startswith("vr/"):
+        return remove_archived(settings.vr_root, path, "vr")
+    return remove_archived(settings.western_root, path, "western")
+
+
+async def drop_archived_version(db: Database, settings: Settings, *, kind: str, key: str) -> dict:
+    """Delete one archived copy and its library row. Does not mark suck or touch plays."""
+    kind, key = library_target(kind, key)
+    if kind == "jav":
+        row = await db.get_library(key)
+    else:
+        row = (await db.western_by_ids([key])).get(key)
+    if not row or not (row.get("path") or "").strip():
+        raise ValueError("库里没有这个版本")
+    removed = await asyncio.to_thread(_remove_row_files, settings, kind, row)
+    if not removed:
+        raise ValueError("文件没有删掉")
+    if kind == "jav":
+        await db.delete_library(key)
+    else:
+        await db.delete_western(row["path"])
+    return {"kind": kind, "key": key, "removed": True}
+
+
 def scan_media(media_dir: Path) -> list[dict]:
     if not media_dir or not media_dir.is_dir():
         return []

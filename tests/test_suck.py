@@ -245,3 +245,37 @@ def test_follow_treats_suck_as_already_handled(tmp_path, monkeypatch):
     assert seen == {"SSIS-001", "abc"}
     assert hits == []
     assert calls == []
+
+
+def test_remove_version_does_not_mark_suck(tmp_path):
+    settings = _settings(tmp_path)
+    folder = settings.media_dir / "202102" / "SSIS-001"
+    folder.mkdir(parents=True)
+    (folder / "SSIS-001.mp4").write_bytes(b"v")
+    app = FastAPI()
+    app.include_router(library_page.router)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.upsert_library({
+            "code": "SSIS-001",
+            "month": "202102",
+            "path": "202102/SSIS-001",
+            "has_video": 1,
+            "title": "旧版",
+        })
+        app.state.db = db
+        app.state.settings = settings
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            removed = await client.post("/api/library/remove", json={"kind": "jav", "key": "SSIS-001"})
+            assert removed.status_code == 200
+            assert await db.list_suck() == []
+            assert await db.get_library("SSIS-001") is None
+            marked = await client.post("/api/suck", json={"kind": "jav", "key": "SSIS-001", "title": "Nope"})
+            assert marked.status_code == 200
+            assert await db.is_suck("jav", "SSIS-001") is True
+
+    asyncio.run(run())
+    assert not folder.exists()

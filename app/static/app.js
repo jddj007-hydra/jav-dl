@@ -2201,17 +2201,39 @@ function libraryCard(item) {
         <div class="lib-line">${head}</div>
         ${title ? `<div class="work-title">${escapeHtml(title)}</div>` : ""}
         ${actors ? `<div class="work-people">${escapeHtml(actors)}</div>` : ""}
-        ${librarySuckButton(item)}
+        ${libraryCardActions(item)}
       </div>
     </article>`;
 }
 
-function librarySuckButton(item) {
+function libraryCardActions(item) {
   const jav = libraryKind === "jav" || libraryKind === "jav_vr";
   const key = jav ? item.code : item.tpdb_id;
   if (!key) return "";
   const title = item.title || key;
-  return `<button type="button" class="ghost small danger lib-suck" data-suck-mark="${jav ? "jav" : "western"}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}" data-remove="1">标 suck</button>`;
+  const kind = jav ? "jav" : "western";
+  return `<div class="lib-actions">
+    <button type="button" class="ghost small danger" data-drop-version="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}">删除此版本</button>
+    <button type="button" class="ghost small danger lib-suck" data-suck-mark="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}" data-remove="1">标 suck</button>
+  </div>`;
+}
+
+async function commitDropVersion(el) {
+  const kind = el.dataset.dropVersion || "";
+  const key = el.dataset.key || "";
+  const title = el.dataset.title || key;
+  if (!window.confirm(`删除 ${title} 的当前版本？文件会删掉，之后可以换源再下。`)) return;
+  el.disabled = true;
+  const status = visibleStatus();
+  try {
+    await api("/api/library/remove", { method: "POST", body: JSON.stringify({ kind, key }) });
+    if (libraryPayload || !views.library.hidden) await loadLibrary();
+    setStatus(status, "已删除此版本", "good");
+  } catch (err) {
+    setStatus(status, err.message, "bad");
+  } finally {
+    el.disabled = false;
+  }
 }
 
 function renderSuck() {
@@ -2460,6 +2482,11 @@ async function commitSuck(el) {
 }
 
 $("library-list").addEventListener("click", async (e) => {
+  const drop = e.target.closest("[data-drop-version]");
+  if (drop) {
+    commitDropVersion(drop);
+    return;
+  }
   const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
   if (suck) {
     commitSuck(suck);
