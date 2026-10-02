@@ -307,3 +307,35 @@ def test_refresh_scrapes_missing_vr_sidecars(tmp_path, monkeypatch):
         assert west_rows[0]["title"] == "Office"
 
     asyncio.run(run())
+
+
+def test_refresh_does_not_rewrite_an_existing_poster(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        vr_media_dir=str(tmp_path / "vrporn" / "western"),
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+    settings.jav_vr_root.mkdir(parents=True)
+    folder = settings.jav_vr_root / "DSVR" / "DSVR-1124"
+    folder.mkdir(parents=True)
+    (folder / "DSVR-1124.mp4").write_bytes(b"video")
+    (folder / "poster.jpg").write_bytes(b"keep-poster")
+    (folder / "fanart.jpg").write_bytes(b"keep-fanart")
+    (folder / "DSVR-1124.nfo").write_text(
+        "<movie><originaltitle>Headset</originaltitle></movie>",
+        encoding="utf-8",
+    )
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        count = await Library(settings, db).refresh(scrape_missing=True)
+        assert count == 1
+
+    asyncio.run(run())
+    assert (folder / "poster.jpg").read_bytes() == b"keep-poster"
+    assert (folder / "fanart.jpg").read_bytes() == b"keep-fanart"
+    assert (folder / "DSVR-1124.mp4").read_bytes() == b"video"

@@ -843,3 +843,155 @@ def test_scrape_job_keeps_existing_extrafanart(tmp_path, monkeypatch):
     assert (kept / "fanart-01.jpg").read_bytes() == b"keep-me"
     assert (kept / "fanart-02.jpg").read_bytes() == b"new-2"
     assert client.urls == ["https://img.example/2.jpg"]
+
+
+def _meta_with_cover(samples):
+    async def fake_meta(settings, db, code):
+        return {
+            "code": code,
+            "title": "新标题",
+            "release_date": "2021-02-18",
+            "cover": "https://img.example/cover.jpg",
+            "actors": [{"name": "葵", "photo": "https://www.javbus.com/pics/actress/2xi_a.jpg"}],
+            "genres": [],
+            "samples": samples,
+        }
+
+    return fake_meta
+
+
+def test_fill_jav_folder_does_not_replace_existing_sidecars(tmp_path, monkeypatch):
+    from app.scrape import fill_jav_folder
+
+    client = _ImageClient({"https://img.example/2.jpg": b"new-sample"})
+    monkeypatch.setattr("app.scrape.site_client", lambda settings: _ImageHold(client))
+    monkeypatch.setattr(
+        "app.scrape.resolve_metadata",
+        _meta_with_cover([
+            {"full": "https://img.example/1.jpg"},
+            {"full": "https://img.example/2.jpg"},
+        ]),
+    )
+
+    async def fake_cover(settings, url, referer=None):
+        return _solid_jpeg(900, 600, (220, 20, 20), (20, 20, 220), 500)
+
+    monkeypatch.setattr("app.scrape.fetch_cover_bytes", fake_cover)
+    dest = tmp_path / "media" / "202102" / "SSIS-001"
+    extra = dest / "extrafanart"
+    extra.mkdir(parents=True)
+    (dest / "SSIS-001.mp4").write_bytes(b"video-bytes")
+    (dest / "poster.jpg").write_bytes(b"old-poster")
+    (dest / "fanart.jpg").write_bytes(b"old-fanart")
+    (extra / "fanart-01.jpg").write_bytes(b"old-sample")
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        row = await fill_jav_folder(settings, db, dest, "SSIS-001")
+        assert row["has_nfo"] == 1
+        assert row["has_poster"] == 1
+
+    asyncio.run(run())
+    assert (dest / "poster.jpg").read_bytes() == b"old-poster"
+    assert (dest / "fanart.jpg").read_bytes() == b"old-fanart"
+    assert (extra / "fanart-01.jpg").read_bytes() == b"old-sample"
+    assert (extra / "fanart-02.jpg").read_bytes() == b"new-sample"
+    assert "新标题" in (dest / "SSIS-001.nfo").read_text(encoding="utf-8")
+    assert client.urls == ["https://img.example/2.jpg"]
+    assert (dest / "SSIS-001.mp4").read_bytes() == b"video-bytes"
+
+
+def test_rescrape_rewrites_sidecars_and_keeps_the_video(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from app.library import Library
+
+    raw = _solid_jpeg(900, 600, (220, 20, 20), (20, 20, 220), 500)
+    client = _ImageClient({"https://img.example/1.jpg": b"fresh-sample"})
+    monkeypatch.setattr("app.scrape.site_client", lambda settings: _ImageHold(client))
+    monkeypatch.setattr(
+        "app.scrape.resolve_metadata",
+        _meta_with_cover([{"full": "https://img.example/1.jpg"}]),
+    )
+
+    async def fake_cover(settings, url, referer=None):
+        return raw
+
+    monkeypatch.setattr("app.scrape.fetch_cover_bytes", fake_cover)
+    dest = tmp_path / "media" / "202102" / "SSIS-001"
+    extra = dest / "extrafanart"
+    extra.mkdir(parents=True)
+    (dest / "SSIS-001.mp4").write_bytes(b"video-bytes")
+    (dest / "poster.jpg").write_bytes(b"old-poster")
+    (dest / "fanart.jpg").write_bytes(b"old-poster")
+    (dest / "SSIS-001.nfo").write_text("<movie><title>old</title></movie>", encoding="utf-8")
+    (extra / "fanart-01.jpg").write_bytes(b"old-sample")
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        library = Library(settings, db)
+        await library.refresh()
+        await db.insert_job(_job(settings.download_dir / "missing"))
+        out = await JobManager(settings, db, object(), library=library).rescrape("abc123")
+        assert out["scrape_status"] == "archived"
+        stored = await db.get_library("SSIS-001")
+        assert "新标题" in stored["title"]
+
+    asyncio.run(run())
+    assert (dest / "SSIS-001.mp4").read_bytes() == b"video-bytes"
+    assert (dest / "fanart.jpg").read_bytes() == raw
+    poster = (dest / "poster.jpg").read_bytes()
+    assert poster not in (b"old-poster", raw)
+    with Image.open(io.BytesIO(poster)) as image:
+        assert image.size == (400, 600)
+    nfo = (dest / "SSIS-001.nfo").read_text(encoding="utf-8")
+    assert "新标题" in nfo
+    assert "https://www.javbus.com/pics/actress/2xi_a.jpg" in nfo
+    assert (extra / "fanart-01.jpg").read_bytes() == b"fresh-sample"
+    assert client.urls == ["https://img.example/1.jpg"]
+    names = {path.name for path in dest.iterdir()}
+    assert names == {"SSIS-001.mp4", "SSIS-001.nfo", "poster.jpg", "fanart.jpg", "extrafanart"}
+
+
+def test_rescrape_leaves_sidecars_when_cover_download_fails(tmp_path, monkeypatch):
+    from app.library import Library
+    from app.scrape import ScrapeError
+
+    monkeypatch.setattr(
+        "app.scrape.resolve_metadata",
+        _meta_with_cover([{"full": "https://img.example/1.jpg"}]),
+    )
+
+    async def fake_cover(settings, url, referer=None):
+        raise ScrapeError("封面下载失败")
+
+    monkeypatch.setattr("app.scrape.fetch_cover_bytes", fake_cover)
+    dest = tmp_path / "media" / "202102" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "SSIS-001.mp4").write_bytes(b"video-bytes")
+    (dest / "poster.jpg").write_bytes(b"old-poster")
+    (dest / "fanart.jpg").write_bytes(b"old-fanart")
+    (dest / "SSIS-001.nfo").write_text("<movie><title>old</title></movie>", encoding="utf-8")
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        library = Library(settings, db)
+        await library.refresh()
+        await db.insert_job(_job(settings.download_dir / "missing"))
+        out = await JobManager(settings, db, object(), library=library).rescrape("abc123")
+        assert out["scrape_status"] == "error"
+        assert "封面" in (out["scrape_error"] or "")
+
+    asyncio.run(run())
+    assert (dest / "SSIS-001.mp4").read_bytes() == b"video-bytes"
+    assert (dest / "poster.jpg").read_bytes() == b"old-poster"
+    assert (dest / "fanart.jpg").read_bytes() == b"old-fanart"
+    assert "old" in (dest / "SSIS-001.nfo").read_text(encoding="utf-8")

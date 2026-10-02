@@ -955,11 +955,51 @@ class JobManager:
         job = await self._require(job_id)
         if job.get("status") != "complete":
             raise ValueError("只有下载完成的任务可以重新刮削")
+        code = normalize_code(job.get("code") or "")
+        hit = None
+        if code and self.library is not None and hasattr(self.library, "get"):
+            hit = await self.library.get(code)
+        if hit and hit.get("has_video"):
+            try:
+                await asyncio.to_thread(
+                    find_code_videos,
+                    code,
+                    Path(job.get("dest") or ""),
+                    self.settings.download_dir,
+                    max(0, int(self.settings.scrape_min_mb) * 1024 * 1024),
+                )
+            except ScrapeError:
+                updated = await self._rewrite_archived_jav(job, hit)
+                return await self.public(updated)
         await self.db.update_job(job_id, scrape_status="", scrape_error=None, archive_path="")
         fresh = await self.db.get_job(job_id)
         if not fresh:
             raise KeyError(job_id)
         return await self.public(await self.maybe_scrape(fresh))
+
+    async def _rewrite_archived_jav(self, job: dict, hit: dict) -> dict:
+        from app.library import archived_jav_path
+        from app.scrape import refresh_jav_sidecars
+
+        code = normalize_code(job.get("code") or "")
+        dest = archived_jav_path(self.settings, hit.get("path") or "")
+        if not dest.is_dir():
+            return await self._record_scrape_error(job, "没有可归档的视频")
+        job = await self._mark_scraping(job)
+        try:
+            async with self._scrape_lock:
+                result = await refresh_jav_sidecars(self.settings, self.db, dest, code)
+        except ScrapeError as exc:
+            log.warning("刮削失败 %s: %s", code, exc)
+            return await self._record_scrape_error(job, str(exc))
+        except Exception as exc:
+            log.warning("刮削失败 %s", code, exc_info=True)
+            return await self._record_scrape_error(job, str(exc))
+        if not result:
+            return await self._record_scrape_error(job, "没有可归档的视频")
+        if self.library is not None and hasattr(self.library, "upsert"):
+            await self.library.upsert(result)
+        return await self._mark_archived(job, result.get("path") or hit.get("path") or "")
 
     async def _require(self, job_id: str) -> dict:
         job = await self.db.get_job(job_id)

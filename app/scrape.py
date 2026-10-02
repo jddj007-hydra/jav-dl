@@ -438,17 +438,26 @@ def extrafanart_plan(samples) -> list[tuple[str, str]]:
     return planned
 
 
-async def download_extrafanart(settings: Settings, dest_dir: Path, samples) -> list[tuple[str, bytes]]:
-    """Download missing extrafanart. Failures are logged. Bytes are not cached."""
+async def download_extrafanart(
+    settings: Settings,
+    dest_dir: Path,
+    samples,
+    replace: bool = False,
+) -> list[tuple[str, bytes]]:
+    """Download extrafanart. Failures are logged. Bytes are not cached.
+
+    Existing files are skipped unless replace is set.
+    """
     pending: list[tuple[str, str]] = []
     for name, url in extrafanart_plan(samples):
         path = dest_dir / "extrafanart" / name
-        try:
-            if path.is_file() and path.stat().st_size > 0:
+        if not replace:
+            try:
+                if path.is_file() and path.stat().st_size > 0:
+                    continue
+            except OSError as exc:
+                log.warning("预览图跳过 %s: %s", name, exc)
                 continue
-        except OSError as exc:
-            log.warning("预览图跳过 %s: %s", name, exc)
-            continue
         pending.append((name, url))
     if not pending:
         return []
@@ -467,7 +476,11 @@ async def download_extrafanart(settings: Settings, dest_dir: Path, samples) -> l
     return saved
 
 
-def write_extrafanart(dest_dir: Path, images: list[tuple[str, bytes]] | None) -> None:
+def write_extrafanart(
+    dest_dir: Path,
+    images: list[tuple[str, bytes]] | None,
+    replace: bool = False,
+) -> None:
     pending = [(name, data) for name, data in (images or []) if name and data]
     if not pending:
         return
@@ -475,7 +488,7 @@ def write_extrafanart(dest_dir: Path, images: list[tuple[str, bytes]] | None) ->
     folder.mkdir(parents=True, exist_ok=True)
     for name, data in pending:
         path = folder / name
-        if path.is_file() and path.stat().st_size > 0:
+        if not replace and path.is_file() and path.stat().st_size > 0:
             continue
         path.write_bytes(data)
 
@@ -513,13 +526,17 @@ def crop_jav_poster(image_bytes: bytes) -> bytes | None:
     return data
 
 
-def write_images(dest_dir: Path, poster_bytes: bytes | None) -> tuple[bool, bool]:
+def write_images(
+    dest_dir: Path,
+    poster_bytes: bytes | None,
+    replace: bool = False,
+) -> tuple[bool, bool]:
     poster = dest_dir / "poster.jpg"
     fanart = dest_dir / "fanart.jpg"
     if poster_bytes:
-        if not fanart.exists() or fanart.stat().st_size == 0:
+        if replace or not fanart.exists() or fanart.stat().st_size == 0:
             fanart.write_bytes(poster_bytes)
-        if not poster.exists() or poster.stat().st_size == 0:
+        if replace or not poster.exists() or poster.stat().st_size == 0:
             poster.write_bytes(crop_jav_poster(poster_bytes) or poster_bytes)
     has_poster = poster.is_file() and poster.stat().st_size > 0
     has_fanart = fanart.is_file() and fanart.stat().st_size > 0
@@ -651,16 +668,36 @@ async def scrape_job(
     }
 
 
-def _write_jav_sidecars(dest_dir: Path, videos: list[Path], nfo_xml: str, poster_bytes: bytes | None) -> None:
+def _write_jav_sidecars(
+    dest_dir: Path,
+    videos: list[Path],
+    nfo_xml: str,
+    poster_bytes: bytes | None,
+    extra_images: list[tuple[str, bytes]] | None = None,
+) -> None:
     for video in videos:
         nfo = dest_dir / f"{video.stem}.nfo"
         if not nfo.exists() or nfo.stat().st_size == 0:
             nfo.write_text(nfo_xml, encoding="utf-8")
     write_images(dest_dir, poster_bytes)
+    write_extrafanart(dest_dir, extra_images)
+
+
+def _overwrite_jav_sidecars(
+    dest_dir: Path,
+    videos: list[Path],
+    nfo_xml: str,
+    poster_bytes: bytes | None,
+    extra_images: list[tuple[str, bytes]] | None,
+) -> None:
+    for video in videos:
+        (dest_dir / f"{video.stem}.nfo").write_text(nfo_xml, encoding="utf-8")
+    write_images(dest_dir, poster_bytes, replace=True)
+    write_extrafanart(dest_dir, extra_images, replace=True)
 
 
 async def fill_jav_folder(settings: Settings, db, dest_dir: Path, code: str) -> dict | None:
-    """Write NFO/poster next to an already archived JAV folder. Does not move the video."""
+    """Write missing NFO, poster, and extrafanart. Does not replace files or move the video."""
     try:
         videos = [path for path in dest_dir.iterdir() if is_video(path)]
     except OSError:
@@ -675,7 +712,39 @@ async def fill_jav_folder(settings: Settings, db, dest_dir: Path, code: str) -> 
             poster_bytes = await fetch_cover_bytes(settings, cover)
         except ScrapeError:
             poster_bytes = None
-    await asyncio.to_thread(_write_jav_sidecars, dest_dir, videos, build_nfo(meta), poster_bytes)
+    extra_images = await download_extrafanart(settings, dest_dir, meta.get("samples"))
+    await asyncio.to_thread(
+        _write_jav_sidecars, dest_dir, videos, build_nfo(meta), poster_bytes, extra_images,
+    )
+    from app.library import index_code_dir
+
+    return index_code_dir(dest_dir, dest_dir.parent.name)
+
+
+async def refresh_jav_sidecars(settings: Settings, db, dest_dir: Path, code: str) -> dict | None:
+    """Rewrite NFO, poster, fanart, and extrafanart for one archived code. The video stays."""
+    try:
+        videos = [path for path in dest_dir.iterdir() if is_video(path)]
+    except OSError:
+        return None
+    if not videos:
+        return None
+    meta = await resolve_metadata(settings, db, code)
+    poster_bytes = None
+    cover = (meta.get("cover") or "").strip()
+    if cover:
+        poster_bytes = await fetch_cover_bytes(settings, cover)
+    extra_images = await download_extrafanart(
+        settings, dest_dir, meta.get("samples"), replace=True,
+    )
+    await asyncio.to_thread(
+        _overwrite_jav_sidecars,
+        dest_dir,
+        videos,
+        build_nfo(meta),
+        poster_bytes,
+        extra_images,
+    )
     from app.library import index_code_dir
 
     return index_code_dir(dest_dir, dest_dir.parent.name)
