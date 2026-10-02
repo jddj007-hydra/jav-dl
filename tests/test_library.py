@@ -46,11 +46,15 @@ def test_scan_media_reads_nfo_fields(tmp_path):
         "code": "SSIS-001",
         "title": "Title",
         "release_date": "2021-02-18",
-        "actors": [{"name": "葵つかさ"}, "乙白さやか"],
+        "actors": [
+            {"name": "葵つかさ", "photo": "https://www.javbus.com/pics/actress/2xi_a.jpg"},
+            "乙白さやか",
+        ],
     }), encoding="utf-8")
     row = scan_media(tmp_path)[0]
     assert row["title"] == "Title"
     assert row["actors"] == ["葵つかさ", "乙白さやか"]
+    assert {path.name for path in folder.iterdir()} == {"SSIS-001.mp4", "SSIS-001.nfo"}
     assert row["release_date"] == "2021-02-18"
     assert row["added_at"] == video.stat().st_mtime
 

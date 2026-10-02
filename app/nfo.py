@@ -66,6 +66,8 @@ def build_nfo(meta: dict) -> str:
         a_el = ET.SubElement(movie, "actor")
         _text(a_el, "name", name)
         _text(a_el, "type", "Actor")
+        photo = actor.get("photo") if isinstance(actor, dict) else ""
+        _text(a_el, "thumb", photo)
     url = (meta.get("url") or "").strip()
     if url:
         _text(movie, "website", url)
