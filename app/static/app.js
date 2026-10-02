@@ -1806,7 +1806,7 @@ function renderFollow(data) {
       ${sub.target ? `<p class="path">${escapeHtml(sub.target)}</p>` : ""}
       ${sub.last_error ? `<p class="status bad">${escapeHtml(sub.last_error)}</p>` : ""}
       <div class="row foot">
-        <span class="muted">${escapeHtml(timeAgo(sub.last_check))}</span>
+        <span class="muted">${escapeHtml(timeAgo(sub.last_check))}${Number(sub.known) ? ` · 已记下 ${Number(sub.known)} 部` : ""}</span>
         <span class="row-actions">
           <button type="button" class="ghost small" data-follow-check="${sub.id}">检查</button>
           <button type="button" class="ghost small danger" data-follow-del="${sub.id}">删除</button>

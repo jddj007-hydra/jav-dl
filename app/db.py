@@ -595,7 +595,12 @@ class Database:
     async def list_subscriptions(self) -> list[dict]:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM subscriptions ORDER BY created_at DESC")
+            cur = await db.execute(
+                """SELECT s.*,
+                          (SELECT COUNT(*) FROM subscription_seen seen WHERE seen.sub_id = s.id) AS known
+                   FROM subscriptions s
+                   ORDER BY s.created_at DESC"""
+            )
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
 

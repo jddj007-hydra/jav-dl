@@ -7,6 +7,30 @@ from app.follow import check_sub, magnet_matches, new_subscription, resolve_targ
 from app.sources.javbus import parse_star_links
 
 
+def test_list_subscriptions_counts_seen_rows(tmp_path):
+    async def run():
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            download_dir=tmp_path / "dl",
+            media_dir=tmp_path / "media",
+        )
+        settings.ensure_dirs()
+        db = Database(settings)
+        await db.init()
+        row = new_subscription(
+            "actress", "葵", "https://www.javbus.com/star/x",
+            auto=False, want_uc=False, want_c=False, max_gb=0,
+        )
+        await db.add_subscription(row)
+        assert (await db.list_subscriptions())[0]["known"] == 0
+        await db.mark_seen(row["id"], "SSIS-001")
+        await db.mark_seen(row["id"], "SSIS-002")
+        await db.mark_seen(row["id"], "SSIS-001")
+        assert (await db.list_subscriptions())[0]["known"] == 2
+
+    asyncio.run(run())
+
+
 def test_parse_star_links_and_rules():
     html = """
     <a href="/star/2xi"><img title="葵つかさ"><span>葵つかさ</span><span>有碼</span></a>
