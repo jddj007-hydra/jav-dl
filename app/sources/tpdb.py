@@ -519,13 +519,62 @@ def choose_match(rows: list, kind: str, filename: str) -> dict | None:
     return None
 
 
+CANDIDATE_LIMIT = 8
+
+
+def _payload_rows(payload: dict) -> list:
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _public_candidate(item: dict) -> dict:
+    performers = item.get("performers") or []
+    if not isinstance(performers, list):
+        performers = []
+    return {
+        "id": str(item.get("id") or ""),
+        "kind": str(item.get("kind") or "scene"),
+        "title": str(item.get("title") or ""),
+        "site": str(item.get("site") or ""),
+        "date": str(item.get("date") or "")[:10],
+        "performers": [str(name) for name in performers if str(name).strip()],
+    }
+
+
 async def _parsed_item(settings: Settings, kind: str, query: str, filename: str) -> dict | None:
     payload = await _get_json(settings, list_path(kind), {"parse": query})
-    data = payload.get("data")
-    rows = data if isinstance(data, list) else []
-    if isinstance(data, dict):
-        rows = [data]
-    return choose_match(rows, kind, filename)
+    return choose_match(_payload_rows(payload), kind, filename)
+
+
+async def filename_candidates(settings: Settings, filename: str) -> tuple[dict | None, list[dict]]:
+    """Confident parse, or up to 8 candidates when the parse ties or misses.
+
+    A tied parse stops the walk. Later queries are not asked to break the tie.
+    """
+    queries = filename_queries(filename)
+    if not queries:
+        return None, []
+    for query in queries:
+        for kind in ("scene", "movie"):
+            payload = await _get_json(settings, list_path(kind), {"parse": query})
+            rows = _payload_rows(payload)
+            items = [
+                map_item(row, kind)
+                for row in rows
+                if isinstance(row, dict) and row.get("id")
+            ]
+            items = [item for item in items if _dates_close(filename, item.get("date") or "")]
+            if not items:
+                continue
+            chosen = choose_match(rows, kind, filename)
+            if chosen:
+                return chosen, []
+            return None, [_public_candidate(item) for item in items[:CANDIDATE_LIMIT]]
+    return None, []
 
 
 async def fetch_by_filename(settings: Settings, filename: str) -> dict:

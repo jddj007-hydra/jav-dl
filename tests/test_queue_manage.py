@@ -146,6 +146,123 @@ def test_watch_western_skips_a_queue_job(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def test_watch_western_parks_a_tie_and_keeps_it_after_restart(tmp_path, monkeypatch):
+    calls = []
+
+    async def fake_names(settings, filename):
+        calls.append(filename)
+        return None, [{
+            "id": "s1",
+            "kind": "scene",
+            "title": "One",
+            "site": "Site",
+            "date": "2024-01-02",
+            "performers": ["Ann"],
+        }]
+
+    monkeypatch.setattr("app.western_archive.filename_candidates", fake_names)
+    settings = _settings(tmp_path)
+    video = settings.download_dir / "Brazzers.24.01.02.Ann.Example.mp4"
+    video.write_bytes(b"x" * 80)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, object())
+        await mgr.watch_western()
+        assert video.is_file()
+        stored = await db.western_pending(str(video))
+        assert stored["job_id"] == ""
+        assert stored["candidates"][0]["id"] == "s1"
+        assert stored["candidates"][0]["performers"] == ["Ann"]
+        await mgr.watch_western()
+        restarted = JobManager(settings, Database(settings), object())
+        await restarted.watch_western()
+        assert calls == ["Brazzers.24.01.02.Ann.Example.mp4"]
+
+    asyncio.run(run())
+
+
+def test_watch_western_still_archives_a_unique_filename(tmp_path, monkeypatch):
+    archived = []
+
+    async def fake_names(settings, filename):
+        return {
+            "id": "s9",
+            "kind": "scene",
+            "title": "Ann Example",
+            "site": "Brazzers",
+            "date": "2024-01-02",
+            "performers": ["Ann"],
+        }, []
+
+    async def fake_job(settings, job, info, found=None):
+        archived.append(info)
+        return {"path": "Brazzers/ann"}
+
+    monkeypatch.setattr("app.western_archive.filename_candidates", fake_names)
+    monkeypatch.setattr("app.western_archive.scrape_western_job", fake_job)
+    settings = _settings(tmp_path)
+    video = settings.download_dir / "Brazzers.24.01.02.Ann.Example.mp4"
+    video.write_bytes(b"x" * 80)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, object())
+        await mgr.watch_western()
+        assert archived[0]["tpdb_id"] == "s9"
+        assert await db.western_pending(str(video)) is None
+
+    asyncio.run(run())
+
+
+def test_queue_western_without_id_stops_asking_tpdb(tmp_path, monkeypatch):
+    from app.western_archive import write_sidecar
+
+    calls = []
+
+    async def fake_names(settings, filename):
+        calls.append(filename)
+        return None, []
+
+    monkeypatch.setattr("app.western_archive.filename_candidates", fake_names)
+    settings = _settings(tmp_path)
+    dest = settings.download_dir / "western" / "loose"
+    dest.mkdir(parents=True)
+    video = dest / "Brazzers.24.01.02.Ann.Example.mp4"
+    video.write_bytes(b"x" * 80)
+    write_sidecar(dest, {"kind": "western", "tpdb_id": "", "title": "Ann"})
+
+    async def run():
+        import aiosqlite
+
+        db = Database(settings)
+        await db.init()
+        await db.insert_job(_row(str(dest), code="brazzers-ann", title="Ann Example"))
+        mgr = JobManager(settings, db, object())
+        out = await mgr.maybe_scrape(await db.get_job("job1"))
+        assert out["scrape_status"] == "error"
+        assert out["scrape_error"] == "待确认"
+        assert video.is_file()
+        stored = await db.western_pending(str(dest))
+        assert stored["job_id"] == "job1"
+        assert stored["candidates"] == []
+        first = len(calls)
+        assert first >= 1
+        async with aiosqlite.connect(db.path) as conn:
+            await conn.execute(
+                "UPDATE downloads SET updated_at = ? WHERE id = ?",
+                (time.time() - 1000, "job1"),
+            )
+            await conn.commit()
+        again = await mgr.maybe_scrape(await db.get_job("job1"))
+        assert again["scrape_error"] == "待确认"
+        assert len(calls) == first
+
+    asyncio.run(run())
+
+
 def test_delete_finished_job_and_reject_active(tmp_path):
     settings = _settings(tmp_path)
 

@@ -21,9 +21,12 @@ from app.scrape import (
     source_incomplete,
     source_mtime,
 )
+from app.sources.tpdb import TpdbError
 from app.western_archive import (
+    WesternNeedsConfirm,
     find_western_videos,
     list_ready_western,
+    match_western_release,
     read_sidecar,
     release_names_match,
     scrape_western_job,
@@ -663,6 +666,9 @@ class JobManager:
 
     async def _scrape_western(self, job: dict, info: dict) -> dict:
         dest = Path(job.get("dest") or "")
+        known_id = str(info.get("tpdb_id") or "").strip()
+        if not known_id and await self.db.has_western_pending(str(dest)):
+            return job
         settle = max(0, int(self.settings.scrape_settle_seconds))
         min_bytes = max(0, int(self.settings.scrape_min_mb) * 1024 * 1024)
         try:
@@ -682,6 +688,28 @@ class JobManager:
         mtime = await asyncio.to_thread(source_mtime, src)
         if mtime and time.time() - mtime < settle:
             return await self._mark_waiting(job)
+        if not known_id:
+            try:
+                chosen, candidates = await match_western_release(self.settings, src)
+            except TpdbError as exc:
+                return await self._record_scrape_error(job, str(exc))
+            if not chosen:
+                label = src.name or str(job.get("title") or "")
+                job_id = str(job.get("id") or "")
+                await self.db.save_western_pending(str(src), label, job_id, candidates)
+                if str(dest) != str(src):
+                    await self.db.save_western_pending(str(dest), dest.name or label, job_id, candidates)
+                return await self._record_scrape_error(job, "待确认")
+            info = {
+                **info,
+                "kind": "western",
+                "tpdb_id": chosen.get("id") or "",
+                "tpdb_kind": chosen.get("kind") or "scene",
+                "site": chosen.get("site") or info.get("site") or "",
+                "title": chosen.get("title") or info.get("title") or "",
+                "date": chosen.get("date") or info.get("date") or "",
+                "performers": chosen.get("performers") or info.get("performers") or [],
+            }
         job = await self._mark_scraping(job)
         try:
             async with self._scrape_lock:
@@ -745,11 +773,17 @@ class JobManager:
             if any(self._claims(job, src) for job in owners):
                 continue
             key = str(src)
+            if await self.db.has_western_pending(key):
+                continue
             if self._watch_fail.get(key, 0) > now:
                 continue
             try:
                 async with self._scrape_lock:
                     result = await scrape_western_source(self.settings, src)
+            except WesternNeedsConfirm as exc:
+                await self.db.save_western_pending(key, src.name, "", exc.candidates)
+                log.info("欧美文件待确认 %s，候选 %s", src.name, len(exc.candidates))
+                continue
             except ScrapeError as exc:
                 log.warning("监控归档失败 %s: %s", key, exc)
                 if self._watch_failed(key, now):

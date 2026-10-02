@@ -21,7 +21,7 @@ from app.scrape import (
     source_incomplete,
     source_mtime,
 )
-from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail
+from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail, filename_candidates
 from app.studios import is_vr_work
 from app.western_magnets import is_western_release_name, release_text
 
@@ -292,21 +292,44 @@ def _match_names(src: Path, min_bytes: int) -> list[str]:
     return names
 
 
-async def scrape_western_source(settings: Settings, src: Path) -> dict:
-    """Archive one finished download that never entered the jav-dl queue."""
+class WesternNeedsConfirm(Exception):
+    """Filename parse tied or missed. candidates may be empty."""
+
+    def __init__(self, candidates: list[dict]):
+        self.candidates = list(candidates)
+        super().__init__("待确认")
+
+
+async def match_western_release(settings: Settings, src: Path) -> tuple[dict | None, list[dict]]:
+    """Unique detail, or candidates when no name is confident.
+
+    A transport error is re-raised so the caller can retry later.
+    """
     min_bytes = max(0, int(settings.scrape_min_mb) * 1024 * 1024)
-    detail = None
-    error = "没有匹配的欧美作品"
+    saw_error = ""
     for name in _match_names(src, min_bytes):
         try:
-            detail = await fetch_by_filename(settings, name)
+            chosen, candidates = await filename_candidates(settings, name)
         except TpdbError as exc:
-            error = str(exc)
+            saw_error = str(exc)
             continue
-        if detail:
-            break
+        if chosen:
+            return chosen, []
+        if candidates:
+            return None, candidates
+    if saw_error:
+        raise TpdbError(saw_error)
+    return None, []
+
+
+async def scrape_western_source(settings: Settings, src: Path) -> dict:
+    """Archive one finished download that never entered the jav-dl queue."""
+    try:
+        detail, candidates = await match_western_release(settings, src)
+    except TpdbError as exc:
+        raise ScrapeError(str(exc)) from exc
     if not detail:
-        raise ScrapeError(error)
+        raise WesternNeedsConfirm(candidates)
     info = {
         "kind": "western",
         "tpdb_id": detail.get("id") or "",

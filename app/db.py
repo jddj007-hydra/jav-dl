@@ -91,6 +91,14 @@ CREATE TABLE IF NOT EXISTS plays (
     last_played_at REAL NOT NULL,
     PRIMARY KEY (kind, key)
 );
+CREATE TABLE IF NOT EXISTS western_pending (
+    path TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    job_id TEXT NOT NULL DEFAULT '',
+    candidates TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 DOWNLOAD_COLUMNS = (
@@ -709,6 +717,50 @@ class Database:
                 (code,),
             )
             return await cur.fetchone() is not None
+
+    async def save_western_pending(
+        self,
+        path: str,
+        name: str,
+        job_id: str,
+        candidates: list,
+    ) -> None:
+        now = time.time()
+        payload = json.dumps(list(candidates or []), ensure_ascii=False)
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO western_pending
+                   (path, name, job_id, candidates, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET
+                     name = excluded.name,
+                     job_id = excluded.job_id,
+                     candidates = excluded.candidates,
+                     updated_at = excluded.updated_at""",
+                (path, name or path, job_id or "", payload, now, now),
+            )
+            await db.commit()
+
+    async def western_pending(self, path: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM western_pending WHERE path = ?",
+                (path,),
+            )
+            row = await cur.fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        try:
+            parsed = json.loads(item.get("candidates") or "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        item["candidates"] = parsed if isinstance(parsed, list) else []
+        return item
+
+    async def has_western_pending(self, path: str) -> bool:
+        return await self.western_pending(path) is not None
 
     async def western_has_id(self, tpdb_id: str) -> bool:
         if not tpdb_id:

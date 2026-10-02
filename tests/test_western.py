@@ -1148,6 +1148,78 @@ def test_choose_match_uses_performer_and_release_date():
     assert choose_match(old, "scene", "SweetSinner.26.09.01.Blake.Blossom") is None
 
 
+def test_filename_candidates_unique_tie_and_cap(monkeypatch):
+    import asyncio
+
+    from app.config import Settings
+    from app.sources.tpdb import filename_candidates
+
+    settings = Settings(tpdb_api_key="token")
+    calls = []
+
+    async def fake_get(settings, path, params=None):
+        calls.append(path)
+        if path != "/scenes":
+            return {"data": [{"id": "later", "title": "Later", "date": ""}]}
+        rows = [
+            {"id": "a", "title": "One", "date": "", "site": {"name": "Site"}, "performers": [{"name": "Ann"}]},
+            {"id": "b", "title": "Two", "date": "", "site": {"name": "Site"}, "performers": [{"name": "Bea"}]},
+        ]
+        return {"data": rows}
+
+    monkeypatch.setattr("app.sources.tpdb._get_json", fake_get)
+
+    async def tie():
+        chosen, candidates = await filename_candidates(settings, "clip.mp4")
+        assert chosen is None
+        assert [item["id"] for item in candidates] == ["a", "b"]
+        assert candidates[0]["kind"] == "scene"
+        assert candidates[0]["site"] == "Site"
+        assert candidates[0]["performers"] == ["Ann"]
+        assert calls == ["/scenes"]
+
+    asyncio.run(tie())
+
+    calls.clear()
+
+    async def only(settings, path, params=None):
+        calls.append(path)
+        return {"data": [{"id": "only", "title": "Only", "date": "2024-01-02", "site": {"name": "Vixen"}, "performers": [{"name": "Ann"}]}]}
+
+    monkeypatch.setattr("app.sources.tpdb._get_json", only)
+
+    async def unique():
+        chosen, candidates = await filename_candidates(settings, "clip.mp4")
+        assert chosen["id"] == "only"
+        assert candidates == []
+
+    asyncio.run(unique())
+
+    async def many(settings, path, params=None):
+        return {"data": [{"id": str(i), "title": f"T{i}", "date": ""} for i in range(9)]}
+
+    monkeypatch.setattr("app.sources.tpdb._get_json", many)
+
+    async def capped():
+        chosen, candidates = await filename_candidates(settings, "clip.mp4")
+        assert chosen is None
+        assert [item["id"] for item in candidates] == [str(i) for i in range(8)]
+
+    asyncio.run(capped())
+
+    async def empty(settings, path, params=None):
+        return {"data": []}
+
+    monkeypatch.setattr("app.sources.tpdb._get_json", empty)
+
+    async def miss():
+        chosen, candidates = await filename_candidates(settings, "clip.mp4")
+        assert chosen is None
+        assert candidates == []
+
+    asyncio.run(miss())
+
+
 def test_filename_queries_drop_group_and_quality():
     from app.sources.tpdb import filename_queries
 
