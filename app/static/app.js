@@ -65,6 +65,18 @@ const browseNames = new Map();
 const westernTagIds = new Map();
 
 const JAV_KINDS = ["censored", "uncensored"];
+// 有码「熟女」在站点上叫「成熟的女人」，无码「中出」叫「內射」。空路径表示该列表没有这一类。
+const JAV_GENRES = [
+  { label: "中出", censored: "/genre/4", uncensored: "/uncensored/genre/gre084" },
+  { label: "巨乳", censored: "/genre/e", uncensored: "/uncensored/genre/gre065" },
+  { label: "熟女", censored: "/genre/13", uncensored: "/uncensored/genre/gre022" },
+  { label: "制服", censored: "/genre/3i", uncensored: "/uncensored/genre/2" },
+  { label: "单体", censored: "/genre/f", uncensored: "" },
+  { label: "痴女", censored: "", uncensored: "/uncensored/genre/gre025" },
+  { label: "多P", censored: "/genre/3", uncensored: "/uncensored/genre/gre126" },
+  { label: "OL", censored: "/genre/18", uncensored: "" },
+];
+let javbusBase = "";
 const MEDIA_FORMATS = ["flat", "vr"];
 const WESTERN_KINDS = ["scene", "movie"];
 const WESTERN_FACETS = ["performer", "site", "tag"];
@@ -150,7 +162,7 @@ function canonicalFromParsed(parsed) {
     kind: oneOf(qget(parsed.query, "kind"), JAV_KINDS, "censored"),
     format: oneOf(qget(parsed.query, "format"), MEDIA_FORMATS, "flat"),
     page: String(pageNum(qget(parsed.query, "page"))),
-    genre: qget(parsed.query, "genre"),
+    genre: javGenreLabel(qget(parsed.query, "genre")),
     browse: /^https?:\/\//i.test(browse) ? browse : "",
     code: qget(parsed.query, "code"),
   });
@@ -267,7 +279,50 @@ const STATUS_LABEL = {
   removed: "已取消",
 };
 
+function rememberJavbusBase(settings) {
+  const raw = settings && settings.javbus_base;
+  if (raw) javbusBase = String(raw).replace(/\/$/, "");
+}
+
+async function ensureJavbusBase() {
+  if (javbusBase) return javbusBase;
+  try {
+    rememberJavbusBase(await api("/api/settings"));
+  } catch {
+    /* 设置读不到时用站点默认域名 */
+  }
+  if (!javbusBase) javbusBase = "https://www.javbus.com";
+  return javbusBase;
+}
+
+function javGenreLabel(value) {
+  const row = JAV_GENRES.find((item) => item.label === value);
+  return row ? row.label : "";
+}
+
+function javGenreRow() {
+  return JAV_GENRES.find((item) => item.label === javGenre) || null;
+}
+
+function javGenrePath() {
+  const row = javGenreRow();
+  if (!row) return "";
+  return javKind === "uncensored" ? row.uncensored : row.censored;
+}
+
+function syncJavGenres() {
+  const bar = $("jav-genres");
+  if (!bar) return;
+  const detail = !$("meta-card").hidden || !$("resources-wrap").hidden;
+  const show = javFormat !== "vr" && javMode !== "search" && !javBrowse && !detail;
+  bar.hidden = !show;
+  bar.querySelectorAll("button").forEach((btn) => {
+    btn.classList.toggle("on", show && btn.dataset.genre === javGenre);
+  });
+}
+
 function renderPanelLinks(settings) {
+  rememberJavbusBase(settings);
   const links = (settings && settings.panels) || [];
   const html = links.map((item) => {
     const url = escapeHtml(item.url || "");
@@ -740,15 +795,30 @@ function showJavListSurface() {
   $("jav-feed").hidden = false;
   $("works-wrap").hidden = false;
   const browsing = javMode === "browse" && javBrowse;
-  $("works-heading").textContent = browsing ? (javBrowse.name || "目录") : "作品";
+  const row = !browsing && javFormat !== "vr" ? javGenreRow() : null;
+  $("works-heading").textContent = browsing ? (javBrowse.name || "目录") : (row ? row.label : "作品");
   showBack(Boolean(browsing) || navIndex > 0);
-  $("code-input").value = browsing ? "" : lastWorksQuery;
+  $("code-input").value = browsing || row ? "" : lastWorksQuery;
   renderWorks(lastWorks);
+  syncJavGenres();
   if (javMode === "search") $("jav-pager").innerHTML = "";
   else javPager(javPage, browsing ? javBrowse.url : "");
+  if (row && !javGenrePath()) {
+    const next = $("jav-pager").querySelectorAll("button")[1];
+    if (next) next.disabled = true;
+  }
   const n = lastWorks.length;
   if (browsing) {
     setStatus($("search-status"), n ? `${javBrowse.name} 的作品` : "没有更多了", n ? "good" : "bad");
+    return;
+  }
+  if (row) {
+    if (!javGenrePath()) {
+      const side = javKind === "uncensored" ? "无码" : "有码";
+      setStatus($("search-status"), `${side}没有「${row.label}」这一类`, "bad");
+      return;
+    }
+    setStatus($("search-status"), n ? `${row.label} · ${n} 部` : "没有更多了", n ? "good" : "bad");
     return;
   }
   const fmt = javFormat === "vr" ? "VR" : "平面";
@@ -778,7 +848,7 @@ function applyJav(query) {
     javBrowse = { url: browse, name: browseNames.get(browse) || "目录", page: javPage };
   } else {
     javBrowse = null;
-    if (!code) javMode = "latest";
+    if (!code) javMode = javFormat !== "vr" && javGenre ? "genre" : "latest";
   }
   if (code) {
     $("code-input").value = code;
@@ -791,6 +861,10 @@ function applyJav(query) {
   }
   if (browse) {
     loadJavBrowse(browse, javBrowse.name, javPage);
+    return;
+  }
+  if (javFormat !== "vr" && javGenre) {
+    loadJavGenre(javPage);
     return;
   }
   loadJavFeed(javPage);
@@ -928,6 +1002,7 @@ async function loadJavBrowse(url, name, page) {
     rememberWorks(name, items);
     renderWorks(items);
     javLoadedKey = javListKey();
+    syncJavGenres();
     javPager(page, url);
     if (!items.length) {
       const buttons = $("jav-pager").querySelectorAll("button");
@@ -942,6 +1017,69 @@ async function loadJavBrowse(url, name, page) {
   } catch (err) {
     if (view !== javView) return;
     clearWorksView();
+    setStatus($("search-status"), err.message, "bad");
+  }
+}
+
+async function loadJavGenre(page) {
+  const view = ++javView;
+  const row = javGenreRow();
+  const name = row ? row.label : "类型";
+  javMode = "genre";
+  javBrowse = null;
+  javPage = page;
+  fromWorks = false;
+  showBack(navIndex > 0);
+  clearDetail();
+  $("jav-feed").hidden = false;
+  $("works-heading").textContent = name;
+  $("code-input").value = "";
+  syncJavGenres();
+  showSkeleton("works-wrap", "works-list");
+  const path = javGenrePath();
+  if (!path) {
+    if (view !== javView) return;
+    rememberWorks("", []);
+    renderWorks([]);
+    javLoadedKey = javListKey();
+    javPager(page, "");
+    const buttons = $("jav-pager").querySelectorAll("button");
+    if (buttons[1]) buttons[1].disabled = true;
+    const side = javKind === "uncensored" ? "无码" : "有码";
+    setStatus($("search-status"), `${side}没有「${name}」这一类`, "bad");
+    return;
+  }
+  setStatus($("search-status"), `正在列 ${name}…`);
+  try {
+    const base = await ensureJavbusBase();
+    if (view !== javView) return;
+    const url = base.replace(/\/$/, "") + path;
+    const params = new URLSearchParams({ url, page: String(page), format: "flat" });
+    const data = await api("/api/jav/browse?" + params.toString());
+    if (view !== javView) return;
+    const items = data.items || [];
+    rememberWorks("", items);
+    renderWorks(items);
+    javLoadedKey = javListKey();
+    javPager(page, "");
+    if (!items.length) {
+      const buttons = $("jav-pager").querySelectorAll("button");
+      if (buttons[1]) buttons[1].disabled = true;
+    }
+    const n = items.length;
+    setStatus(
+      $("search-status"),
+      data.error || (n ? `${name} · ${n} 部` : (page > 1 ? "没有更多了" : `${name} 没有作品`)),
+      n && !data.error ? "good" : "bad",
+    );
+  } catch (err) {
+    if (view !== javView) return;
+    rememberWorks("", []);
+    renderWorks([]);
+    $("works-wrap").hidden = false;
+    javPager(page, "");
+    const buttons = $("jav-pager").querySelectorAll("button");
+    if (buttons[1]) buttons[1].disabled = true;
     setStatus($("search-status"), err.message, "bad");
   }
 }
@@ -964,6 +1102,7 @@ async function loadJavFeed(page) {
     rememberWorks("", items);
     renderWorks(items);
     javLoadedKey = javListKey();
+    syncJavGenres();
     javPager(page, "");
     if (!items.length) {
       $("jav-pager").querySelectorAll("button")[1].disabled = true;
@@ -991,6 +1130,7 @@ function ensureJavLatest() {
 async function runCodeSearch(code, { fromList = false } = {}) {
   const view = ++javView;
   fromWorks = fromList;
+  $("jav-genres").hidden = true;
   showBack(fromList && lastWorks.length > 0);
   if (fromList) $("jav-feed").hidden = true;
   if (fromList) {
@@ -1066,7 +1206,9 @@ $("search-form").addEventListener("submit", async (e) => {
     return;
   }
   leaveJavBrowse();
+  javGenre = "";
   javMode = "search";
+  $("jav-genres").hidden = true;
   $("jav-pager").innerHTML = "";
   fromWorks = false;
   showBack(false);
@@ -1106,7 +1248,6 @@ $("jav-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-kind]");
   if (!btn) return;
   javKind = btn.dataset.kind;
-  javGenre = "";
   javBrowse = null;
   pushHash(javPageHash(1, ""));
 });
@@ -1127,6 +1268,14 @@ $("jav-format").addEventListener("click", (e) => {
 
 $("jav-latest").addEventListener("click", () => {
   javGenre = "";
+  javBrowse = null;
+  pushHash(javPageHash(1, ""));
+});
+
+$("jav-genres").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-genre]");
+  if (!btn || javFormat === "vr") return;
+  javGenre = btn.dataset.genre || "";
   javBrowse = null;
   pushHash(javPageHash(1, ""));
 });
@@ -1766,6 +1915,7 @@ function toggleNotifyFields() {
 
 async function loadSettings() {
   const s = await api("/api/settings");
+  rememberJavbusBase(s);
   const form = $("settings-form");
   form.proxy_enabled.checked = !!s.proxy_enabled;
   form.proxy_url.value = s.proxy_url || "";
