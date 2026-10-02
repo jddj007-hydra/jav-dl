@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=34" />
+  <link rel="stylesheet" href="/static/style.css?v=35" />
 </head>
 <body>
   <header class="top">
@@ -55,6 +55,10 @@
           <button type="button" data-format="vr">VR</button>
         </div>
         <button type="button" class="ghost" id="jav-latest">最新</button>
+        <div class="seg density-seg" aria-label="疏密">
+          <button type="button" data-density-pick="" class="on">疏</button>
+          <button type="button" data-density-pick="compact">密</button>
+        </div>
         <span class="pager" id="jav-pager"></span>
       </div>
       <div class="theme-bar" id="jav-genres" hidden>
@@ -104,6 +108,10 @@
           <button type="button" data-format="vr">VR</button>
         </div>
         <button type="button" class="ghost" id="western-latest">最新</button>
+        <div class="seg density-seg" aria-label="疏密">
+          <button type="button" data-density-pick="" class="on">疏</button>
+          <button type="button" data-density-pick="compact">密</button>
+        </div>
         <span class="pager" id="western-pager"></span>
       </div>
       <div class="theme-bar" id="western-themes">
@@ -161,6 +169,10 @@
         </div>
         <input id="library-q" type="search" autocomplete="off" spellcheck="false" placeholder="搜番号、标题或演员" />
         <select id="library-sort" aria-label="排序"></select>
+        <div class="seg density-seg" aria-label="疏密">
+          <button type="button" data-density-pick="" class="on">疏</button>
+          <button type="button" data-density-pick="compact">密</button>
+        </div>
         <span class="lib-count" id="library-count"></span>
       </div>
       <div class="theme-bar" id="library-facets" hidden></div>
@@ -411,6 +423,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=52"></script>
+  <script src="/static/app.js?v=53"></script>
 </body>
 </html>

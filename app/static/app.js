@@ -155,6 +155,7 @@ function canonicalFromParsed(parsed) {
       theme: knownThemes().includes(theme) ? theme : "",
       facet,
       id: qget(parsed.query, "id"),
+      density: qget(parsed.query, "density") === "compact" ? "compact" : "",
     });
   }
   const browse = qget(parsed.query, "browse");
@@ -165,7 +166,26 @@ function canonicalFromParsed(parsed) {
     genre: javGenreLabel(qget(parsed.query, "genre")),
     browse: /^https?:\/\//i.test(browse) ? browse : "",
     code: qget(parsed.query, "code"),
+    density: qget(parsed.query, "density") === "compact" ? "compact" : "",
   });
+}
+
+function applyPageDensity(query) {
+  libraryDensity = qget(query, "density") === "compact" ? "compact" : "";
+  document.body.dataset.density = libraryDensity;
+  document.querySelectorAll("[data-density-pick]").forEach((btn) => {
+    btn.classList.toggle("on", (btn.dataset.densityPick || "") === libraryDensity);
+  });
+}
+
+function setPageDensity(value) {
+  const parsed = parseHash();
+  if (parsed.name === "queue" || parsed.name === "follow" || parsed.name === "settings") return;
+  if (value === "compact") parsed.query.set("density", "compact");
+  else parsed.query.delete("density");
+  const next = canonicalFromParsed(parsed);
+  if (next === hashNow()) return;
+  pushHash(next);
 }
 
 function javListKey() {
@@ -374,6 +394,7 @@ function applyHash(force) {
   const viewName = showNamedView(parsed.name);
   window.scrollTo(0, 0);
   if (viewName === "queue" || viewName === "follow" || viewName === "settings") {
+    document.body.dataset.density = "";
     if (viewName === "follow") loadFollow();
     if (viewName === "settings") loadSettings();
     return;
@@ -786,6 +807,7 @@ function javPageHash(page, browse) {
     page: String(page),
     genre: javGenre,
     browse: browse || "",
+    density: libraryDensity,
   });
 }
 
@@ -835,6 +857,7 @@ function javPager(page, browse) {
 }
 
 function applyJav(query) {
+  applyPageDensity(query);
   javKind = oneOf(qget(query, "kind"), JAV_KINDS, "censored");
   javFormat = oneOf(qget(query, "format"), MEDIA_FORMATS, "flat");
   javPage = pageNum(qget(query, "page"));
@@ -1201,6 +1224,7 @@ $("search-form").addEventListener("submit", async (e) => {
       format: javFormat,
       page: "1",
       code: q,
+      density: libraryDensity,
     }));
     btn.disabled = false;
     return;
@@ -1223,6 +1247,7 @@ $("search-form").addEventListener("submit", async (e) => {
         format: javFormat,
         page: "1",
         code: data.code,
+        density: libraryDensity,
       }));
       return;
     }
@@ -1293,6 +1318,7 @@ $("works-list").addEventListener("click", (e) => {
     genre: javGenre,
     browse,
     code,
+    density: libraryDensity,
   }));
 });
 
@@ -2061,6 +2087,7 @@ $("meta-card").addEventListener("click", (e) => {
       page: "1",
       genre: javGenre,
       browse: url,
+      density: libraryDensity,
     }));
     return;
   }
@@ -2344,6 +2371,7 @@ function westernPageHash(page, facet, id) {
     theme: westernTheme,
     facet: facet || "",
     id: id || "",
+    density: libraryDensity,
   });
 }
 
@@ -2376,6 +2404,7 @@ function showWesternListSurface() {
 }
 
 function applyWestern(query) {
+  applyPageDensity(query);
   westernKind = oneOf(qget(query, "kind"), WESTERN_KINDS, "scene");
   westernFormat = oneOf(qget(query, "format"), MEDIA_FORMATS, "flat");
   westernPage = pageNum(qget(query, "page"));
@@ -2684,6 +2713,7 @@ $("western-works").addEventListener("click", (e) => {
     page: String(westernPage),
     theme: westernTheme,
     id: card.dataset.id,
+    density: libraryDensity,
   }));
 });
 
@@ -2695,6 +2725,7 @@ function openWesternById(id) {
     format: westernFormat || "flat",
     page: "1",
     id,
+    density: libraryDensity,
   }));
 }
 
@@ -2758,6 +2789,7 @@ $("western-meta").addEventListener("click", (e) => {
       theme: westernTheme,
       facet,
       id: name,
+      density: libraryDensity,
     }));
     return;
   }
@@ -3053,6 +3085,7 @@ function openCodeDetail(code) {
     format,
     page: "1",
     code,
+    density: libraryDensity,
   }));
 }
 
@@ -3066,7 +3099,6 @@ function applyLibrary(query) {
   const nextActor = qget(query, "actor");
   const nextStudio = qget(query, "studio");
   const nextSeries = qget(query, "series");
-  const nextDensity = qget(query, "density") === "compact" ? "compact" : "";
   const filterKey = JSON.stringify([nextKind, nextSort, nextQuery, nextActor, nextStudio, nextSeries]);
   if (filterKey !== libraryFilterKey) libraryLimit = LIB_PAGE;
   libraryFilterKey = filterKey;
@@ -3076,8 +3108,7 @@ function applyLibrary(query) {
   libraryActor = nextActor;
   libraryStudio = nextStudio;
   librarySeries = nextSeries;
-  libraryDensity = nextDensity;
-  document.body.dataset.density = libraryDensity;
+  applyPageDensity(query);
   for (const child of $("library-kind").querySelectorAll("button")) {
     child.classList.toggle("on", child.dataset.lib === libraryKind);
   }
@@ -3097,6 +3128,14 @@ $("library-facets").addEventListener("click", (e) => {
   if (which === "studio" || which === "all") libraryStudio = "";
   if (which === "series" || which === "all") librarySeries = "";
   pushHash(libraryHash());
+});
+
+document.querySelectorAll(".density-seg").forEach((seg) => {
+  seg.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-density-pick]");
+    if (!btn) return;
+    setPageDensity(btn.dataset.densityPick || "");
+  });
 });
 
 $("library-kind").addEventListener("click", (e) => {
