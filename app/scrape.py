@@ -34,6 +34,8 @@ PACK_RANGE_RE = re.compile(r"\d{3}\s*[-~]\s*\d{3}")
 
 MONTH_RE = re.compile(r"(\d{4})[-/.](\d{1,2})")
 BUCKET_DIRS = {"jav-dl", "xunlei", "western"}
+IMAGE_MAX_BYTES = 8 * 1024 * 1024
+EXTRA_FANART_LIMIT = 20
 log = logging.getLogger("app.scrape")
 
 
@@ -392,6 +394,15 @@ async def resolve_metadata(settings: Settings, db, code: str) -> dict:
     return meta
 
 
+def _checked_image(response, fail: str, too_big: str) -> bytes:
+    content = response.content or b""
+    if response.status_code >= 400 or not content:
+        raise ScrapeError(fail)
+    if len(content) > IMAGE_MAX_BYTES:
+        raise ScrapeError(too_big)
+    return content
+
+
 async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = None) -> bytes:
     if not url:
         raise ScrapeError("没有封面地址")
@@ -403,14 +414,70 @@ async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = 
         return cached.read_bytes()
     async with site_client(settings) as client:
         page = referer or (settings.javbus_base.rstrip("/") + "/")
-        r = await client.get(url, headers={"Referer": page})
-    if r.status_code >= 400 or not r.content:
-        raise ScrapeError("封面下载失败")
-    if len(r.content) > 8 * 1024 * 1024:
-        raise ScrapeError("封面过大")
-    cached.write_bytes(r.content)
+        response = await client.get(url, headers={"Referer": page})
+    content = _checked_image(response, "封面下载失败", "封面过大")
+    cached.write_bytes(content)
     trim_img_cache(cache_dir)
-    return r.content
+    return content
+
+
+def extrafanart_plan(samples) -> list[tuple[str, str]]:
+    """First 20 sample full URLs, named fanart-01.jpg onward."""
+    if not isinstance(samples, list):
+        return []
+    planned: list[tuple[str, str]] = []
+    for sample in samples:
+        if len(planned) >= EXTRA_FANART_LIMIT:
+            break
+        if not isinstance(sample, dict):
+            continue
+        url = str(sample.get("full") or "").strip()
+        if not url:
+            continue
+        planned.append((f"fanart-{len(planned) + 1:02d}.jpg", url))
+    return planned
+
+
+async def download_extrafanart(settings: Settings, dest_dir: Path, samples) -> list[tuple[str, bytes]]:
+    """Download missing extrafanart. Failures are logged. Bytes are not cached."""
+    pending: list[tuple[str, str]] = []
+    for name, url in extrafanart_plan(samples):
+        path = dest_dir / "extrafanart" / name
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                continue
+        except OSError as exc:
+            log.warning("预览图跳过 %s: %s", name, exc)
+            continue
+        pending.append((name, url))
+    if not pending:
+        return []
+    saved: list[tuple[str, bytes]] = []
+    page = settings.javbus_base.rstrip("/") + "/"
+    try:
+        async with site_client(settings) as client:
+            for name, url in pending:
+                try:
+                    response = await client.get(url, headers={"Referer": page})
+                    saved.append((name, _checked_image(response, "图片下载失败", "图片过大")))
+                except Exception as exc:
+                    log.warning("预览图跳过 %s: %s", name, exc)
+    except Exception as exc:
+        log.warning("预览图下载中断: %s", exc)
+    return saved
+
+
+def write_extrafanart(dest_dir: Path, images: list[tuple[str, bytes]] | None) -> None:
+    pending = [(name, data) for name, data in (images or []) if name and data]
+    if not pending:
+        return
+    folder = dest_dir / "extrafanart"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, data in pending:
+        path = folder / name
+        if path.is_file() and path.stat().st_size > 0:
+            continue
+        path.write_bytes(data)
 
 
 def crop_jav_poster(image_bytes: bytes) -> bytes | None:
@@ -498,12 +565,14 @@ def _commit_jav(
     min_bytes: int,
     download_root: Path,
     cover: str,
+    extra_images: list[tuple[str, bytes]] | None = None,
 ) -> tuple[bool, bool]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     archive_videos(code, videos, dest_dir, nfo_xml)
     has_poster, has_fanart = write_images(dest_dir, poster_bytes)
     if cover and not (has_poster and has_fanart):
         raise ScrapeError("封面写入失败")
+    write_extrafanart(dest_dir, extra_images)
     if not src.is_file() and not iter_videos(src, min_bytes):
         safe_rmtree(src, download_root)
     return has_poster, has_fanart
@@ -537,6 +606,7 @@ async def scrape_job(
     cover = (meta.get("cover") or "").strip()
     if cover:
         poster_bytes = await fetch_cover_bytes(settings, cover)
+    extra_images = await download_extrafanart(settings, dest_dir, meta.get("samples"))
 
     has_poster, _has_fanart = await asyncio.to_thread(
         _commit_jav,
@@ -549,6 +619,7 @@ async def scrape_job(
         min_bytes,
         settings.download_dir,
         cover,
+        extra_images,
     )
     log.info("已归档 %s -> %s", code, f"{month}/{code}")
 

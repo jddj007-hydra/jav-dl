@@ -639,3 +639,207 @@ def test_write_images_does_not_replace_existing_files(tmp_path):
 
     assert (dest / "poster.jpg").read_bytes() == b"old-poster"
     assert (dest / "fanart.jpg").read_bytes() == b"old-fanart"
+
+
+class _ImageHold:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _ImageClient:
+    def __init__(self, bodies: dict[str, bytes | Exception], status: dict[str, int] | None = None):
+        self.bodies = bodies
+        self.status = status or {}
+        self.urls: list[str] = []
+
+    async def get(self, url, headers=None):
+        import httpx
+
+        self.urls.append(url)
+        body = self.bodies.get(url, b"")
+        if isinstance(body, Exception):
+            raise body
+        code = self.status.get(url, 200)
+        return httpx.Response(code, content=body, request=httpx.Request("GET", url))
+
+
+def _scrape_settings(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        scrape_min_mb=0,
+    )
+    settings.ensure_dirs()
+    return settings
+
+
+def test_scrape_job_writes_extrafanart_and_skips_a_failed_sample(tmp_path, monkeypatch, caplog):
+    import logging
+
+    samples = [
+        {"full": "https://img.example/a.jpg", "thumb": "https://img.example/a-t.jpg"},
+        {"full": "https://img.example/b.jpg"},
+        {"full": "https://img.example/c.jpg"},
+        {"full": ""},
+    ]
+    client = _ImageClient(
+        {"https://img.example/a.jpg": b"pic-a", "https://img.example/c.jpg": b"pic-c"},
+        {"https://img.example/b.jpg": 404},
+    )
+    monkeypatch.setattr("app.scrape.site_client", lambda settings: _ImageHold(client))
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "样图",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+            "samples": samples,
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    dest = tmp_path / "dl" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    settings = _scrape_settings(tmp_path)
+    caplog.set_level(logging.WARNING, logger="app.scrape")
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await scrape_job(settings, db, {"code": "SSIS-001", "dest": str(dest)})
+
+    asyncio.run(run())
+    archived = tmp_path / "media" / "202102" / "SSIS-001"
+    extra = archived / "extrafanart"
+    assert (archived / "SSIS-001.mp4").is_file()
+    assert (archived / "SSIS-001.nfo").is_file()
+    assert (extra / "fanart-01.jpg").read_bytes() == b"pic-a"
+    assert not (extra / "fanart-02.jpg").exists()
+    assert (extra / "fanart-03.jpg").read_bytes() == b"pic-c"
+    assert client.urls == [
+        "https://img.example/a.jpg",
+        "https://img.example/b.jpg",
+        "https://img.example/c.jpg",
+    ]
+    assert list((settings.data_dir / "img_cache").iterdir()) == []
+    assert any("预览图跳过 fanart-02.jpg" in rec.message for rec in caplog.records)
+
+
+def test_scrape_job_caps_extrafanart_at_twenty(tmp_path, monkeypatch):
+    samples = [{"full": f"https://img.example/{i:02d}.jpg"} for i in range(1, 23)]
+    client = _ImageClient({item["full"]: f"p{i}".encode() for i, item in enumerate(samples, start=1)})
+    monkeypatch.setattr("app.scrape.site_client", lambda settings: _ImageHold(client))
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "很多样图",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+            "samples": samples,
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    dest = tmp_path / "dl" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await scrape_job(settings, db, {"code": "SSIS-001", "dest": str(dest)})
+
+    asyncio.run(run())
+    extra = tmp_path / "media" / "202102" / "SSIS-001" / "extrafanart"
+    names = sorted(path.name for path in extra.iterdir())
+    assert names == [f"fanart-{i:02d}.jpg" for i in range(1, 21)]
+    assert len(client.urls) == 20
+    assert "https://img.example/21.jpg" not in client.urls
+
+
+def test_scrape_job_without_samples_skips_extrafanart(tmp_path, monkeypatch):
+    called = {"n": 0}
+
+    def boom(settings):
+        called["n"] += 1
+        raise AssertionError("没有样图时不应下载")
+
+    monkeypatch.setattr("app.scrape.site_client", boom)
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "无样图",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    dest = tmp_path / "dl" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await scrape_job(settings, db, {"code": "SSIS-001", "dest": str(dest)})
+
+    asyncio.run(run())
+    archived = tmp_path / "media" / "202102" / "SSIS-001"
+    assert (archived / "SSIS-001.mp4").is_file()
+    assert not (archived / "extrafanart").exists()
+    assert called["n"] == 0
+
+
+def test_scrape_job_keeps_existing_extrafanart(tmp_path, monkeypatch):
+    client = _ImageClient({"https://img.example/2.jpg": b"new-2"})
+    monkeypatch.setattr("app.scrape.site_client", lambda settings: _ImageHold(client))
+
+    async def fake_meta(settings, db, code):
+        return {
+            "code": "SSIS-001",
+            "title": "已有样图",
+            "release_date": "2021-02-18",
+            "cover": "",
+            "actors": [],
+            "genres": [],
+            "samples": [
+                {"full": "https://img.example/1.jpg"},
+                {"full": "https://img.example/2.jpg"},
+            ],
+        }
+
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    kept = tmp_path / "media" / "202102" / "SSIS-001" / "extrafanart"
+    kept.mkdir(parents=True)
+    (kept / "fanart-01.jpg").write_bytes(b"keep-me")
+    dest = tmp_path / "dl" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "foo.mp4").write_bytes(b"x" * 8)
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await scrape_job(settings, db, {"code": "SSIS-001", "dest": str(dest)})
+
+    asyncio.run(run())
+    assert (kept / "fanart-01.jpg").read_bytes() == b"keep-me"
+    assert (kept / "fanart-02.jpg").read_bytes() == b"new-2"
+    assert client.urls == ["https://img.example/2.jpg"]

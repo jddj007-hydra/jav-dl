@@ -5,7 +5,7 @@
 | ID | 标题 | 优先级 | 里程碑 | 状态 | 依赖 | 建议落点 | DoD | 备注 |
 |---|---|---|---|---|---|---|---|---|
 | M1-T1 | JAV 封面拆成 fanart 原图和右裁 poster | P0 | M1 | done | | `app/scrape.py` `write_images`；`requirements.txt` 增加 Pillow；`tests/test_scrape.py` | 横图的 fanart 字节等于下载字节，poster 约 2:3 且取自右侧。竖图或解码失败时两份都是原图且不抛错。镜像能装上 Pillow | A1。裁切收在一个函数里，无码以后可在此分支；本阶段都走右裁 |
-| M1-T2 | 归档时把预览图写入 extrafanart | P0 | M1 | todo | | `app/scrape.py` 归档提交处读取 `meta["samples"]` | 有样图时出现 `extrafanart/fanart-01.jpg` 起的文件。超过 20 张只取前 20。一张失败只记日志。无样图不建空目录。已有同名文件不重复下载 | A2。请求可复用封面下载，但样图不进 `data/img_cache` |
+| M1-T2 | 归档时把预览图写入 extrafanart | P0 | M1 | done | | `app/scrape.py` 归档提交处读取 `meta["samples"]` | 有样图时出现 `extrafanart/fanart-01.jpg` 起的文件。超过 20 张只取前 20。一张失败只记日志。无样图不建空目录。已有同名文件不重复下载 | A2。请求可复用封面下载，但样图不进 `data/img_cache` |
 | M1-T3 | NFO 演员写入已有头像 URL | P0 | M1 | todo | | `app/nfo.py`；`tests/test_nfo.py`；`app/library.py` 演员解析保持只取名字 | 有 `photo` 的演员含 `<thumb>`，空 URL 不写空标签。库扫描出的演员列表与现在一致。磁盘上没有新头像文件 | A3 |
 | M1-T4 | 重新刮削重写这三类侧车文件 | P0 | M1 | todo | M1-T1, M1-T2, M1-T3 | `fill_jav_folder` / `_write_jav_sidecars` 仍缺了才写；`JobManager.rescrape` 允许覆盖该番号的 nfo、poster、fanart、extrafanart | 对一部旧目录重新刮削后三样侧车按新规则更新，视频还在。启动扫描和被动补缺不改写已有海报 | A1–A3 的入口区分 |
 | M2-T1 | 磁链行展示排序理由 | P1 | M2 | todo | | `app/static/app.js` 的 JAV `renderResources` 与欧美磁链渲染 | JAV 行理由与 tags、heat、size、pack 一致，有 UC 时以 UC 开头。欧美无 UC 标签时理由里没有 UC。排序和高亮、下载目标不变 | C1。不改 `app/ranking.py` |
