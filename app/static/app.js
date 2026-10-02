@@ -1038,6 +1038,17 @@ function queueActions(j) {
   return buttons.join("");
 }
 
+function queueTitle(j) {
+  const label = `<span class="code">${escapeHtml(j.code || "")}</span>${escapeHtml(j.title || "")}`;
+  if (j.kind === "western" && j.tpdb_id) {
+    return `<button type="button" class="queue-title" data-queue-western="${escapeHtml(j.tpdb_id)}">${label}</button>`;
+  }
+  if (j.kind === "jav" && j.code) {
+    return `<button type="button" class="queue-title" data-queue-code="${escapeHtml(j.code)}">${label}</button>`;
+  }
+  return `<strong>${label}</strong>`;
+}
+
 function renderQueue() {
   const list = $("queue-list");
   const empty = $("queue-empty");
@@ -1052,7 +1063,7 @@ function renderQueue() {
   list.innerHTML = items.map((j) => `
     <li>
       <div class="row">
-        <strong><span class="code">${escapeHtml(j.code)}</span>${escapeHtml(j.title)}</strong>
+        ${queueTitle(j)}
         <span class="state s-${escapeHtml(j.status)}">${escapeHtml(STATUS_LABEL[j.status] || j.status)}</span>
       </div>
       <div class="bar"><span style="width:${Math.min(100, j.progress || 0)}%"></span></div>
@@ -1172,6 +1183,16 @@ $("queue-clear-finished").addEventListener("click", () => {
 });
 
 $("queue-list").addEventListener("click", async (e) => {
+  const western = e.target.closest("[data-queue-western]");
+  if (western) {
+    openWesternById(western.dataset.queueWestern);
+    return;
+  }
+  const code = e.target.closest("[data-queue-code]");
+  if (code) {
+    openCodeDetail(code.dataset.queueCode);
+    return;
+  }
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
   btn.disabled = true;

@@ -69,6 +69,22 @@ def _map_status(aria_status: str | None, fallback: str) -> str:
     }.get(aria_status or "", fallback)
 
 
+def _public_target(job: dict) -> tuple[str, str]:
+    """Queue title target. A sidecar id opens the western detail ahead of a code."""
+    dest = str(job.get("dest") or "")
+    info = read_sidecar(Path(dest)) if dest else None
+    tpdb_id = ""
+    if isinstance(info, dict):
+        raw = str(info.get("tpdb_id") or "").strip()
+        if raw and len(raw) <= 80 and "/" not in raw and "\\" not in raw:
+            tpdb_id = raw
+    if tpdb_id:
+        return "western", tpdb_id
+    if normalize_code(str(job.get("code") or "")):
+        return "jav", ""
+    return "", ""
+
+
 def _eta(total: int, done: int, speed: int) -> str:
     if speed <= 0 or total <= 0 or done >= total:
         return ""
@@ -814,6 +830,7 @@ class JobManager:
         connections: int,
         seeders: int,
     ) -> dict:
+        kind, tpdb_id = _public_target(job)
         return {
             "id": job["id"],
             "code": job["code"],
@@ -833,6 +850,8 @@ class JobManager:
             "scrape_status": job.get("scrape_status") or "",
             "scrape_error": job.get("scrape_error"),
             "archive_path": job.get("archive_path") or "",
+            "kind": kind,
+            "tpdb_id": tpdb_id,
         }
 
     async def public(self, job: dict, snapshot: dict | None = None) -> dict:

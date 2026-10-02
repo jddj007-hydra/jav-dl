@@ -48,6 +48,56 @@ def _row(dest: str, **overrides) -> dict:
     return row
 
 
+def test_public_title_target_uses_code_or_sidecar(tmp_path):
+    from app.western_archive import write_sidecar
+
+    settings = _settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        mgr = JobManager(settings, db, object())
+        jav = await mgr.public(_row(str(settings.download_dir)))
+        assert jav["kind"] == "jav"
+        assert jav["tpdb_id"] == ""
+
+        dest = settings.download_dir / "western" / "ann"
+        write_sidecar(dest, {"kind": "western", "tpdb_id": "scene-1", "title": "Ann"})
+        west = await mgr.public(_row(str(dest), code="ann-example", title="Ann"))
+        assert west["kind"] == "western"
+        assert west["tpdb_id"] == "scene-1"
+
+        coded = settings.download_dir / "SSIS-001"
+        write_sidecar(coded, {"tpdb_id": "scene-2"})
+        both = await mgr.public(_row(str(coded)))
+        assert both["kind"] == "western"
+        assert both["tpdb_id"] == "scene-2"
+
+        empty = settings.download_dir / "empty-side"
+        write_sidecar(empty, {"kind": "western", "tpdb_id": ""})
+        plain = await mgr.public(_row(str(empty), code="watch folder"))
+        assert plain["kind"] == ""
+        assert plain["tpdb_id"] == ""
+
+        bad = settings.download_dir / "bad"
+        write_sidecar(bad, {"tpdb_id": "../secret"})
+        escaped = await mgr.public(_row(str(bad), code="notes"))
+        assert escaped["kind"] == ""
+        assert escaped["tpdb_id"] == ""
+
+    asyncio.run(run())
+
+
+def test_queue_title_links_keep_the_old_actions():
+    script = (__import__("pathlib").Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "data-queue-code" in script
+    assert "data-queue-western" in script
+    assert "openCodeDetail" in script
+    assert "openWesternById" in script
+    for act in ("pause", "resume", "cancel", "rescrape", "delete"):
+        assert f'data-act="{act}"' in script
+
+
 def test_retrying_scrape_stays_busy(tmp_path):
     settings = _settings(tmp_path)
 

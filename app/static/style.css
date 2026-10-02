@@ -763,7 +763,23 @@ img.is-fallback,
   padding: 14px 16px;
 }
 .queue .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-.queue .row strong { font-weight: 600; overflow-wrap: anywhere; }
+.queue .row strong,
+button.queue-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-align: left;
+  min-width: 0;
+}
+button.queue-title {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
+}
+button.queue-title:hover,
+button.queue-title:focus-visible { filter: none; color: var(--accent-2); }
 .bar {
   height: 6px;
   background: var(--panel-2);
