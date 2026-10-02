@@ -39,14 +39,17 @@ async def list_subscriptions(request: Request):
 @router.post("/api/subscriptions")
 async def create_subscription(request: Request, body: FollowCreate):
     db = request.app.state.db
-    if len(await db.list_subscriptions()) >= FOLLOW_LIMIT:
-        raise HTTPException(400, f"最多关注 {FOLLOW_LIMIT} 个")
     try:
         name, target = await resolve_target(
             request.app.state.settings, body.kind, body.name, body.target
         )
     except (ValueError, MetadataError, TpdbError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    existing = await db.find_subscription_by_target(target)
+    if existing:
+        return {"item": existing, "existing": True}
+    if len(await db.list_subscriptions()) >= FOLLOW_LIMIT:
+        raise HTTPException(400, f"最多关注 {FOLLOW_LIMIT} 个")
     row = new_subscription(
         body.kind,
         name,

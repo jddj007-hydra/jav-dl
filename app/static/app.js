@@ -638,7 +638,10 @@ function renderMeta(payload) {
           ${a.photo ? coverImage(a.photo, { alt: a.name }) : `<div class="actor-ph"></div>`}
           <span>${escapeHtml(a.name)}</span>`;
         if (!a.url) return `<div class="actor-card">${body}</div>`;
-        return `<button type="button" class="actor-card" data-browse-url="${escapeHtml(a.url)}" data-browse-name="${escapeHtml(a.name)}">${body}</button>`;
+        const follow = /\/star\//.test(a.url)
+          ? `<button type="button" class="text-link" data-follow-name="${escapeHtml(a.name)}" data-follow-target="${escapeHtml(a.url)}">关注</button>`
+          : "";
+        return `<div class="actor-unit"><button type="button" class="actor-card" data-browse-url="${escapeHtml(a.url)}" data-browse-name="${escapeHtml(a.name)}">${body}</button>${follow}</div>`;
       }).join("")}</div>`
     : "";
   const samples = meta.samples || [];
@@ -668,6 +671,7 @@ function renderMeta(payload) {
     </div>
     ${actorHtml}
     ${previewHtml}`;
+  markFollowButtons();
 }
 
 function genreHtml(genres) {
@@ -811,6 +815,85 @@ function javPageHash(page, browse) {
   });
 }
 
+let followedTargets = null;
+
+function normTarget(url) {
+  return String(url || "").split("?")[0].split("#")[0].replace(/\/$/, "");
+}
+
+async function loadFollowedTargets() {
+  if (followedTargets) return followedTargets;
+  followedTargets = new Set();
+  try {
+    const data = await api("/api/subscriptions");
+    for (const sub of data.items || []) {
+      if (sub.target) followedTargets.add(normTarget(sub.target));
+    }
+  } catch {
+    followedTargets = null;
+    return new Set();
+  }
+  return followedTargets;
+}
+
+function syncFollowBrowse() {
+  const btn = $("follow-browse");
+  if (!btn) return;
+  const url = javMode === "browse" && javBrowse ? javBrowse.url : "";
+  const actress = /\/star\//.test(url || "");
+  btn.hidden = !actress;
+  if (!actress) return;
+  btn.dataset.followName = javBrowse.name || "";
+  btn.dataset.followTarget = url;
+  markFollowButtons();
+}
+
+async function markFollowButtons() {
+  const known = await loadFollowedTargets();
+  document.querySelectorAll("[data-follow-target]").forEach((btn) => {
+    btn.textContent = known.has(normTarget(btn.dataset.followTarget)) ? "已关注" : "关注";
+  });
+}
+
+async function commitFollowActress(btn) {
+  const name = btn.dataset.followName || "";
+  const target = btn.dataset.followTarget || "";
+  if (!name || !target || btn.disabled) return;
+  btn.disabled = true;
+  setStatus($("search-status"), "正在关注…");
+  try {
+    const data = await api("/api/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "actress",
+        name,
+        target,
+        auto: false,
+        want_uc: false,
+        want_c: false,
+        max_gb: 0,
+      }),
+    });
+    const saved = (data.item && data.item.target) || target;
+    const known = await loadFollowedTargets();
+    known.add(normTarget(saved));
+    await markFollowButtons();
+    if (data.existing) {
+      setStatus($("search-status"), "已关注", "good");
+      return;
+    }
+    const check = data.check || {};
+    const note = check.error
+      ? check.error
+      : (check.first ? `已记下当前 ${check.known || 0} 部，之后的新作才会提醒` : "已关注");
+    setStatus($("search-status"), note, check.error ? "bad" : "good");
+  } catch (err) {
+    setStatus($("search-status"), err.message, "bad");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function showJavListSurface() {
   fromWorks = false;
   clearDetail();
@@ -819,6 +902,7 @@ function showJavListSurface() {
   const browsing = javMode === "browse" && javBrowse;
   const row = !browsing && javFormat !== "vr" ? javGenreRow() : null;
   $("works-heading").textContent = browsing ? (javBrowse.name || "目录") : (row ? row.label : "作品");
+  syncFollowBrowse();
   showBack(Boolean(browsing) || navIndex > 0);
   $("code-input").value = browsing || row ? "" : lastWorksQuery;
   renderWorks(lastWorks);
@@ -1015,6 +1099,7 @@ async function loadJavBrowse(url, name, page) {
   clearDetail();
   $("jav-feed").hidden = false;
   $("works-heading").textContent = name;
+  syncFollowBrowse();
   showSkeleton("works-wrap", "works-list");
   setStatus($("search-status"), `正在列 ${name} 的作品…`);
   try {
@@ -1058,6 +1143,7 @@ async function loadJavGenre(page) {
   $("works-heading").textContent = name;
   $("code-input").value = "";
   syncJavGenres();
+  syncFollowBrowse();
   showSkeleton("works-wrap", "works-list");
   const path = javGenrePath();
   if (!path) {
@@ -1112,6 +1198,7 @@ async function loadJavFeed(page) {
   leaveJavBrowse();
   javMode = "latest";
   javPage = page;
+  syncFollowBrowse();
   fromWorks = false;
   showBack(false);
   clearDetail();
@@ -2070,7 +2157,14 @@ function openLightbox(url) {
   if (url) showLightbox(coverSrc(url));
 }
 
+$("follow-browse").addEventListener("click", () => commitFollowActress($("follow-browse")));
+
 $("meta-card").addEventListener("click", (e) => {
+  const follow = e.target.closest("[data-follow-target]");
+  if (follow) {
+    commitFollowActress(follow);
+    return;
+  }
   const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
   if (suck) {
     commitSuck(suck);

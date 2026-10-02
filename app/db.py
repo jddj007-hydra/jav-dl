@@ -604,6 +604,16 @@ class Database:
             rows = await cur.fetchall()
         return [dict(row) for row in rows]
 
+    async def find_subscription_by_target(self, target: str) -> dict | None:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM subscriptions WHERE target = ? ORDER BY created_at LIMIT 1",
+                (target,),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def get_subscription(self, sub_id: str) -> dict | None:
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row

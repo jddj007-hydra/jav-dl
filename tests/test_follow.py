@@ -1,10 +1,50 @@
 import asyncio
 import time
+from types import SimpleNamespace
 
 from app.config import Settings
 from app.db import Database
 from app.follow import check_sub, magnet_matches, new_subscription, resolve_target
 from app.sources.javbus import parse_star_links
+
+
+def test_repeat_actress_target_does_not_add_another(tmp_path, monkeypatch):
+    async def run():
+        settings = Settings(
+            data_dir=tmp_path / "data",
+            download_dir=tmp_path / "dl",
+            media_dir=tmp_path / "media",
+        )
+        settings.ensure_dirs()
+        db = Database(settings)
+        await db.init()
+        row = new_subscription(
+            "actress", "葵", "https://www.javbus.com/star/2xi",
+            auto=False, want_uc=False, want_c=False, max_gb=0,
+        )
+        await db.add_subscription(row)
+
+        async def fake_resolve(settings, kind, name, target):
+            return "葵", "https://www.javbus.com/star/2xi"
+
+        async def fake_check(*args, **kwargs):
+            raise AssertionError("already followed")
+
+        monkeypatch.setattr("app.routers.follow.resolve_target", fake_resolve)
+        monkeypatch.setattr("app.routers.follow.check_sub", fake_check)
+        from app.routers.follow import FollowCreate, create_subscription
+
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            settings=settings, db=db, jobs=None,
+        )))
+        body = FollowCreate(kind="actress", name="葵", target="https://www.javbus.com/star/2xi", auto=True)
+        result = await create_subscription(request, body)
+        assert result["existing"] is True
+        assert result["item"]["id"] == row["id"]
+        assert result["item"]["auto"] == 0
+        assert len(await db.list_subscriptions()) == 1
+
+    asyncio.run(run())
 
 
 def test_list_subscriptions_counts_seen_rows(tmp_path):
