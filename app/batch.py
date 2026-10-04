@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import re
 
-from app.codes import CODE_HYPHEN_RE, CODE_LOOSE_RE, FALSE_PREFIXES, normalize_code
+from app.codes import (
+    CODE_HYPHEN_RE,
+    CODE_LOOSE_RE,
+    DATE_HYPHEN_RE,
+    FALSE_PREFIXES,
+    FC2_HYPHEN_RE,
+    normalize_code,
+)
 from app.config import Settings
 from app.downloader.jobs import BackendError
 from app.ranking import sort_resources
@@ -33,13 +40,26 @@ def parse_batch_codes(text: str) -> list[str]:
     for token in _SPLIT.split(raw):
         add(normalize_code(token.strip().strip(_WRAP)))
     folded = raw.upper().replace("_", "-")
+    # FC2-PPV-4587943 里的 PPV-45879 会被普通厂牌正则误伤，先记 FC2 再跳过重叠段。
+    fc2_spans: list[tuple[int, int]] = []
+    for match in FC2_HYPHEN_RE.finditer(folded):
+        add(normalize_code(f"FC2-{match.group(1)}"))
+        fc2_spans.append(match.span())
+    for match in DATE_HYPHEN_RE.finditer(folded):
+        add(f"{match.group(1)}-{match.group(2)}")
     for match in CODE_HYPHEN_RE.finditer(folded):
+        start, end = match.span()
+        if any(span_start < end and span_end > start for span_start, span_end in fc2_spans):
+            continue
         prefix, num = match.group(1), match.group(2)
         if prefix not in FALSE_PREFIXES:
             add(f"{prefix}-{num}")
     for token in _SPLIT.split(folded):
         compact = re.sub(r"[^A-Z0-9]", "", token)
-        match = CODE_LOOSE_RE.fullmatch(compact) if compact else None
+        if not compact:
+            continue
+        add(normalize_code(compact))
+        match = CODE_LOOSE_RE.fullmatch(compact)
         if not match:
             continue
         prefix, num = match.group(1), match.group(2)

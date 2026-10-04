@@ -20,6 +20,30 @@ def test_parse_batch_codes_keeps_paste_order_and_skips_junk():
     assert parse_batch_codes("092126-001 FC2-3237415") == ["092126-001", "FC2-PPV-3237415"]
 
 
+def test_parse_batch_codes_keeps_full_fc2_lines():
+    text = (
+        "FC2-PPV-4587943\n"
+        "FC2-PPV-4825364\n"
+        "FC2-PPV-4121738\n"
+        "FC2-PPV-4733095\n"
+        "FC2-PPV-4741172\n"
+        "FC2-PPV-4595631"
+    )
+    assert parse_batch_codes(text) == [
+        "FC2-PPV-4587943",
+        "FC2-PPV-4825364",
+        "FC2-PPV-4121738",
+        "FC2-PPV-4733095",
+        "FC2-PPV-4741172",
+        "FC2-PPV-4595631",
+    ]
+    assert parse_batch_codes("FC2PPV4587943, SSIS-001 FC2-4825364") == [
+        "FC2-PPV-4587943",
+        "SSIS-001",
+        "FC2-PPV-4825364",
+    ]
+
+
 def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):
     async def fake_search(settings, code, pages=2):
         if code == "SSIS-001":

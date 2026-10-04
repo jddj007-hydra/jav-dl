@@ -387,6 +387,13 @@ async def search_works(settings: Settings, query: str, pages: int = 2) -> list[d
 
 
 async def fetch_metadata(settings: Settings, code: str) -> dict:
+    from app.codes import fc2_number
+    from app.sources.fc2 import fetch_fc2_metadata
+
+    # JavBus 没有 FC2 详情页；番号是 FC2 时直接走官方商品页。
+    if fc2_number(code):
+        return await fetch_fc2_metadata(settings, code)
+
     base = settings.javbus_base.rstrip("/")
     headers = {"Cookie": AGE_COOKIE, "Referer": base + "/"}
     paths = [f"/{code}", f"/uncensored/{code}"]

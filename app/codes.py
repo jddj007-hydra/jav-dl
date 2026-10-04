@@ -13,7 +13,7 @@ VR_LOOSE_RE = re.compile(r"([A-Z0-9]{2,12}?)(\d{3,5})")
 # 加勒比、一本道、天然むすめ这一类是日期加序号，不是字母厂牌。
 DATE_CODE_RE = re.compile(r"^(\d{6})-(\d{2,4})$")
 DATE_HYPHEN_RE = re.compile(r"(?<!\d)(\d{6})-(\d{2,4})(?!\d)")
-# JavBus 上的页面是 FC2-PPV-编号。文件名里常常写成 FC2 或 FC2PPV。
+# 统一成 FC2-PPV-编号。文件名里常常写成 FC2 或 FC2PPV；详情改走 FC2 官方页。
 FC2_CODE_RE = re.compile(r"^FC2(?:-?PPV)?-?(\d{6,8})$")
 FC2_HYPHEN_RE = re.compile(r"(?<![A-Z0-9])FC2(?:-?PPV)?-?(\d{6,8})(?!\d)", re.I)
 FALSE_PREFIXES = frozenset({
@@ -71,16 +71,18 @@ def compact_code(code: str) -> str:
     return code.replace("-", "").upper()
 
 
-def _fc2_number(code: str) -> str:
-    matched = FC2_CODE_RE.fullmatch(code or "")
-    return matched.group(1) if matched else ""
+def fc2_number(code: str) -> str | None:
+    """FC2-PPV-3237415 / FC2-3237415 → 3237415。非 FC2 → None。"""
+    normalized = normalize_code(code) if code else None
+    matched = FC2_CODE_RE.fullmatch(normalized or (code or "").strip().upper())
+    return matched.group(1) if matched else None
 
 
 def title_mentions_code(title: str, code: str) -> bool:
     compact_title = re.sub(r"[^A-Z0-9]", "", (title or "").upper())
     if compact_code(code) in compact_title:
         return True
-    number = _fc2_number(code)
+    number = fc2_number(code)
     if not number:
         return False
     return f"FC2{number}" in compact_title or f"FC2PPV{number}" in compact_title

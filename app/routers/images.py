@@ -20,6 +20,7 @@ ALLOWED_SUFFIXES = (
     "mgstage.com",
     "theporndb.net",
     "metadataapi.net",
+    "fc2.com",
 )
 MIRROR_NAMES = {"seejav", "cdnbus"}
 MAX_REDIRECTS = 3
