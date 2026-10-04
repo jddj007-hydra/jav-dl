@@ -1496,6 +1496,7 @@ function renderBatch(items) {
       row.suck ? '<span class="lib-badge suck">suck</span>' : "",
       row.library && row.library.present ? '<span class="lib-badge">已有</span>' : "",
     ].filter(Boolean).join("");
+    const flags = libraryFlag(row.library, row.suck);
     const canSelect = batchSelectable(row);
     const magnetHtml = item
       ? `<div class="batch-magnet">
@@ -1509,15 +1510,18 @@ function renderBatch(items) {
       </label>
       <button type="button" class="batch-cover" data-batch-open="${escapeHtml(row.code)}" title="打开详情">
         ${coverImage(meta.cover, { lazy: true, alt: row.code })}
+        ${badges}
       </button>
       <div class="batch-body">
         <div class="batch-head">
           <button type="button" class="code text-link" data-batch-open="${escapeHtml(row.code)}">${escapeHtml(row.code)}</button>
-          ${badges}
+          ${row.library && row.library.present ? '<span class="batch-pill">库里已有</span>' : ""}
+          ${row.suck ? '<span class="batch-pill suck">suck</span>' : ""}
           <button type="button" class="ghost small" data-batch-open="${escapeHtml(row.code)}">详情</button>
         </div>
         <div class="title">${escapeHtml(title)}</div>
         ${bits.length ? `<div class="batch-info">${escapeHtml(bits.join(" · "))}</div>` : ""}
+        ${flags}
         ${magnetHtml}
       </div>
     </li>`;
