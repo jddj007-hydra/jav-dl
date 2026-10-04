@@ -958,10 +958,12 @@ function applyJav(query) {
     if (!code) javMode = javFormat !== "vr" && javGenre ? "genre" : "latest";
   }
   if (code) {
+    prepareBatchForDetail();
     $("code-input").value = code;
     runCodeSearch(code, { fromList: true });
     return;
   }
+  restoreBatchAfterDetail();
   if (javListKey() === javLoadedKey && lastWorks.length) {
     showJavListSurface();
     return;
@@ -1412,6 +1414,22 @@ $("works-list").addEventListener("click", (e) => {
 $("back-to-works").addEventListener("click", () => appBack());
 
 let batchPreview = [];
+let batchHiddenForDetail = false;
+
+function prepareBatchForDetail() {
+  const box = $("batch-box");
+  if (!box || box.hidden) return;
+  if (!batchPreview.length && $("batch-preview").hidden) return;
+  box.hidden = true;
+  batchHiddenForDetail = true;
+}
+
+function restoreBatchAfterDetail() {
+  if (!batchHiddenForDetail) return;
+  const box = $("batch-box");
+  if (box) box.hidden = false;
+  batchHiddenForDetail = false;
+}
 
 function batchSelectable(row) {
   return !!(row && row.item && row.item.info_hash && !row.suck);
@@ -1496,6 +1514,7 @@ function renderBatch(items) {
         <div class="batch-head">
           <button type="button" class="code text-link" data-batch-open="${escapeHtml(row.code)}">${escapeHtml(row.code)}</button>
           ${badges}
+          <button type="button" class="ghost small" data-batch-open="${escapeHtml(row.code)}">详情</button>
         </div>
         <div class="title">${escapeHtml(title)}</div>
         ${bits.length ? `<div class="batch-info">${escapeHtml(bits.join(" · "))}</div>` : ""}
