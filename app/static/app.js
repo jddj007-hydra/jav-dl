@@ -1413,6 +1413,42 @@ $("back-to-works").addEventListener("click", () => appBack());
 
 let batchPreview = [];
 
+function batchSelectable(row) {
+  return !!(row && row.item && row.item.info_hash && !row.suck);
+}
+
+function batchSelectedRows() {
+  const checked = new Set(
+    Array.from(document.querySelectorAll("#batch-list input[data-batch-code]:checked"))
+      .map((el) => el.dataset.batchCode),
+  );
+  return batchPreview.filter((row) => batchSelectable(row) && checked.has(row.code));
+}
+
+function updateBatchConfirm() {
+  const btn = $("batch-confirm");
+  const countEl = $("batch-selected-count");
+  const selected = batchSelectedRows();
+  const selectable = batchPreview.filter(batchSelectable).length;
+  if (countEl) {
+    countEl.textContent = selectable
+      ? `已选 ${selected.length} / ${selectable}`
+      : "";
+  }
+  btn.disabled = selected.length === 0;
+  btn.textContent = selected.length
+    ? `确认入队（${selected.length}）`
+    : "没有可入队的番号";
+}
+
+function setBatchChecks(on) {
+  document.querySelectorAll("#batch-list input[data-batch-code]").forEach((el) => {
+    if (el.disabled) return;
+    el.checked = !!on;
+  });
+  updateBatchConfirm();
+}
+
 function renderBatch(items) {
   batchPreview = items || [];
   const box = $("batch-preview");
@@ -1422,33 +1458,59 @@ function renderBatch(items) {
     box.hidden = true;
     list.innerHTML = "";
     btn.disabled = true;
+    const countEl = $("batch-selected-count");
+    if (countEl) countEl.textContent = "";
     return;
   }
   box.hidden = false;
-  const ready = batchPreview.filter((row) => row.item && row.item.info_hash);
   list.innerHTML = batchPreview.map((row) => {
     const item = row.item;
-    if (!item) {
-      return `<li><span class="code">${escapeHtml(row.code)}</span><span class="miss">${escapeHtml(row.error || "没有磁链")}</span></li>`;
-    }
-    const tags = (item.tags || []).map((tag) => `<span class="tag ${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("");
-    return `<li>
-      <span class="code">${escapeHtml(row.code)}</span>
-      <span>
-        <span class="title">${escapeHtml(item.title || "")}</span>
-        <span class="res-meta">${escapeHtml(item.size || "")}${tags}</span>
-      </span>
+    const meta = row.metadata || {};
+    const title = meta.title || (item && item.title) || "";
+    const actors = normalizeActors(meta.actors).map((a) => a.name).filter(Boolean);
+    const bits = [
+      actors.slice(0, 3).join(" / "),
+      meta.release_date || "",
+      meta.studio || "",
+      meta.runtime || "",
+    ].filter(Boolean);
+    const badges = [
+      row.suck ? '<span class="lib-badge suck">suck</span>' : "",
+      row.library && row.library.present ? '<span class="lib-badge">已有</span>' : "",
+    ].filter(Boolean).join("");
+    const canSelect = batchSelectable(row);
+    const magnetHtml = item
+      ? `<div class="batch-magnet">
+          <span class="title">${escapeHtml(item.title || "")}</span>
+          <span class="res-meta">${escapeHtml(magnetReason(item))}</span>
+        </div>`
+      : `<div class="miss">${escapeHtml(row.error || row.meta_error || "没有磁链")}</div>`;
+    return `<li class="batch-card${row.library && row.library.present ? " in-library" : ""}${row.suck ? " is-suck" : ""}${item ? "" : " is-miss"}">
+      <label class="batch-check">
+        <input type="checkbox" data-batch-code="${escapeHtml(row.code)}"${canSelect ? " checked" : " disabled"} />
+      </label>
+      <button type="button" class="batch-cover" data-batch-open="${escapeHtml(row.code)}" title="打开详情">
+        ${coverImage(meta.cover, { lazy: true, alt: row.code })}
+      </button>
+      <div class="batch-body">
+        <div class="batch-head">
+          <button type="button" class="code text-link" data-batch-open="${escapeHtml(row.code)}">${escapeHtml(row.code)}</button>
+          ${badges}
+        </div>
+        <div class="title">${escapeHtml(title)}</div>
+        ${bits.length ? `<div class="batch-info">${escapeHtml(bits.join(" · "))}</div>` : ""}
+        ${magnetHtml}
+      </div>
     </li>`;
   }).join("");
-  btn.disabled = ready.length === 0;
-  btn.textContent = ready.length ? `确认入队（${ready.length}）` : "没有可入队的番号";
+  updateBatchConfirm();
 }
 
 $("batch-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const btn = e.target.querySelector("button");
   btn.disabled = true;
-  setStatus($("batch-status"), "正在查磁链…");
+  setStatus($("batch-status"), "正在查封面和磁链…");
   try {
     const data = await api("/api/downloads/batch/preview", {
       method: "POST",
@@ -1457,8 +1519,13 @@ $("batch-form").addEventListener("submit", async (e) => {
     const items = data.items || [];
     renderBatch(items);
     const miss = items.filter((row) => !row.item).length;
-    const note = `识别 ${items.length} 个番号` + (miss ? `，${miss} 个没有磁链` : "");
-    setStatus($("batch-status"), note, miss ? "" : "good");
+    const owned = items.filter((row) => row.library && row.library.present).length;
+    const suck = items.filter((row) => row.suck).length;
+    const parts = [`识别 ${items.length} 个番号`];
+    if (owned) parts.push(`${owned} 个库里已有`);
+    if (suck) parts.push(`${suck} 个已标 suck`);
+    if (miss) parts.push(`${miss} 个没有磁链`);
+    setStatus($("batch-status"), parts.join("，"), miss || suck ? "" : "good");
   } catch (err) {
     renderBatch([]);
     setStatus($("batch-status"), err.message, "bad");
@@ -1467,36 +1534,52 @@ $("batch-form").addEventListener("submit", async (e) => {
   }
 });
 
+$("batch-list").addEventListener("change", (e) => {
+  if (e.target.matches("input[data-batch-code]")) updateBatchConfirm();
+});
+
+$("batch-list").addEventListener("click", (e) => {
+  const open = e.target.closest("[data-batch-open]");
+  if (!open) return;
+  const code = open.dataset.batchOpen;
+  if (code) openCodeDetail(code);
+});
+
+$("batch-select-all").addEventListener("click", () => setBatchChecks(true));
+$("batch-select-none").addEventListener("click", () => setBatchChecks(false));
+
 $("batch-confirm").addEventListener("click", async () => {
-  const ready = batchPreview.filter((row) => row.item && row.item.info_hash);
-  const missed = batchPreview.filter((row) => !row.item);
-  if (!ready.length) return;
+  const selected = batchSelectedRows();
+  if (!selected.length) return;
   const btn = $("batch-confirm");
   btn.disabled = true;
   try {
     const data = await api("/api/downloads/batch", {
       method: "POST",
       body: JSON.stringify({
-        items: ready.map((row) => ({
+        items: selected.map((row) => ({
           code: row.code,
           info_hash: row.item.info_hash,
-          title: row.item.title || "",
+          title: (row.metadata && row.metadata.title) || row.item.title || "",
         })),
       }),
     });
-    const skipped = [
-      ...missed.map((row) => `${row.code} ${row.error || "没有磁链"}`),
-      ...(data.skipped || []).map((row) => `${row.code} ${row.reason || "跳过"}`),
-    ];
+    const skipped = (data.skipped || []).map((row) => `${row.code} ${row.reason || "跳过"}`);
     const queued = (data.queued || []).length;
     const lines = [`已入队 ${queued} 个`];
     if (skipped.length) lines.push(`跳过：${skipped.join("；")}`);
     setStatus($("batch-status"), lines.join("。"), queued ? "good" : "bad");
+    const done = new Set((data.queued || []).map((job) => job.code));
+    document.querySelectorAll("#batch-list input[data-batch-code]").forEach((el) => {
+      if (done.has(el.dataset.batchCode)) {
+        el.checked = false;
+        el.disabled = true;
+      }
+    });
+    updateBatchConfirm();
   } catch (err) {
     setStatus($("batch-status"), err.message, "bad");
-  } finally {
-    const still = batchPreview.filter((row) => row.item && row.item.info_hash).length;
-    btn.disabled = still === 0;
+    updateBatchConfirm();
   }
 });
 

@@ -180,7 +180,12 @@ async def cancel_files(request: Request, token: str):
 @router.post("/api/downloads/batch/preview")
 async def batch_preview(request: Request, body: BatchText):
     try:
-        items = await preview_batch(request.app.state.settings, body.text)
+        items = await preview_batch(
+            request.app.state.settings,
+            body.text,
+            library=getattr(request.app.state, "library", None),
+            db=getattr(request.app.state, "db", None),
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"items": items}

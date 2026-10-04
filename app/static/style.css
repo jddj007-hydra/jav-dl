@@ -282,25 +282,99 @@ button:disabled { opacity: 0.5; cursor: wait; }
   min-height: 96px;
 }
 .batch-actions { margin: 10px 0 4px; }
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+.batch-toolbar .muted { color: var(--muted); font-size: 13px; }
 .batch-list {
   list-style: none;
   padding: 0;
   margin: 0 0 12px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
-.batch-list li {
+.batch-card {
   display: grid;
-  grid-template-columns: 108px minmax(0, 1fr);
-  gap: 6px 12px;
-  align-items: baseline;
+  grid-template-columns: auto 84px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel-2);
 }
-.batch-list .title { overflow-wrap: anywhere; }
-.batch-list .miss { color: var(--bad); }
+.batch-card.in-library {
+  box-shadow: 0 0 0 1px rgba(125, 186, 106, 0.45);
+}
+.batch-card.is-suck {
+  box-shadow: 0 0 0 1px rgba(210, 102, 102, 0.55);
+  opacity: 0.82;
+}
+.batch-card.is-miss { opacity: 0.9; }
+.batch-check {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 4px;
+}
+.batch-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent, #6ea8fe);
+  cursor: pointer;
+}
+.batch-cover {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 2 / 3;
+  width: 84px;
+  cursor: pointer;
+}
+.batch-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--bg);
+}
+.batch-body { min-width: 0; }
+.batch-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.batch-head .code {
+  font-weight: 700;
+  font-size: 15px;
+}
+.batch-body > .title {
+  overflow-wrap: anywhere;
+  margin: 0 0 4px;
+  line-height: 1.35;
+}
+.batch-info {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.batch-magnet .title {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  margin-bottom: 2px;
+}
+.batch-list .miss { color: var(--bad); font-size: 13px; }
 .batch .hint { margin-top: 8px; }
 
 /* ---------- detail card ---------- */
@@ -1035,7 +1109,8 @@ button.queue-title:focus-visible { filter: none; color: var(--accent-2); }
   .suck-item { align-items: flex-start; flex-direction: column; }
   .res-item { grid-template-columns: 32px minmax(0, 1fr); }
   .res-actions { grid-column: 2; justify-content: flex-start; }
-  .batch-list li { grid-template-columns: 1fr; }
+  .batch-card { grid-template-columns: auto 72px minmax(0, 1fr); }
+  .batch-cover { width: 72px; }
   .field-row { grid-template-columns: 1fr; }
   .follow-grid { grid-template-columns: 1fr; }
 }

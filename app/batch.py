@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from app.codes import (
@@ -14,10 +15,13 @@ from app.codes import (
 )
 from app.config import Settings
 from app.downloader.jobs import BackendError
+from app.library import library_info
 from app.ranking import sort_resources
 from app.sources.clm import MagnetSearchError, search_magnets
+from app.sources.javbus import CACHE_VER, MetadataError, fetch_metadata
 
 BATCH_LIMIT = 40
+_PREVIEW_CONCURRENCY = 5
 _SPLIT = re.compile(r"[\s,，;；、|]+")
 _WRAP = "[]()（）\"'“”`<>《》"
 
@@ -80,25 +84,94 @@ def _picked(item: dict) -> dict:
     }
 
 
-async def preview_batch(settings: Settings, text: str) -> list[dict]:
+def _slim_meta(meta: dict | None) -> dict | None:
+    if not meta:
+        return None
+    actors = []
+    for actor in meta.get("actors") or []:
+        if isinstance(actor, dict):
+            name = (actor.get("name") or "").strip()
+        else:
+            name = str(actor or "").strip()
+        if name:
+            actors.append({"name": name})
+        if len(actors) >= 8:
+            break
+    return {
+        "title": meta.get("title") or "",
+        "cover": meta.get("cover") or "",
+        "release_date": meta.get("release_date") or "",
+        "runtime": meta.get("runtime") or "",
+        "studio": meta.get("studio") or "",
+        "actors": actors,
+    }
+
+
+async def _magnet_for(settings: Settings, code: str) -> tuple[dict | None, str | None]:
+    try:
+        magnets = await search_magnets(settings, code)
+    except MagnetSearchError as exc:
+        return None, str(exc)
+    ranked = sort_resources(magnets, code)
+    if not ranked:
+        return None, "没有磁链"
+    return _picked(ranked[0]), None
+
+
+async def _meta_for(settings: Settings, db, code: str) -> tuple[dict | None, str | None]:
+    cache_key = f"{CACHE_VER}:{code}"
+    if db is not None:
+        cached = await db.get_metadata(cache_key, settings.metadata_ttl)
+        if cached:
+            return _slim_meta(cached), None
+    try:
+        meta = await fetch_metadata(settings, code)
+    except MetadataError as exc:
+        return None, str(exc)
+    if db is not None:
+        await db.put_metadata(cache_key, meta)
+    return _slim_meta(meta), None
+
+
+async def preview_batch(
+    settings: Settings,
+    text: str,
+    *,
+    library=None,
+    db=None,
+) -> list[dict]:
     codes = parse_batch_codes(text)
     if not codes:
         raise ValueError("没有识别到番号")
     if len(codes) > BATCH_LIMIT:
         raise ValueError(f"一次最多 {BATCH_LIMIT} 个番号")
-    rows: list[dict] = []
-    for code in codes:
-        try:
-            magnets = await search_magnets(settings, code)
-        except MagnetSearchError as exc:
-            rows.append({"code": code, "item": None, "error": str(exc)})
-            continue
-        ranked = sort_resources(magnets, code)
-        if not ranked:
-            rows.append({"code": code, "item": None, "error": "没有磁链"})
-            continue
-        rows.append({"code": code, "item": _picked(ranked[0]), "error": None})
-    return rows
+
+    hits: dict[str, dict] = {}
+    suck: set[str] = set()
+    if library is not None:
+        hits = await library.get_many(codes)
+    if db is not None and hasattr(db, "suck_keys"):
+        suck = await db.suck_keys("jav", codes)
+
+    sem = asyncio.Semaphore(_PREVIEW_CONCURRENCY)
+
+    async def one(code: str) -> dict:
+        async with sem:
+            (item, error), (meta, meta_error) = await asyncio.gather(
+                _magnet_for(settings, code),
+                _meta_for(settings, db, code),
+            )
+        return {
+            "code": code,
+            "item": item,
+            "error": error,
+            "metadata": meta,
+            "meta_error": meta_error,
+            "library": library_info(hits.get(code)),
+            "suck": code in suck,
+        }
+
+    return list(await asyncio.gather(*(one(code) for code in codes)))
 
 
 async def enqueue_batch(jobs, rows: list[dict]) -> dict:

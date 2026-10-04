@@ -10,6 +10,7 @@ from app.downloader.aria2 import Aria2Error
 from app.models import BatchEnqueue, BatchText
 from app.routers import downloads
 from app.sources.clm import MagnetSearchError
+from app.sources.javbus import MetadataError
 
 
 def test_parse_batch_codes_keeps_paste_order_and_skips_junk():
@@ -74,12 +75,53 @@ def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):
             "size": "800MB",
         }]
 
+    async def fake_meta(settings, code):
+        if code == "SSIS-001":
+            return {
+                "title": "SSIS meta",
+                "cover": "https://example.com/ssis.jpg",
+                "release_date": "2021-01-01",
+                "runtime": "120分",
+                "studio": "S1",
+                "actors": [{"name": "葵つかさ"}, {"name": "Extra"}],
+                "samples": [{"thumb": "https://example.com/s.jpg"}],
+            }
+        if code == "MIDV-001":
+            raise MetadataError("未找到该番号", 404)
+        return {"title": code, "cover": "", "actors": []}
+
+    class Lib:
+        async def get_many(self, codes):
+            return {
+                "SSIS-001": {
+                    "code": "SSIS-001",
+                    "path": "202101/SSIS-001",
+                    "has_video": 1,
+                    "has_nfo": 1,
+                    "has_poster": 1,
+                },
+            }
+
+    class Db:
+        async def suck_keys(self, kind, keys):
+            assert kind == "jav"
+            return {"IPX-001"}
+
+        async def get_metadata(self, key, ttl):
+            return None
+
+        async def put_metadata(self, key, payload):
+            return None
+
     monkeypatch.setattr("app.batch.search_magnets", fake_search)
+    monkeypatch.setattr("app.batch.fetch_metadata", fake_meta)
 
     async def run():
         return await preview_batch(
             Settings(),
             "SSIS-001\nMIDV-001\nABCD-001 IPX-001",
+            library=Lib(),
+            db=Db(),
         )
 
     rows = asyncio.run(run())
@@ -87,10 +129,21 @@ def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):
     assert rows[0]["item"]["info_hash"] == "a" * 40
     assert rows[0]["item"]["title"] == "SSIS-001-UC"
     assert rows[0]["error"] is None
-    assert rows[1] == {"code": "MIDV-001", "item": None, "error": "没有磁链"}
+    assert rows[0]["library"]["present"] is True
+    assert rows[0]["suck"] is False
+    assert rows[0]["metadata"]["title"] == "SSIS meta"
+    assert rows[0]["metadata"]["cover"] == "https://example.com/ssis.jpg"
+    assert rows[0]["metadata"]["actors"] == [{"name": "葵つかさ"}, {"name": "Extra"}]
+    assert "samples" not in rows[0]["metadata"]
+    assert rows[1]["item"] is None
+    assert rows[1]["error"] == "没有磁链"
+    assert rows[1]["meta_error"] == "未找到该番号"
+    assert rows[1]["library"]["present"] is False
     assert rows[2]["item"] is None
     assert rows[2]["error"] == "磁力猫请求失败"
     assert rows[3]["item"]["info_hash"] == "c" * 40
+    assert rows[3]["suck"] is True
+    assert rows[3]["library"]["present"] is False
 
 
 def test_preview_rejects_empty_and_too_many():
@@ -145,6 +198,13 @@ def test_batch_routes_preview_then_enqueue(monkeypatch):
             }]
         return []
 
+    async def fake_meta(settings, code):
+        return {
+            "title": f"{code} title",
+            "cover": "https://example.com/c.jpg",
+            "actors": [{"name": "Actor"}],
+        }
+
     queued = []
 
     class Jobs:
@@ -153,10 +213,13 @@ def test_batch_routes_preview_then_enqueue(monkeypatch):
             return {"id": "job1", "code": code, "info_hash": info_hash, "title": title}
 
     monkeypatch.setattr("app.batch.search_magnets", fake_search)
+    monkeypatch.setattr("app.batch.fetch_metadata", fake_meta)
     app = FastAPI()
     app.include_router(downloads.router)
     app.state.settings = Settings()
     app.state.jobs = Jobs()
+    app.state.library = None
+    app.state.db = None
 
     async def run():
         transport = httpx.ASGITransport(app=app)
@@ -168,6 +231,9 @@ def test_batch_routes_preview_then_enqueue(monkeypatch):
             assert preview.status_code == 200
             body = preview.json()
             assert body["items"][0]["item"]["title"] == "SSIS-001-UC"
+            assert body["items"][0]["metadata"]["title"] == "SSIS-001 title"
+            assert body["items"][0]["library"]["present"] is False
+            assert body["items"][0]["suck"] is False
             assert body["items"][1]["error"] == "没有磁链"
             empty = await client.post("/api/downloads/batch", json={"items": []})
             assert empty.status_code == 400

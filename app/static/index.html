@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=36" />
+  <link rel="stylesheet" href="/static/style.css?v=37" />
 </head>
 <body>
   <header class="top">
@@ -38,9 +38,14 @@
             <button type="submit">预览</button>
           </div>
         </form>
-        <p class="hint">按现在的排序预览每个番号会入队的那一条，确认后才入队。没有磁链的会跳过，不挡其他番号。</p>
+        <p class="hint">预览封面、基本信息和排序后的磁链；勾选要下的，确认后才入队。库里已有会标出来，已标 suck 的不能勾选。</p>
         <p id="batch-status" class="status" hidden></p>
         <div id="batch-preview" hidden>
+          <div class="batch-toolbar">
+            <button type="button" class="ghost small" id="batch-select-all">全选</button>
+            <button type="button" class="ghost small" id="batch-select-none">全不选</button>
+            <span id="batch-selected-count" class="muted"></span>
+          </div>
           <ul id="batch-list" class="batch-list"></ul>
           <button type="button" id="batch-confirm">确认入队</button>
         </div>
@@ -426,6 +431,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=60"></script>
+  <script src="/static/app.js?v=61"></script>
 </body>
 </html>
