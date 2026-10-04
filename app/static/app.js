@@ -486,7 +486,7 @@ async function startDownload(payload, statusEl) {
       body: JSON.stringify({ ...payload, pick_token: preview.token, file_indexes: indexes }),
     });
   }
-  location.hash = "#/queue";
+  setStatus(statusEl, "已加入下载队列", "good");
 }
 
 $("file-picker-ok").addEventListener("click", () => {
