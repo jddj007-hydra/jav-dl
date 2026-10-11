@@ -176,10 +176,18 @@ def _copy_items(items: list[dict]) -> list[dict]:
     return copied
 
 
-def _cache_key(query: str, pages: int, settings: Settings) -> tuple:
+_SORTS = {"hits", "time", "length", "rele"}
+
+
+def _sort_name(sort: str | None) -> str:
+    name = (sort or "hits").strip().lower()
+    return name if name in _SORTS else "hits"
+
+
+def _cache_key(query: str, pages: int, settings: Settings, sort: str = "hits") -> tuple:
     origins = tuple(base.lower() for base in _search_origins(settings))
     home = _origin(settings.clm_home).lower()
-    return (query.strip().casefold(), pages, origins, home)
+    return (query.strip().casefold(), pages, origins, home, _sort_name(sort))
 
 
 def _cache_get(key: tuple, now: float) -> list[dict] | None:
@@ -213,12 +221,14 @@ async def _collect_pages(
     word: str,
     code: str,
     pages: int,
+    sort: str = "hits",
 ) -> tuple[list[dict], Exception | None]:
     collected: list[dict] = []
     seen: set[str] = set()
     last_err: Exception | None = None
+    sort = _sort_name(sort)
     for page in range(1, pages + 1):
-        query_url = f"{base}/search?word={word}&sort=hits"
+        query_url = f"{base}/search?word={word}&sort={sort}"
         if page > 1:
             query_url += f"&p={page}"
         try:
@@ -240,12 +250,13 @@ async def _collect_pages(
     return collected, last_err
 
 
-async def search_magnets(settings: Settings, code: str, pages: int = 2) -> list[dict]:
+async def search_magnets(settings: Settings, code: str, pages: int = 2, sort: str = "hits") -> list[dict]:
     query = (code or "").strip()
     if not query:
         return []
     pages = max(1, int(pages))
-    key = _cache_key(query, pages, settings)
+    sort = _sort_name(sort)
+    key = _cache_key(query, pages, settings, sort)
     cached = _cache_get(key, time.monotonic())
     if cached is not None:
         return cached
@@ -264,7 +275,7 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2) -> list[
         collected: list[dict] = []
         last_err: Exception | None = None
         for index, base in enumerate(origins):
-            items, err = await _collect_pages(client, base, word, query, pages)
+            items, err = await _collect_pages(client, base, word, query, pages, sort)
             if items:
                 collected = items
                 last_err = None
@@ -274,7 +285,7 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2) -> list[
                 log.info("磁力猫主域没有结果，改用备用搜索域")
         tried = {base.lower() for base in origins}
         if not collected and home and home.lower() not in tried:
-            items, err = await _collect_pages(client, home, word, query, pages)
+            items, err = await _collect_pages(client, home, word, query, pages, sort)
             if items:
                 collected = items
                 last_err = None

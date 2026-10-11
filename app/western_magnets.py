@@ -4,6 +4,7 @@ import asyncio
 import re
 from datetime import date
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from app.config import Settings
 from app.ranking import heat_key, is_pack
@@ -370,6 +371,15 @@ def _western_pack(item: dict) -> bool:
     return bool(heat_key(item)[0])
 
 
+def _number_hit(title: str, numbers: list[str] | None) -> bool:
+    if not numbers:
+        return False
+    for number in numbers:
+        if re.search(rf"(?<!\d){re.escape(number)}(?!\d)", title or ""):
+            return True
+    return False
+
+
 def rank_western_magnets(
     items: list[dict],
     site: str,
@@ -378,6 +388,7 @@ def rank_western_magnets(
     scene_date: str = "",
     related_only: bool = False,
     extra_names: list[str] | None = None,
+    scene_numbers: list[str] | None = None,
 ) -> tuple[list[dict], str]:
     title_tokens = [word.lower() for word in words(title)]
     site_tokens = [word.lower() for word in _studio_tokens(site)]
@@ -403,15 +414,20 @@ def rank_western_magnets(
         row["_hits"] = (title_hits, person_hits, site_hits)
         row["_gap"] = gap if gap is not None else _NO_RELEASE_DATE
         row["_extra"] = extra
+        row["_number"] = _number_hit(item.get("title") or "", scene_numbers)
         scored.append(row)
 
     def _strong(row: dict) -> int:
+        if row.get("_number"):
+            return 1
         title_hits, person_hits, _site_hits = row["_hits"]
         if title_hits >= 2 or (title_hits >= 1 and person_hits > 0) or person_hits >= 2:
             return 1
         return 0
 
     def _related(row: dict) -> bool:
+        if row.get("_number"):
+            return True
         if not _strong(row):
             return False
         gap = row["_gap"]
@@ -424,14 +440,16 @@ def rank_western_magnets(
             return False
         return gap >= _NO_RELEASE_DATE
 
+    # A dated hit from the release-day query is the scene. related_only is the
+    # later pass over recent studio posts, where another scene can share the day.
     close = [row for row in scored if scene_date and row["_gap"] <= 1]
-    if close:
+    if close and not related_only:
         pool = close
     elif related_only:
         pool = [row for row in scored if _related(row)]
     else:
         pool = scored
-    limit = 24 if close else (8 if related_only else 24)
+    limit = 24 if close and not related_only else (8 if related_only else 24)
 
     pool.sort(key=lambda row: (
         1 if _western_pack(row) else 0,
@@ -441,8 +459,10 @@ def rank_western_magnets(
         -row["_hits"][1],
         heat_key(row)[1],
     ))
-    if close:
+    if close and not related_only:
         match = "date"
+    elif pool and pool[0].get("_number") and pool[0]["_hits"][0] == 0 and pool[0]["_hits"][1] == 0:
+        match = "number"
     elif pool and _strong(pool[0]):
         match = "title"
     elif pool:
@@ -454,6 +474,7 @@ def rank_western_magnets(
         row.pop("_hits", None)
         row.pop("_gap", None)
         row.pop("_extra", None)
+        row.pop("_number", None)
         row.pop("_kind", None)
         row["pack"] = _western_pack(row)
         row["rank"] = index
@@ -461,11 +482,104 @@ def rank_western_magnets(
     return out, match
 
 
-async def _search_terms(settings: Settings, terms: list[str], pages: int) -> tuple[list[dict], str | None]:
+STUDIO_ABSENT = "这个片商在磁力猫上没有"
+STUDIO_MISMATCH = "磁力猫里有这个片商的其他片，这部的文件名对不上"
+_NOT_SCENE_NUMBERS = {
+    "180", "360", "480", "720", "1080", "1440", "1920", "2160",
+    "2880", "3840", "4096", "5760", "7680",
+}
+_TRAILING_PAGE_ID = re.compile(r"-(?:[a-z]{0,4}\d{2,}[a-z]{0,2}|\d{5,})$", re.I)
+_PAGE_NUMBER = re.compile(r"(?<!\d)(\d{3,4})(?!\d)")
+
+
+def _page_segment(url: str) -> str:
+    path = urlparse(url or "").path.strip("/")
+    if not path:
+        return ""
+    parts = [unquote(part) for part in path.split("/") if part]
+    if not parts:
+        return ""
+    if len(parts) >= 2 and re.fullmatch(r"\d{4,}", parts[-1]):
+        segment = parts[-2]
+    else:
+        segment = parts[-1]
+    segment = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", segment)
+    previous = None
+    while segment and segment != previous:
+        previous = segment
+        segment = _TRAILING_PAGE_ID.sub("", segment)
+    return segment.strip("-")
+
+
+def page_scene_numbers(url: str) -> list[str]:
+    """3-4 digit scene ids from a studio page. Drop years, resolutions, and database ids."""
+    numbers: list[str] = []
+    for match in _PAGE_NUMBER.finditer(_page_segment(url)):
+        number = match.group(1)
+        if number.startswith(("19", "20")) or number in _NOT_SCENE_NUMBERS:
+            continue
+        if number not in numbers:
+            numbers.append(number)
+    return numbers[:2]
+
+
+def url_fallback_terms(
+    site: str,
+    url: str,
+    extra_names: list[str] | None = None,
+) -> list[str]:
+    """Studio plus the slug or scene number from the studio page."""
+    forms = _studio_forms(site, extra_names)
+    segment = _page_segment(url)
+    if not forms or not segment:
+        return []
+    primary = forms[0]
+    compact = _compact_alnum(primary)
+    skip = {token.lower() for token in _studio_tokens(site)}
+    tokens = [token for token in re.split(r"[^A-Za-z0-9]+", segment) if token]
+    kept: list[str] = []
+    for token in tokens:
+        if token.isdigit() or len(token) < 3 or token.lower() in _STOP or token.lower() in skip:
+            continue
+        kept.append(token)
+    terms: list[str] = []
+    for number in page_scene_numbers(url):
+        if compact:
+            terms.append(f"{number} {compact}")
+        terms.append(f"{primary} {number}")
+    if len(kept) >= 2:
+        terms.append(f"{primary} {' '.join(kept[:3])}")
+    elif len(kept) == 1 and len(kept[0]) >= 4:
+        terms.append(f"{primary} {kept[0]}")
+    out: list[str] = []
+    for term in terms:
+        if term not in out:
+            out.append(term)
+    return out[:3]
+
+
+def studio_probe_terms(site: str, extra_names: list[str] | None = None) -> list[str]:
+    """Full release prefix, then a shorter name that still sits inside it."""
+    forms = _studio_forms(site, extra_names)
+    if not forms:
+        return []
+    probes = [forms[0]]
+    peeled = _fallback_studio(forms)
+    if peeled and peeled not in probes:
+        probes.append(peeled)
+    return probes
+
+
+async def _search_terms(
+    settings: Settings,
+    terms: list[str],
+    pages: int,
+    sort: str = "hits",
+) -> tuple[list[dict], str | None]:
     if not terms:
         return [], None
     chunks = await asyncio.gather(
-        *[search_magnets(settings, term, pages=pages) for term in terms],
+        *[search_magnets(settings, term, pages=pages, sort=sort) for term in terms],
         return_exceptions=True,
     )
     merged: list[dict] = []
@@ -487,6 +601,37 @@ async def _search_terms(settings: Settings, terms: list[str], pages: int) -> tup
     return merged, error
 
 
+async def _studio_time_scan(
+    settings: Settings,
+    site: str,
+    extra_names: list[str] | None,
+) -> tuple[list[dict], str | None]:
+    """Newest posts under the studio name. The heat page is mostly old releases."""
+    error: str | None = None
+    for index, probe in enumerate(studio_probe_terms(site, extra_names)):
+        rows, err = await _search_terms(
+            settings, [probe], pages=2 if index == 0 else 1, sort="time",
+        )
+        if err:
+            error = err
+        if rows:
+            return rows, error
+    return [], error
+
+
+def _merge_items(*groups: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            info_hash = item.get("info_hash") or ""
+            if not info_hash or info_hash in seen:
+                continue
+            seen.add(info_hash)
+            merged.append(item)
+    return merged
+
+
 async def collect_western_magnets(
     settings: Settings,
     site: str,
@@ -495,6 +640,7 @@ async def collect_western_magnets(
     scene_date: str = "",
     extra_names: list[str] | None = None,
     vr: bool = False,
+    page_url: str = "",
 ) -> tuple[list[dict], str, str | None]:
     terms = western_search_terms(site, title, performers, scene_date, extra_names)
     if not terms:
@@ -507,28 +653,30 @@ async def collect_western_magnets(
     )
     if match == "date":
         return items, match, None
-    extra, extra_error = await _search_terms(
-        settings,
-        western_fallback_terms(site, title, performers, extra_names, vr) or studio_terms[:1],
-        pages=1,
+    extra_terms: list[str] = []
+    for term in [
+        *url_fallback_terms(site, page_url, extra_names),
+        *(western_fallback_terms(site, title, performers, extra_names, vr) or studio_terms[:1]),
+    ]:
+        if term not in extra_terms and term not in date_terms:
+            extra_terms.append(term)
+    (extra, extra_error), (studio_rows, studio_error) = await asyncio.gather(
+        _search_terms(settings, extra_terms, pages=1),
+        _studio_time_scan(settings, site, extra_names),
     )
-    combined: list[dict] = []
-    seen: set[str] = set()
-    for item in [*merged, *extra]:
-        info_hash = item.get("info_hash") or ""
-        if not info_hash or info_hash in seen:
-            continue
-        seen.add(info_hash)
-        combined.append(item)
+    numbers = page_scene_numbers(page_url)
     items, match = rank_western_magnets(
-        combined,
+        _merge_items(merged, extra, studio_rows),
         site,
         title,
         performers,
         scene_date,
         related_only=True,
         extra_names=extra_names,
+        scene_numbers=numbers,
     )
     if items:
         return items, match, None
-    return [], "none", extra_error or error or "磁力猫里没有这个发行日的磁链"
+    if studio_rows:
+        return [], "none", STUDIO_MISMATCH
+    return [], "none", extra_error or studio_error or error or STUDIO_ABSENT

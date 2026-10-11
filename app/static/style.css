@@ -223,6 +223,12 @@ button:disabled { opacity: 0.5; cursor: wait; }
   font-weight: 600;
 }
 .feed-bar > .ghost:hover { color: var(--text); border-color: var(--line); }
+.feed-bar > .ghost.on {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--accent-ring);
+}
+.ready-list .res-item { grid-template-columns: minmax(0, 1fr) auto; }
 .theme-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1135,6 +1141,8 @@ button.queue-title:focus-visible { filter: none; color: var(--accent-2); }
   .suck-item { align-items: flex-start; flex-direction: column; }
   .res-item { grid-template-columns: 32px minmax(0, 1fr); }
   .res-actions { grid-column: 2; justify-content: flex-start; }
+  .ready-list .res-item { grid-template-columns: minmax(0, 1fr); }
+  .ready-list .res-actions { grid-column: 1; }
   .batch-card { grid-template-columns: auto 72px minmax(0, 1fr); }
   .batch-cover { width: 72px; }
   .field-row { grid-template-columns: 1fr; }

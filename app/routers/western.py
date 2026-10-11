@@ -17,6 +17,7 @@ from app.sources.tpdb import (
     search_catalog,
     theme_tag,
 )
+from app.vr_catalog import list_downloadable
 
 router = APIRouter()
 
@@ -137,6 +138,24 @@ async def _mark_library(request: Request, items: list[dict]) -> list[dict]:
     hits = await request.app.state.library.western_many(ids)
     marked = await request.app.state.db.suck_keys("western", ids)
     return attach_western(items, hits, marked)
+
+
+@router.get("/api/western/downloadable")
+async def western_downloadable(
+    request: Request,
+    page: int = Query(1, ge=1, le=500),
+    q: str = Query(""),
+    refresh: int = Query(0, ge=0, le=1),
+):
+    """VR files already on 磁力猫. A due call reads only newer pages."""
+    data = await list_downloadable(
+        request.app.state.settings,
+        request.app.state.db,
+        page,
+        q.strip()[:80],
+        refresh=bool(refresh),
+    )
+    return data
 
 
 @router.get("/api/western/latest")

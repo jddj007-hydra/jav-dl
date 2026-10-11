@@ -99,7 +99,30 @@ CREATE TABLE IF NOT EXISTS western_pending (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS vr_magnet (
+    info_hash TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    size TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    heat INTEGER NOT NULL DEFAULT 0,
+    created TEXT NOT NULL DEFAULT '',
+    studio TEXT NOT NULL DEFAULT '',
+    seen_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vr_crawl (
+    query TEXT PRIMARY KEY,
+    page INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL,
+    anchor INTEGER NOT NULL DEFAULT 0
+);
 """
+
+VR_CRAWL_COLUMNS = (
+    ("anchor", "INTEGER NOT NULL DEFAULT 0"),
+)
 
 DOWNLOAD_COLUMNS = (
     ("scrape_status", "TEXT NOT NULL DEFAULT ''"),
@@ -226,6 +249,7 @@ class Database:
                 ("downloads", DOWNLOAD_COLUMNS),
                 ("library", LIBRARY_COLUMNS),
                 ("western_library", WESTERN_COLUMNS),
+                ("vr_crawl", VR_CRAWL_COLUMNS),
             ):
                 cur = await db.execute(f"PRAGMA table_info({table})")
                 cols = {row[1] for row in await cur.fetchall()}
@@ -833,3 +857,122 @@ class Database:
                 (tpdb_id,),
             )
             return await cur.fetchone() is not None
+
+    async def upsert_vr_magnets(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        now = time.time()
+        async with aiosqlite.connect(self.path) as db:
+            await db.executemany(
+                """INSERT INTO vr_magnet
+                   (info_hash, title, size, size_bytes, heat, created, studio, seen_at)
+                   VALUES (:info_hash, :title, :size, :size_bytes, :heat, :created, :studio, :seen_at)
+                   ON CONFLICT(info_hash) DO UPDATE SET
+                     title = excluded.title,
+                     size = excluded.size,
+                     size_bytes = excluded.size_bytes,
+                     heat = excluded.heat,
+                     created = excluded.created,
+                     studio = excluded.studio,
+                     seen_at = vr_magnet.seen_at""",
+                [
+                    {
+                        "info_hash": row["info_hash"],
+                        "title": row.get("title") or "",
+                        "size": row.get("size") or "",
+                        "size_bytes": int(row.get("size_bytes") or 0),
+                        "heat": int(row.get("heat") or 0),
+                        "created": row.get("created") or "",
+                        "studio": row.get("studio") or "",
+                        "seen_at": now,
+                    }
+                    for row in rows
+                    if row.get("info_hash")
+                ],
+            )
+            await db.commit()
+
+    async def vr_crawl_get(self, query: str) -> dict:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM vr_crawl WHERE query = ?", (query,))
+            row = await cur.fetchone()
+        if not row:
+            return {"query": query, "page": 0, "total": 0, "done": 0, "error": "", "anchor": 0, "updated_at": 0}
+        return dict(row)
+
+    async def vr_magnet_known(self, hashes: list[str]) -> set[str]:
+        wanted = [item for item in hashes if item]
+        if not wanted:
+            return set()
+        found: set[str] = set()
+        async with aiosqlite.connect(self.path) as db:
+            for offset in range(0, len(wanted), 80):
+                chunk = wanted[offset:offset + 80]
+                marks = ",".join("?" for _ in chunk)
+                cur = await db.execute(
+                    f"SELECT info_hash FROM vr_magnet WHERE info_hash IN ({marks})",
+                    chunk,
+                )
+                found.update(row[0] for row in await cur.fetchall())
+        return found
+
+    async def vr_studio_has_magnet(self, studio: str) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cur = await db.execute(
+                "SELECT 1 FROM vr_magnet WHERE studio = ? LIMIT 1",
+                (studio,),
+            )
+            return await cur.fetchone() is not None
+
+    async def vr_crawl_put(
+        self,
+        query: str,
+        page: int,
+        total: int,
+        done: bool,
+        error: str,
+        anchor: int = 0,
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO vr_crawl (query, page, total, done, error, updated_at, anchor)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(query) DO UPDATE SET
+                     page = excluded.page,
+                     total = excluded.total,
+                     done = excluded.done,
+                     error = excluded.error,
+                     updated_at = excluded.updated_at,
+                     anchor = excluded.anchor""",
+                (query, page, total, 1 if done else 0, error or "", time.time(), 1 if anchor else 0),
+            )
+            await db.commit()
+
+    async def vr_crawl_all(self) -> dict[str, dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM vr_crawl")
+            rows = await cur.fetchall()
+        return {row["query"]: dict(row) for row in rows}
+
+    async def list_vr_magnets(self, query: str, limit: int, offset: int) -> tuple[int, list[dict]]:
+        needle = (query or "").strip()
+        where = ""
+        args: list = []
+        if needle:
+            where = "WHERE title LIKE ? ESCAPE '\\'"
+            escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            args.append(f"%{escaped}%")
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(f"SELECT COUNT(*) AS n FROM vr_magnet {where}", args)
+            total = int((await cur.fetchone())["n"])
+            cur = await db.execute(
+                f"""SELECT * FROM vr_magnet {where}
+                    ORDER BY (created = '') ASC, created DESC, title
+                    LIMIT ? OFFSET ?""",
+                [*args, limit, offset],
+            )
+            rows = await cur.fetchall()
+        return total, [dict(row) for row in rows]

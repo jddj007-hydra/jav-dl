@@ -46,7 +46,14 @@ let westernTrail = [];
 let westernView = 0;
 let westernItems = [];
 let westernResources = [];
+let westernReadyItems = [];
+let westernReadyTotal = 0;
+let westernReadyScanning = false;
+let westernReadyProgress = "";
 let westernCurrent = null;
+let readyTimer = 0;
+const READY_POLL_MS = 1500;
+const READY_REFRESH_MS = 60 * 1000;
 let queueItems = [];
 let queueFilter = "all";
 let pendingItems = [];
@@ -148,13 +155,15 @@ function canonicalFromParsed(parsed) {
   if (parsed.name === "western") {
     const theme = qget(parsed.query, "theme");
     const facet = oneOf(qget(parsed.query, "facet"), WESTERN_FACETS, "");
+    const feed = qget(parsed.query, "feed") === "ready" ? "ready" : "";
     return buildHash("western", {
       kind: oneOf(qget(parsed.query, "kind"), WESTERN_KINDS, "scene"),
-      format: oneOf(qget(parsed.query, "format"), MEDIA_FORMATS, "flat"),
+      format: feed ? "vr" : oneOf(qget(parsed.query, "format"), MEDIA_FORMATS, "flat"),
       page: String(pageNum(qget(parsed.query, "page"))),
-      theme: knownThemes().includes(theme) ? theme : "",
+      theme: feed ? "" : (knownThemes().includes(theme) ? theme : ""),
       facet,
       id: qget(parsed.query, "id"),
+      feed,
       density: qget(parsed.query, "density") === "compact" ? "compact" : "",
     });
   }
@@ -204,6 +213,8 @@ function westernListKey() {
     format: westernFormat,
     page: westernPage,
     theme: westernTheme,
+    mode: westernMode,
+    q: westernMode === "ready" ? $("western-input").value.trim() : "",
     facet: (westernBrowse && westernBrowse.facet) || "",
     id: (westernBrowse && westernBrowse.name) || "",
   });
@@ -2353,6 +2364,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 function renderWesternWorks(items) {
+  hideReadyList();
+  $("western-ready-btn").classList.remove("on");
   const wrap = $("western-works-wrap");
   const list = $("western-works");
   westernItems = items || [];
@@ -2469,7 +2482,7 @@ function renderWesternResources(items) {
 function westernListFrame() {
   return {
     type: "list",
-    items: westernItems,
+    items: westernMode === "ready" ? westernReadyItems : westernItems,
     mode: westernMode,
     page: westernPage,
     lastPage: westernLastPage,
@@ -2512,6 +2525,9 @@ function restoreWestern(frame) {
     markThemes();
     renderWesternMeta(frame.item);
     renderWesternResources(frame.resources || []);
+    stopReadyPoll();
+    hideReadyList();
+    $("western-ready-btn").classList.remove("on");
     $("western-works-wrap").hidden = true;
     $("western-feed").hidden = true;
     $("western-themes").hidden = true;
@@ -2535,6 +2551,13 @@ function restoreWestern(frame) {
   $("western-resources-wrap").hidden = true;
   $("western-back").hidden = westernTrail.length > 0;
   $("western-feed").hidden = false;
+  if (westernMode === "ready") {
+    westernFormat = "vr";
+    markSeg("western-format", westernFormat);
+    $("western-themes").hidden = true;
+    loadReady(westernPage, true);
+    return;
+  }
   $("western-themes").hidden = westernMode === "browse";
   $("western-heading").textContent = westernMode === "browse" && westernBrowse ? westernBrowse.name : "作品";
   renderWesternWorks(westernItems);
@@ -2563,6 +2586,7 @@ function restoreWestern(frame) {
 }
 
 async function loadWesternBrowse(facet, name, page, tagId) {
+  stopReadyPoll();
   const view = ++westernView;
   const ident = String(tagId || "");
   westernMode = "browse";
@@ -2610,15 +2634,63 @@ function showWesternList() {
 }
 
 function westernPageHash(page, facet, id) {
+  const ready = westernMode === "ready";
   return buildHash("western", {
     kind: westernKind,
-    format: westernFormat,
+    format: ready ? "vr" : westernFormat,
     page: String(page),
-    theme: westernTheme,
+    theme: ready ? "" : westernTheme,
     facet: facet || "",
     id: id || "",
+    feed: ready ? "ready" : "",
     density: libraryDensity,
   });
+}
+
+function stopReadyPoll() {
+  clearTimeout(readyTimer);
+  readyTimer = 0;
+}
+
+function scheduleReady(scanning) {
+  stopReadyPoll();
+  if (westernMode !== "ready") return;
+  readyTimer = setTimeout(() => {
+    if (westernMode === "ready") loadReady(westernPage, true).catch(() => {});
+  }, scanning ? READY_POLL_MS : READY_REFRESH_MS);
+}
+
+function hideReadyList() {
+  $("western-ready-wrap").hidden = true;
+}
+
+function renderReady(items) {
+  westernReadyItems = items || [];
+  $("western-works-wrap").hidden = true;
+  const wrap = $("western-ready-wrap");
+  const list = $("western-ready");
+  $("western-ready-btn").classList.toggle("on", true);
+  if (!westernReadyItems.length) {
+    wrap.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  list.innerHTML = westernReadyItems.map((it) => `
+    <article class="res-item">
+      <div class="res-body">
+        <div class="res-title">${escapeHtml(it.title || "")}</div>
+        <div class="res-meta">
+          <span>${escapeHtml(it.studio || "")}</span>
+          <span>${escapeHtml(it.size || "")}</span>
+          <span>${it.date ? "收录 " + escapeHtml(it.date) : ""}</span>
+        </div>
+      </div>
+      <div class="res-actions">
+        <button type="button" data-ready-dl="${escapeHtml(it.info_hash)}">下载</button>
+        <button type="button" class="ghost" data-ready-copy="${escapeHtml(it.info_hash)}">复制</button>
+      </div>
+    </article>`).join("");
 }
 
 function westernPager(page, lastPage, facet, id) {
@@ -2627,7 +2699,33 @@ function westernPager(page, lastPage, facet, id) {
   });
 }
 
+function showReadySurface() {
+  stopReadyPoll();
+  $("western-back").hidden = navIndex === 0;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  $("western-themes").hidden = true;
+  $("western-ready-btn").classList.add("on");
+  renderReady(westernReadyItems);
+  renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
+    pushHash(westernPageHash(next, "", ""));
+  });
+  const scan = westernReadyScanning && westernReadyProgress ? ` · ${westernReadyProgress}` : "";
+  setStatus(
+    $("western-status"),
+    westernReadyTotal ? `可下 ${westernReadyTotal} 部${scan}` : "正在核对磁力猫上的新文件…",
+    westernReadyTotal ? "good" : "",
+  );
+  scheduleReady(westernReadyScanning);
+}
+
 function showWesternListSurface() {
+  if (westernMode === "ready") {
+    showReadySurface();
+    return;
+  }
+  stopReadyPoll();
   const browsing = westernMode === "browse" && westernBrowse;
   $("western-back").hidden = !(browsing || navIndex > 0);
   $("western-meta").hidden = true;
@@ -2661,6 +2759,20 @@ function applyWestern(query) {
   markSeg("western-kind", westernKind);
   markSeg("western-format", westernFormat);
   markThemes();
+  if (qget(query, "feed") === "ready") {
+    westernFormat = "vr";
+    westernMode = "ready";
+    westernBrowse = null;
+    westernTheme = "";
+    markSeg("western-format", westernFormat);
+    markThemes();
+    if (westernListKey() === westernLoadedKey) {
+      showReadySurface();
+      return;
+    }
+    loadReady(westernPage);
+    return;
+  }
   if (id && !facet) {
     westernBrowse = null;
     loadWesternDetail(id, westernKind);
@@ -2686,6 +2798,9 @@ function applyWestern(query) {
 }
 
 async function loadWesternDetail(id, kind) {
+  stopReadyPoll();
+  hideReadyList();
+  $("western-ready-btn").classList.remove("on");
   westernBootstrapped = true;
   const first = kind === "movie" ? "movie" : "scene";
   const order = [first, first === "scene" ? "movie" : "scene"];
@@ -2731,7 +2846,56 @@ function markThemes() {
   });
 }
 
+async function loadReady(page, quiet, refresh) {
+  stopReadyPoll();
+  const view = ++westernView;
+  westernMode = "ready";
+  westernFormat = "vr";
+  westernBrowse = null;
+  westernPage = page;
+  markSeg("western-format", "vr");
+  $("western-ready-btn").classList.add("on");
+  $("western-back").hidden = navIndex === 0;
+  $("western-meta").hidden = true;
+  $("western-resources-wrap").hidden = true;
+  $("western-feed").hidden = false;
+  $("western-themes").hidden = true;
+  if (!quiet) showSkeleton("western-works-wrap", "western-works");
+  if (!quiet) setStatus($("western-status"), "正在核对磁力猫上的新文件…");
+  const q = $("western-input").value.trim();
+  try {
+    const params = new URLSearchParams({ page: String(page) });
+    if (q) params.set("q", q);
+    if (refresh) params.set("refresh", "1");
+    const data = await api("/api/western/downloadable?" + params.toString());
+    if (view !== westernView || westernMode !== "ready") return;
+    westernReadyTotal = data.total || 0;
+    westernReadyScanning = !!data.scanning;
+    westernReadyProgress = data.progress || "";
+    westernLastPage = data.last_page || 1;
+    westernPage = data.page || page;
+    renderReady(data.items || []);
+    westernLoadedKey = westernListKey();
+    renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
+      pushHash(westernPageHash(next, "", ""));
+    });
+    const scan = data.scanning && data.progress ? ` · ${data.progress}` : "";
+    const added = data.added ? ` · 新收 ${data.added} 部` : "";
+    const failed = !data.scanning && data.progress ? data.progress : "";
+    let msg = "";
+    if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${added}${scan}`;
+    else if (data.scanning) msg = data.progress || "正在核对磁力猫上的新文件…";
+    else msg = failed || "磁力猫里还没有收下 VR 文件";
+    setStatus($("western-status"), msg, westernReadyTotal ? "good" : (data.scanning ? "" : "bad"));
+    scheduleReady(!!data.scanning);
+  } catch (err) {
+    if (view !== westernView) return;
+    setStatus($("western-status"), err.message, "bad");
+  }
+}
+
 async function loadWesternFeed(page) {
+  stopReadyPoll();
   const view = ++westernView;
   leaveWesternBrowse();
   westernMode = "latest";
@@ -2789,6 +2953,7 @@ async function openWestern(id, kind, known = null) {
     magnetParams.set("performers", listed.performers.slice(0, 8).join(","));
   }
   if ((listed && listed.vr) || westernFormat === "vr") magnetParams.set("vr", "1");
+  if (listed && listed.url) magnetParams.set("url", listed.url);
   const magnetPath = magnetParams.toString();
   const [detail, magnets] = await Promise.allSettled([
     api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
@@ -2831,11 +2996,13 @@ async function openWestern(id, kind, known = null) {
       if (matched === "date") {
         msg = `按片商和发行日${when ? " " + when : ""} 找到 ${items.length} 条`;
         tone = "good";
-      } else if (matched === "title") {
-        msg = `这个发行日没有同日种子，下面 ${items.length} 条是片名或演员对得上的`;
+      } else if (matched === "title" || matched === "number") {
+        msg = matched === "number"
+          ? `按官网片号找到 ${items.length} 条`
+          : `这个发行日没有同日种子，下面 ${items.length} 条是片名或演员对得上的`;
         tone = "good";
       } else {
-        msg = "磁力猫里没有这个发行日的磁链";
+        msg = "磁力猫里有这个片商的其他片，这部的文件名对不上";
         tone = "bad";
       }
     }
@@ -2847,6 +3014,7 @@ async function openWestern(id, kind, known = null) {
 }
 
 async function loadWesternSearch(q, page) {
+  stopReadyPoll();
   const view = ++westernView;
   leaveWesternBrowse();
   westernMode = "search";
@@ -2881,6 +3049,7 @@ async function loadWesternSearch(q, page) {
 $("western-kind").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-kind]");
   if (!btn) return;
+  if (westernMode === "ready") westernMode = "latest";
   westernKind = btn.dataset.kind;
   if (westernMode === "search" && $("western-input").value.trim()) {
     markSeg("western-kind", westernKind);
@@ -2897,6 +3066,7 @@ $("western-format").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-format]");
   if (!btn) return;
   westernFormat = btn.dataset.format || "flat";
+  if (westernMode === "ready" && westernFormat !== "vr") westernMode = "latest";
   if (westernMode === "search" && $("western-input").value.trim()) {
     markSeg("western-format", westernFormat);
     writeHash(westernPageHash(1, "", ""), "replace");
@@ -2912,12 +3082,29 @@ $("western-latest").addEventListener("click", () => {
   $("western-input").value = "";
   westernBrowse = null;
   westernTheme = "";
+  westernMode = "latest";
+  pushHash(westernPageHash(1, "", ""));
+});
+
+$("western-ready-btn").addEventListener("click", () => {
+  const again = westernMode === "ready";
+  $("western-input").value = "";
+  westernBrowse = null;
+  westernTheme = "";
+  westernMode = "ready";
+  westernFormat = "vr";
+  if (again) {
+    writeHash(westernPageHash(1, "", ""), "replace");
+    loadReady(1, true, true).catch((err) => setStatus($("western-status"), err.message, "bad"));
+    return;
+  }
   pushHash(westernPageHash(1, "", ""));
 });
 
 $("western-themes").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-theme]");
   if (!btn || !$("western-themes").contains(btn)) return;
+  if (westernMode === "ready") westernMode = "latest";
   westernTheme = btn.dataset.theme || "";
   const q = $("western-input").value.trim();
   if (westernMode === "search" && q) {
@@ -2932,6 +3119,15 @@ $("western-themes").addEventListener("click", (e) => {
 
 $("western-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (westernMode === "ready") {
+    writeHash(westernPageHash(1, "", ""), "replace");
+    try {
+      await loadReady(1);
+    } catch (err) {
+      setStatus($("western-status"), err.message, "bad");
+    }
+    return;
+  }
   const q = $("western-input").value.trim();
   if (!q) {
     westernBrowse = null;
@@ -2974,6 +3170,39 @@ function openWesternById(id) {
     density: libraryDensity,
   }));
 }
+
+$("western-ready").addEventListener("click", async (e) => {
+  const dl = e.target.closest("[data-ready-dl]");
+  const copy = e.target.closest("[data-ready-copy]");
+  const hash = (dl && dl.dataset.readyDl) || (copy && copy.dataset.readyCopy);
+  if (!hash) return;
+  const item = westernReadyItems.find((row) => row.info_hash === hash);
+  if (!item) return;
+  if (copy) {
+    try {
+      await navigator.clipboard.writeText(item.magnet);
+      copy.textContent = "已复制";
+      setTimeout(() => { copy.textContent = "复制"; }, 1200);
+    } catch {
+      prompt("磁链", item.magnet);
+    }
+    return;
+  }
+  dl.disabled = true;
+  try {
+    await startDownload({
+      kind: "western",
+      site: item.studio || "",
+      work_title: item.title,
+      info_hash: item.info_hash,
+      title: item.title,
+    }, $("western-status"));
+  } catch (err) {
+    setStatus($("western-status"), err.message, "bad");
+  } finally {
+    dl.disabled = false;
+  }
+});
 
 $("western-resources").addEventListener("click", async (e) => {
   const dl = e.target.closest("[data-west-dl]");

@@ -1322,3 +1322,198 @@ def test_tpdb_image_host_allowed():
     assert _allowed("https://api.metadataapi.net/x.jpg", "https://www.javbus.com")
     assert not _allowed("https://evil.example/p.jpg", "https://www.javbus.com")
     assert not _allowed("https://nottheporndb.net.evil.com/p.jpg", "https://www.javbus.com")
+
+
+def test_url_fallback_terms_use_slug_and_scene_number():
+    from app.western_magnets import page_scene_numbers, studio_probe_terms, url_fallback_terms
+
+    taboo = url_fallback_terms(
+        "Virtual Taboo",
+        "https://virtualtaboo.com/videos/creampie-oclock-vt73i",
+    )
+    assert "VirtualTaboo creampie oclock" in taboo
+    assert page_scene_numbers("https://virtualtaboo.com/videos/creampie-oclock-vt73i") == []
+    czech = url_fallback_terms(
+        "Czech VR",
+        "https://www.czechvr.com/vr-porn-video/czech-vr-868-petite-lover",
+    )
+    assert "868 czechvr" in czech
+    assert "CzechVR 868" in czech
+    slr = url_fallback_terms(
+        "MurkovskiHub",
+        "https://www.sexlikereal.com/scenes/tokio-nero-taken-by-two-99443",
+    )
+    assert all("99443" not in term for term in slr)
+    assert any("tokio" in term.lower() and "nero" in term.lower() for term in slr)
+    adult = url_fallback_terms(
+        "Forbvr",
+        "https://www.adulttime.com/en/video/forbvr/Creampie-Compilation-8/288014",
+    )
+    assert any("creampie" in term.lower() and "compilation" in term.lower() for term in adult)
+    assert all("288014" not in term for term in adult)
+    probes = studio_probe_terms("The Dorm Room")
+    assert probes[0] == "TheDormRoom"
+    assert "DormRoom" in probes
+
+
+def test_related_only_keeps_slug_name_over_another_scene_that_day():
+    items = [
+        {
+            "title": "VirtualTaboo.26.10.06.Other.Person.Different.Title.XXX.VR180",
+            "heat": 50,
+            "size": "8 GB",
+            "info_hash": "b" * 40,
+        },
+        {
+            "title": "virtualtaboo-the-birthday-suit-files-7k_180_LR.mp4",
+            "heat": 1,
+            "size": "8 GB",
+            "info_hash": "a" * 40,
+        },
+    ]
+    ranked, match = rank_western_magnets(
+        items,
+        "Virtual Taboo",
+        "The Birthday Suit",
+        ["Jane Doe"],
+        "2026-10-06",
+        related_only=True,
+    )
+    assert match == "title"
+    assert [item["info_hash"] for item in ranked] == ["a" * 40]
+
+
+def test_scene_number_matches_numeric_vr_name():
+    items = [{
+        "title": "868-czechvr-3d-7680x3840-60fps-oculusrift.mp4",
+        "heat": 1,
+        "size": "20 GB",
+        "info_hash": "a" * 40,
+    }]
+    ranked, match = rank_western_magnets(
+        items,
+        "Czech VR",
+        "Petite Lover",
+        ["Jane Doe"],
+        "2026-09-14",
+        related_only=True,
+        scene_numbers=["868"],
+    )
+    assert match == "number"
+    assert [item["info_hash"] for item in ranked] == ["a" * 40]
+    empty, none = rank_western_magnets(
+        items,
+        "Czech VR",
+        "Petite Lover",
+        ["Jane Doe"],
+        "2026-09-14",
+        related_only=True,
+    )
+    assert empty == []
+    assert none == "none"
+
+
+def test_recent_studio_scan_and_empty_reasons(monkeypatch):
+    import asyncio
+
+    from app.config import Settings
+    from app.western_magnets import STUDIO_ABSENT, STUDIO_MISMATCH, collect_western_magnets
+
+    calls: list[tuple[str, int, str]] = []
+
+    async def by_time(settings, query, pages=1, sort="hits"):
+        calls.append((query, pages, sort))
+        if sort == "time" and query == "VirtualTaboo":
+            return [{
+                "title": "virtualtaboo-the-birthday-suit-files-7k_180_LR.mp4",
+                "heat": 1,
+                "size": "8 GB",
+                "info_hash": "a" * 40,
+            }]
+        if "868" in query:
+            return [{
+                "title": "868-czechvr-3d-7680x3840-60fps.mp4",
+                "heat": 1,
+                "size": "20 GB",
+                "info_hash": "c" * 40,
+            }]
+        return []
+
+    monkeypatch.setattr("app.western_magnets.search_magnets", by_time)
+
+    async def run():
+        found, match, error = await collect_western_magnets(
+            Settings(),
+            "Virtual Taboo",
+            "The Birthday Suit",
+            ["Jane Doe"],
+            "2026-10-06",
+            vr=True,
+        )
+        assert error is None
+        assert match == "title"
+        assert found[0]["info_hash"].startswith("a")
+        assert ("VirtualTaboo", 2, "time") in calls
+        assert any(sort == "hits" and "26.10.06" in query for query, _pages, sort in calls)
+
+        numbered, number_match, number_error = await collect_western_magnets(
+            Settings(),
+            "Czech VR",
+            "Petite Lover",
+            ["Jane Doe"],
+            "2026-09-14",
+            vr=True,
+            page_url="https://www.czechvr.com/vr-porn-video/czech-vr-868-petite-lover",
+        )
+        assert number_error is None
+        assert number_match == "number"
+        assert numbered[0]["info_hash"].startswith("c")
+
+    asyncio.run(run())
+
+    async def others(settings, query, pages=1, sort="hits"):
+        if sort == "time":
+            return [{
+                "title": "VirtualTaboo.19.08.30.Eva.Elfie.Sis.Gets.A.Creampie",
+                "heat": 3,
+                "size": "7 GB",
+                "info_hash": "d" * 40,
+            }]
+        return []
+
+    monkeypatch.setattr("app.western_magnets.search_magnets", others)
+
+    async def mismatch():
+        items, match, error = await collect_western_magnets(
+            Settings(),
+            "Virtual Taboo",
+            "The Birthday Suit",
+            ["Jane Doe"],
+            "2026-10-06",
+            vr=True,
+        )
+        assert items == []
+        assert match == "none"
+        assert error == STUDIO_MISMATCH
+
+    asyncio.run(mismatch())
+
+    async def missing(settings, query, pages=1, sort="hits"):
+        return []
+
+    monkeypatch.setattr("app.western_magnets.search_magnets", missing)
+
+    async def absent():
+        items, match, error = await collect_western_magnets(
+            Settings(),
+            "Forbvr",
+            "Creampie Compilation",
+            ["Freya Von Doom"],
+            "2026-10-10",
+            vr=True,
+        )
+        assert items == []
+        assert match == "none"
+        assert error == STUDIO_ABSENT
+
+    asyncio.run(absent())

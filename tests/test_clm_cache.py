@@ -90,6 +90,29 @@ def test_repeat_code_and_western_terms_skip_the_network(monkeypatch):
     assert cached[0]["title"] != "mutated"
 
 
+def test_sort_time_is_cached_apart_from_hits(monkeypatch):
+    calls: list[str] = []
+
+    async def fetch(client, url, hops=0):
+        calls.append(url)
+        return FIXTURE
+
+    _patch_fetch(monkeypatch, fetch)
+    settings = _settings()
+
+    async def run():
+        await search_magnets(settings, "VRBangers", pages=1, sort="time")
+        await search_magnets(settings, "VRBangers", pages=1, sort="time")
+        await search_magnets(settings, "VRBangers", pages=1, sort="hits")
+        await search_magnets(settings, "VRBangers", pages=1, sort="nope")
+
+    asyncio.run(run())
+    assert calls[0].endswith("sort=time")
+    assert len([url for url in calls if "sort=time" in url]) == 1
+    # An unknown sort shares the heat cache.
+    assert len([url for url in calls if "sort=hits" in url]) == 1
+
+
 def test_backup_is_used_only_when_primary_fails_or_is_empty(monkeypatch):
     calls: list[str] = []
     mode = {"primary": "ok"}

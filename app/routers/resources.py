@@ -22,11 +22,13 @@ async def resources(
     performers: str | None = Query(None),
     date: str | None = Query(None),
     vr: bool = Query(False),
+    url: str | None = Query(None),
 ):
     settings = request.app.state.settings
     raw_site = (site or "").strip()
     raw_title = (title or "").strip()
     raw_date = (date or "").strip()
+    raw_url = (url or "").strip()
     people = [part.strip() for part in (performers or "").split(",") if part.strip()]
     if raw_site or raw_title or people:
         extras: list[str] = []
@@ -38,7 +40,7 @@ async def resources(
             if found:
                 extras = site_names(found)
         items, match, error = await collect_western_magnets(
-            settings, raw_site, raw_title, people, raw_date, extras, vr,
+            settings, raw_site, raw_title, people, raw_date, extras, vr, raw_url,
         )
         return {
             "site": raw_site,
