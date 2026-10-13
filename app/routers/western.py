@@ -155,6 +155,11 @@ async def western_downloadable(
         q.strip()[:80],
         refresh=bool(refresh),
     )
+    ids = [str(item.get("id") or "") for item in data["items"]]
+    library = getattr(request.app.state, "library", None)
+    hits = await library.western_many(ids) if library is not None else {}
+    marked = await request.app.state.db.suck_keys("western", ids)
+    data["items"] = attach_western(data["items"], hits, marked)
     return data
 
 

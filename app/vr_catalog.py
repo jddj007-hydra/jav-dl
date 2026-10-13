@@ -3,11 +3,15 @@
 The list is a feed. A refresh reads each studio from the newest page and
 stops when a stored hash shows up. A studio with nothing stored yet keeps
 only the newest few pages; later refreshes add files that appeared since.
+
+Rows that match ThePornDB keep the cover, title, performers, and release
+date. Each page fills a few unmatched names so the list can come back first.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import re
 import time
@@ -19,6 +23,7 @@ from app.config import Settings
 from app.db import Database
 from app.httputil import site_client
 from app.ranking import is_pack
+from app.sources.tpdb import TpdbError, fetch_by_filename
 from app.sources.clm import (
     MagnetSearchError,
     _b64_word,
@@ -36,6 +41,8 @@ FEED_PAGES = 5
 PAGE_CAP = 120
 LIST_PAGE = 40
 TICK_PAGES = 2
+# 一页先补几部，剩下的等下一次打开再查，避免整页卡住。
+MATCH_BATCH = 3
 # 刚核对过的话，这段时间里打开页面直接用已收下的列表。
 REFRESH_AFTER = 10 * 60
 # 小于这个的多半是预告或垃圾行。未知体积留着。
@@ -298,6 +305,89 @@ async def crawl_tick(
     return added
 
 
+def _meta_performers(raw: str | None) -> list[str]:
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(name) for name in data if str(name).strip()]
+
+
+def _ready_item(row: dict) -> dict:
+    state = row.get("match_state") or ""
+    info_hash = row.get("info_hash") or ""
+    title = row.get("title") or ""
+    duration = int(row.get("meta_duration") or 0)
+    return {
+        "info_hash": info_hash,
+        "title": title,
+        "size": row.get("size") or "",
+        "date": row.get("created") or "",
+        "studio": row.get("studio") or "",
+        "heat": int(row.get("heat") or 0),
+        "magnet": magnet_for(info_hash, title) if info_hash else "",
+        "match": state if state in ("hit", "miss") else "pending",
+        "id": row.get("tpdb_id") or "",
+        "kind": row.get("tpdb_kind") or "scene",
+        "work_title": row.get("meta_title") or "",
+        "site": row.get("meta_site") or "",
+        "release_date": row.get("meta_date") or "",
+        "cover": row.get("meta_cover") or "",
+        "performers": _meta_performers(row.get("meta_performers")),
+        "duration": duration or None,
+    }
+
+
+async def match_vr_title(settings: Settings, title: str) -> tuple[str, dict | None]:
+    """A confident ThePornDB row, or miss when the name is not in the catalog.
+
+    A token, network, or HTTP failure stays pending so the next open can retry.
+    """
+    try:
+        item = await fetch_by_filename(settings, title)
+    except TpdbError as exc:
+        text = str(exc)
+        if text.startswith("没有匹配") or text.startswith("没有可解析"):
+            return "miss", None
+        raise
+    if not item or not item.get("id"):
+        return "miss", None
+    return "hit", item
+
+
+def _unmatched(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if (row.get("match_state") or "") not in ("hit", "miss")]
+
+
+async def _fill_metadata(
+    settings: Settings,
+    db: Database,
+    rows: list[dict],
+    query: str,
+    page: int,
+    match_title,
+) -> tuple[list[dict], bool, str]:
+    """Fill a few names on this page. True means some rows are still pending."""
+    pending = _unmatched(rows)
+    if not pending or not (settings.tpdb_api_key or "").strip():
+        return rows, False, ""
+    done = 0
+    note = ""
+    for row in pending[:MATCH_BATCH]:
+        try:
+            state, item = await match_title(settings, row.get("title") or "")
+        except TpdbError as exc:
+            note = f"元数据暂时没查到：{exc}"
+            break
+        await db.save_vr_match(row.get("info_hash") or "", state, item if state == "hit" else None)
+        done += 1
+    if done:
+        _total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    return rows, bool(_unmatched(rows)), note
+
+
 def _progress(states: dict[str, dict], probes: tuple[Probe, ...]) -> tuple[bool, str]:
     for probe in probes:
         state = states.get(probe.query) or {}
@@ -324,6 +414,7 @@ async def list_downloadable(
     probes: tuple[Probe, ...] | None = None,
     fetch_page=None,
     refresh: bool = False,
+    match_title=None,
 ) -> dict:
     probes = probes if probes is not None else PROBES
     added = await crawl_tick(settings, db, fetch_page=fetch_page, probes=probes, force=refresh)
@@ -333,27 +424,24 @@ async def list_downloadable(
     if page > last_page:
         page = last_page
         total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    rows, matching, meta_error = await _fill_metadata(
+        settings,
+        db,
+        rows,
+        query,
+        page,
+        match_title or match_vr_title,
+    )
     states = await db.vr_crawl_all()
     scanning, progress = _progress(states, probes)
-    items = []
-    for row in rows:
-        title = row.get("title") or ""
-        info_hash = row.get("info_hash") or ""
-        items.append({
-            "info_hash": info_hash,
-            "title": title,
-            "size": row.get("size") or "",
-            "date": row.get("created") or "",
-            "studio": row.get("studio") or "",
-            "heat": int(row.get("heat") or 0),
-            "magnet": magnet_for(info_hash, title) if info_hash else "",
-        })
     return {
-        "items": items,
+        "items": [_ready_item(row) for row in rows],
         "page": page,
         "last_page": last_page,
         "total": total,
         "scanning": scanning,
         "progress": progress,
         "added": added,
+        "matching": matching,
+        "meta_error": meta_error,
     }

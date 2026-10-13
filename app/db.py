@@ -107,7 +107,16 @@ CREATE TABLE IF NOT EXISTS vr_magnet (
     heat INTEGER NOT NULL DEFAULT 0,
     created TEXT NOT NULL DEFAULT '',
     studio TEXT NOT NULL DEFAULT '',
-    seen_at REAL NOT NULL
+    seen_at REAL NOT NULL,
+    tpdb_id TEXT NOT NULL DEFAULT '',
+    tpdb_kind TEXT NOT NULL DEFAULT '',
+    meta_title TEXT NOT NULL DEFAULT '',
+    meta_site TEXT NOT NULL DEFAULT '',
+    meta_date TEXT NOT NULL DEFAULT '',
+    meta_cover TEXT NOT NULL DEFAULT '',
+    meta_performers TEXT NOT NULL DEFAULT '[]',
+    meta_duration INTEGER NOT NULL DEFAULT 0,
+    match_state TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS vr_crawl (
     query TEXT PRIMARY KEY,
@@ -122,6 +131,18 @@ CREATE TABLE IF NOT EXISTS vr_crawl (
 
 VR_CRAWL_COLUMNS = (
     ("anchor", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+VR_MAGNET_COLUMNS = (
+    ("tpdb_id", "TEXT NOT NULL DEFAULT ''"),
+    ("tpdb_kind", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_title", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_site", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_date", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_cover", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_performers", "TEXT NOT NULL DEFAULT '[]'"),
+    ("meta_duration", "INTEGER NOT NULL DEFAULT 0"),
+    ("match_state", "TEXT NOT NULL DEFAULT ''"),
 )
 
 DOWNLOAD_COLUMNS = (
@@ -250,6 +271,7 @@ class Database:
                 ("library", LIBRARY_COLUMNS),
                 ("western_library", WESTERN_COLUMNS),
                 ("vr_crawl", VR_CRAWL_COLUMNS),
+                ("vr_magnet", VR_MAGNET_COLUMNS),
             ):
                 cur = await db.execute(f"PRAGMA table_info({table})")
                 cols = {row[1] for row in await cur.fetchall()}
@@ -874,7 +896,16 @@ class Database:
                      heat = excluded.heat,
                      created = excluded.created,
                      studio = excluded.studio,
-                     seen_at = vr_magnet.seen_at""",
+                     seen_at = vr_magnet.seen_at,
+                     tpdb_id = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.tpdb_id ELSE '' END,
+                     tpdb_kind = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.tpdb_kind ELSE '' END,
+                     meta_title = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_title ELSE '' END,
+                     meta_site = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_site ELSE '' END,
+                     meta_date = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_date ELSE '' END,
+                     meta_cover = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_cover ELSE '' END,
+                     meta_performers = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_performers ELSE '[]' END,
+                     meta_duration = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_duration ELSE 0 END,
+                     match_state = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.match_state ELSE '' END""",
                 [
                     {
                         "info_hash": row["info_hash"],
@@ -889,6 +920,48 @@ class Database:
                     for row in rows
                     if row.get("info_hash")
                 ],
+            )
+            await db.commit()
+
+    async def save_vr_match(self, info_hash: str, state: str, item: dict | None = None) -> None:
+        """Remember a ThePornDB hit or a confirmed miss. Pending rows stay blank."""
+        info_hash = (info_hash or "").strip()
+        if not info_hash:
+            return
+        item = item or {}
+        performers = item.get("performers") or []
+        if not isinstance(performers, list):
+            performers = []
+        names = [str(name).strip() for name in performers if str(name).strip()]
+        try:
+            duration = int(item.get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """UPDATE vr_magnet SET
+                     match_state = ?,
+                     tpdb_id = ?,
+                     tpdb_kind = ?,
+                     meta_title = ?,
+                     meta_site = ?,
+                     meta_date = ?,
+                     meta_cover = ?,
+                     meta_performers = ?,
+                     meta_duration = ?
+                   WHERE info_hash = ?""",
+                (
+                    state if state in ("hit", "miss") else "",
+                    str(item.get("id") or ""),
+                    str(item.get("kind") or ""),
+                    str(item.get("title") or ""),
+                    str(item.get("site") or ""),
+                    str(item.get("date") or "")[:10],
+                    str(item.get("cover") or ""),
+                    json.dumps(names, ensure_ascii=False),
+                    duration,
+                    info_hash,
+                ),
             )
             await db.commit()
 

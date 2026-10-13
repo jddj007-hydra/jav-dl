@@ -8,8 +8,10 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.db import Database
 from app.routers import western
+from app.sources.tpdb import TpdbError
 from app.vr_catalog import (
     FEED_PAGES,
+    MATCH_BATCH,
     REFRESH_AFTER,
     Probe,
     crawl_tick,
@@ -344,5 +346,185 @@ def test_anchor_column_is_added_to_an_old_crawl_table(tmp_path):
         await db.vr_crawl_put("VirtualTaboo", 1, 12, True, "", 1)
         state = await db.vr_crawl_get("VirtualTaboo")
         assert state["anchor"] == 1
+
+    asyncio.run(run())
+
+
+def _magnet(index, title, created):
+    return {
+        "info_hash": f"{index:040x}",
+        "title": title,
+        "size": "8 GB",
+        "size_bytes": 8_000_000_000,
+        "heat": 1,
+        "created": created,
+        "studio": "WankzVR",
+    }
+
+
+def test_downloadable_page_fills_metadata_and_keeps_it(tmp_path):
+    settings = _settings(tmp_path)
+    settings.tpdb_api_key = "token"
+    probe = Probe("WankzVR", "WankzVR", False)
+    calls = []
+
+    async def fetch(query, page):
+        raise AssertionError(f"should not crawl {query} {page}")
+
+    async def match(_settings, title):
+        calls.append(title)
+        if "miss" in title:
+            return "miss", None
+        return "hit", {
+            "id": "id-" + title,
+            "kind": "scene",
+            "title": "Official " + title,
+            "site": "WankzVR",
+            "date": "2023-02-24",
+            "cover": "https://cdn.theporndb.net/x.jpg",
+            "performers": ["Valentina Nappi"],
+            "duration": 56,
+        }
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        rows = [
+            _magnet(1, "wankzvr-hit-one.mp4", "2026-10-03"),
+            _magnet(2, "wankzvr-hit-two.mp4", "2026-10-02"),
+            _magnet(3, "wankzvr-miss.mp4", "2026-10-01"),
+            _magnet(4, "wankzvr-later.mp4", "2026-09-01"),
+        ]
+        await db.upsert_vr_magnets(rows)
+        body = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert calls == [row["title"] for row in rows[:MATCH_BATCH]]
+        assert body["matching"] is True
+        assert body["meta_error"] == ""
+        hit = body["items"][0]
+        assert hit["match"] == "hit"
+        assert hit["work_title"] == "Official wankzvr-hit-one.mp4"
+        assert hit["performers"] == ["Valentina Nappi"]
+        assert hit["release_date"] == "2023-02-24"
+        assert hit["duration"] == 56
+        assert hit["cover"].endswith("/x.jpg")
+        assert hit["id"] == "id-wankzvr-hit-one.mp4"
+        assert body["items"][2]["match"] == "miss"
+        assert body["items"][3]["match"] == "pending"
+        again = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert calls[-1] == "wankzvr-later.mp4"
+        assert again["matching"] is False
+        assert all(item["match"] in ("hit", "miss") for item in again["items"])
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-hit-one.mp4", "2026-10-03")])
+        kept = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert len(calls) == MATCH_BATCH + 1
+        assert kept["items"][0]["id"] == "id-wankzvr-hit-one.mp4"
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-renamed.mp4", "2026-10-03")])
+        renamed = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert renamed["items"][0]["title"] == "wankzvr-renamed.mp4"
+        assert renamed["items"][0]["match"] == "hit"
+        assert renamed["items"][0]["id"] == "id-wankzvr-renamed.mp4"
+
+    asyncio.run(run())
+
+
+def test_metadata_lookup_error_stays_pending(tmp_path):
+    settings = _settings(tmp_path)
+    settings.tpdb_api_key = "token"
+    probe = Probe("WankzVR", "WankzVR", False)
+
+    async def fetch(query, page):
+        raise AssertionError("should not crawl")
+
+    async def match(_settings, title):
+        raise TpdbError("ThePornDB HTTP 503")
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-hit-one.mp4", "2026-10-03")])
+        body = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert body["matching"] is True
+        assert body["meta_error"].startswith("元数据暂时没查到")
+        assert body["items"][0]["match"] == "pending"
+        assert body["items"][0]["id"] == ""
+
+    asyncio.run(run())
+
+
+def test_metadata_lookup_skips_without_a_token(tmp_path):
+    settings = _settings(tmp_path)
+    probe = Probe("WankzVR", "WankzVR", False)
+
+    async def fetch(query, page):
+        raise AssertionError("should not crawl")
+
+    async def match(_settings, title):
+        raise AssertionError("should not look up")
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-hit-one.mp4", "2026-10-03")])
+        body = await list_downloadable(
+            settings, db, 1, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert body["matching"] is False
+        assert body["items"][0]["match"] == "pending"
+
+    asyncio.run(run())
+
+
+def test_old_vr_magnet_table_gains_metadata_columns(tmp_path):
+    settings = _settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        async with aiosqlite.connect(db.path) as conn:
+            await conn.execute(
+                """CREATE TABLE vr_magnet (
+                    info_hash TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    size TEXT NOT NULL DEFAULT '',
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    heat INTEGER NOT NULL DEFAULT 0,
+                    created TEXT NOT NULL DEFAULT '',
+                    studio TEXT NOT NULL DEFAULT '',
+                    seen_at REAL NOT NULL
+                )"""
+            )
+            await conn.execute(
+                """INSERT INTO vr_magnet
+                   (info_hash, title, size, size_bytes, heat, created, studio, seen_at)
+                   VALUES ('a', 'old.mp4', '1 GB', 1000, 1, '2026-10-01', 'WankzVR', 1)"""
+            )
+            await conn.commit()
+        await db.init()
+        await db.save_vr_match("a", "hit", {
+            "id": "scene-1",
+            "kind": "scene",
+            "title": "Old Scene",
+            "site": "WankzVR",
+            "date": "2024-01-02",
+            "cover": "https://cdn.theporndb.net/a.jpg",
+            "performers": ["A"],
+            "duration": 20,
+        })
+        _total, rows = await db.list_vr_magnets("", 10, 0)
+        assert rows[0]["match_state"] == "hit"
+        assert rows[0]["tpdb_id"] == "scene-1"
+        assert rows[0]["meta_title"] == "Old Scene"
 
     asyncio.run(run())

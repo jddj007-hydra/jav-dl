@@ -49,7 +49,9 @@ let westernResources = [];
 let westernReadyItems = [];
 let westernReadyTotal = 0;
 let westernReadyScanning = false;
+let westernReadyMatching = false;
 let westernReadyProgress = "";
+let westernReadySignature = "";
 let westernCurrent = null;
 let readyTimer = 0;
 const READY_POLL_MS = 1500;
@@ -2652,20 +2654,31 @@ function stopReadyPoll() {
   readyTimer = 0;
 }
 
-function scheduleReady(scanning) {
+function scheduleReady(scanning, matching) {
   stopReadyPoll();
   if (westernMode !== "ready") return;
   readyTimer = setTimeout(() => {
     if (westernMode === "ready") loadReady(westernPage, true).catch(() => {});
-  }, scanning ? READY_POLL_MS : READY_REFRESH_MS);
+  }, (scanning || matching) ? READY_POLL_MS : READY_REFRESH_MS);
 }
 
 function hideReadyList() {
   $("western-ready-wrap").hidden = true;
 }
 
+function readyFacts(it) {
+  const bits = [];
+  if (it.site || it.studio) bits.push(escapeHtml(it.site || it.studio));
+  if (it.release_date) bits.push("发行 " + escapeHtml(it.release_date));
+  if (it.duration) bits.push(`${escapeHtml(String(it.duration))} 分钟`);
+  if (it.size) bits.push(escapeHtml(it.size));
+  if (it.date) bits.push("收录 " + escapeHtml(it.date));
+  return bits.join(" · ");
+}
+
 function renderReady(items) {
   westernReadyItems = items || [];
+  westernReadySignature = JSON.stringify(westernReadyItems);
   $("western-works-wrap").hidden = true;
   const wrap = $("western-ready-wrap");
   const list = $("western-ready");
@@ -2676,21 +2689,45 @@ function renderReady(items) {
     return;
   }
   wrap.hidden = false;
-  list.innerHTML = westernReadyItems.map((it) => `
-    <article class="res-item">
-      <div class="res-body">
-        <div class="res-title">${escapeHtml(it.title || "")}</div>
-        <div class="res-meta">
-          <span>${escapeHtml(it.studio || "")}</span>
-          <span>${escapeHtml(it.size || "")}</span>
-          <span>${it.date ? "收录 " + escapeHtml(it.date) : ""}</span>
-        </div>
+  list.innerHTML = westernReadyItems.map((it) => {
+    const named = it.match === "hit" && it.work_title;
+    const heading = named ? it.work_title : (it.title || "");
+    const people = (it.performers || []).join("、");
+    const open = it.id
+      ? ` data-ready-open="${escapeHtml(it.id)}" data-ready-kind="${escapeHtml(it.kind || "scene")}"`
+      : "";
+    const title = it.id
+      ? `<button type="button" class="ready-title"${open}>${escapeHtml(heading)}</button>`
+      : `<div class="ready-title">${escapeHtml(heading)}</div>`;
+    const cover = it.id
+      ? `<button type="button" class="ready-cover"${open}>${coverImage(it.cover, { lazy: true })}${coverBadge(it)}</button>`
+      : `<div class="ready-cover">${coverImage(it.cover, { lazy: true })}${coverBadge(it)}</div>`;
+    const file = named && it.title && it.title !== it.work_title
+      ? `<div class="ready-file">${escapeHtml(it.title)}</div>`
+      : "";
+    let note = "";
+    if (it.match === "miss") note = "没有对上 ThePornDB";
+    else if (it.match !== "hit" && westernReadyMatching) note = "正在查元数据";
+    const cls = [
+      it.library && it.library.present ? "in-library" : "",
+      it.suck ? "is-suck" : "",
+    ].filter(Boolean).join(" ");
+    return `
+    <article class="ready-card${cls ? " " + cls : ""}">
+      ${cover}
+      <div class="ready-body">
+        ${title}
+        ${people ? `<div class="ready-people">${escapeHtml(people)}</div>` : ""}
+        <div class="res-meta"><span>${readyFacts(it)}</span></div>
+        ${file}
+        ${note ? `<div class="ready-note">${note}</div>` : ""}
       </div>
       <div class="res-actions">
-        <button type="button" data-ready-dl="${escapeHtml(it.info_hash)}">下载</button>
+        <button type="button" data-ready-dl="${escapeHtml(it.info_hash)}"${it.suck ? " disabled" : ""}>${downloadLabel(it.library && it.library.present, it.suck)}</button>
         <button type="button" class="ghost" data-ready-copy="${escapeHtml(it.info_hash)}">复制</button>
       </div>
-    </article>`).join("");
+    </article>`;
+  }).join("");
 }
 
 function westernPager(page, lastPage, facet, id) {
@@ -2712,12 +2749,13 @@ function showReadySurface() {
     pushHash(westernPageHash(next, "", ""));
   });
   const scan = westernReadyScanning && westernReadyProgress ? ` · ${westernReadyProgress}` : "";
+  const filling = westernReadyMatching ? " · 正在补元数据" : "";
   setStatus(
     $("western-status"),
-    westernReadyTotal ? `可下 ${westernReadyTotal} 部${scan}` : "正在核对磁力猫上的新文件…",
+    westernReadyTotal ? `可下 ${westernReadyTotal} 部${scan}${filling}` : "正在核对磁力猫上的新文件…",
     westernReadyTotal ? "good" : "",
   );
-  scheduleReady(westernReadyScanning);
+  scheduleReady(westernReadyScanning, westernReadyMatching);
 }
 
 function showWesternListSurface() {
@@ -2766,7 +2804,11 @@ function applyWestern(query) {
     westernTheme = "";
     markSeg("western-format", westernFormat);
     markThemes();
-    if (westernListKey() === westernLoadedKey) {
+    if (id && !facet) {
+      loadWesternDetail(id, westernKind);
+      return;
+    }
+    if (westernListKey() === westernLoadedKey && !westernReadyScanning && !westernReadyMatching) {
       showReadySurface();
       return;
     }
@@ -2871,23 +2913,27 @@ async function loadReady(page, quiet, refresh) {
     if (view !== westernView || westernMode !== "ready") return;
     westernReadyTotal = data.total || 0;
     westernReadyScanning = !!data.scanning;
+    westernReadyMatching = !!data.matching;
     westernReadyProgress = data.progress || "";
     westernLastPage = data.last_page || 1;
     westernPage = data.page || page;
-    renderReady(data.items || []);
+    const nextItems = data.items || [];
+    const signature = JSON.stringify(nextItems);
+    if (signature !== westernReadySignature) renderReady(nextItems);
     westernLoadedKey = westernListKey();
     renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
       pushHash(westernPageHash(next, "", ""));
     });
     const scan = data.scanning && data.progress ? ` · ${data.progress}` : "";
     const added = data.added ? ` · 新收 ${data.added} 部` : "";
+    const filling = data.meta_error ? ` · ${data.meta_error}` : (data.matching ? " · 正在补元数据" : "");
     const failed = !data.scanning && data.progress ? data.progress : "";
     let msg = "";
-    if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${added}${scan}`;
+    if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${added}${scan}${filling}`;
     else if (data.scanning) msg = data.progress || "正在核对磁力猫上的新文件…";
     else msg = failed || "磁力猫里还没有收下 VR 文件";
     setStatus($("western-status"), msg, westernReadyTotal ? "good" : (data.scanning ? "" : "bad"));
-    scheduleReady(!!data.scanning);
+    scheduleReady(!!data.scanning, !!data.matching);
   } catch (err) {
     if (view !== westernView) return;
     setStatus($("western-status"), err.message, "bad");
@@ -3172,6 +3218,14 @@ function openWesternById(id) {
 }
 
 $("western-ready").addEventListener("click", async (e) => {
+  const open = e.target.closest("[data-ready-open]");
+  if (open && !e.target.closest("[data-ready-dl], [data-ready-copy]")) {
+    const id = open.dataset.readyOpen;
+    if (!id) return;
+    westernKind = open.dataset.readyKind || westernKind;
+    pushHash(westernPageHash(westernPage, "", id));
+    return;
+  }
   const dl = e.target.closest("[data-ready-dl]");
   const copy = e.target.closest("[data-ready-copy]");
   const hash = (dl && dl.dataset.readyDl) || (copy && copy.dataset.readyCopy);
@@ -3188,12 +3242,20 @@ $("western-ready").addEventListener("click", async (e) => {
     }
     return;
   }
+  if (item.suck) {
+    setStatus($("western-status"), "已标 suck，不会再下载", "bad");
+    return;
+  }
   dl.disabled = true;
   try {
     await startDownload({
       kind: "western",
-      site: item.studio || "",
-      work_title: item.title,
+      tpdb_id: item.id || "",
+      tpdb_kind: item.kind || "scene",
+      site: item.site || item.studio || "",
+      date: item.release_date || "",
+      performers: item.performers || [],
+      work_title: item.work_title || item.title,
       info_hash: item.info_hash,
       title: item.title,
     }, $("western-status"));
