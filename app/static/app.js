@@ -521,15 +521,17 @@ function setStatus(el, msg, kind) {
   el.className = "status" + (kind ? " " + kind : "");
 }
 
-function skeletonCards(n) {
+function skeletonCards(n, shape) {
+  const imgClass = shape === "wide" ? "sk-img wide" : "sk-img";
   return Array.from({ length: n }, () => (
-    '<div class="skeleton"><div class="sk-img"></div><div class="sk-line"></div><div class="sk-line short"></div></div>'
+    `<div class="skeleton"><div class="${imgClass}"></div><div class="sk-line"></div><div class="sk-line short"></div></div>`
   )).join("");
 }
 
 function showSkeleton(wrapId, listId) {
   $(wrapId).hidden = false;
-  $(listId).innerHTML = skeletonCards(12);
+  const shape = listId === "works-list" ? "wide" : "";
+  $(listId).innerHTML = skeletonCards(12, shape);
 }
 
 const FALLBACK_COVER = "/static/placeholder.svg";
@@ -552,6 +554,38 @@ function coverSrc(url) {
   if (!url) return FALLBACK_COVER;
   return "/api/img?url=" + encodeURIComponent(url);
 }
+
+function coverFrameKind(img) {
+  const width = img.naturalWidth;
+  const height = img.naturalHeight;
+  if (!width || !height) return "";
+  const ratio = width / height;
+  if (ratio >= 1.65) return "frame-wide";
+  if (ratio >= 1.05) return "frame-mid";
+  return "frame-tall";
+}
+
+function fitCoverFrame(img) {
+  if (!(img instanceof HTMLImageElement)) return;
+  const frame = img.closest(".work-cover, .lib-cover, .ready-cover, .batch-cover");
+  if (!frame) return;
+  const kind = coverFrameKind(img);
+  if (!kind) return;
+  frame.classList.remove("frame-wide", "frame-mid", "frame-tall");
+  frame.classList.add(kind);
+}
+
+function mountCovers(root) {
+  if (!root) return;
+  root.querySelectorAll("img").forEach((img) => {
+    if (img.complete) fitCoverFrame(img);
+  });
+}
+
+document.addEventListener("load", (event) => {
+  const img = event.target;
+  if (img instanceof HTMLImageElement) fitCoverFrame(img);
+}, true);
 
 function coverImage(url, opts = {}) {
   const missing = !url;
@@ -733,6 +767,7 @@ function renderWorks(items) {
       <span class="work-title">${escapeHtml(it.title || "")}</span>
       <span class="work-date">${escapeHtml(it.release_date || "")}</span>
     </button>`).join("");
+  mountCovers(list);
 }
 
 function renderResources(items) {
@@ -1538,6 +1573,7 @@ function renderBatch(items) {
       </div>
     </li>`;
   }).join("");
+  mountCovers(list);
   updateBatchConfirm();
 }
 
@@ -2390,6 +2426,7 @@ function renderWesternWorks(items) {
       <span class="work-date">${escapeHtml(when)}</span>
     </button>`;
   }).join("");
+  mountCovers(list);
 }
 
 function renderWesternMeta(item) {
@@ -2731,6 +2768,7 @@ function renderReady(items) {
       </div>
     </article>`;
   }).join("");
+  mountCovers(list);
 }
 
 function westernPager(page, lastPage, facet, id) {
@@ -3595,6 +3633,7 @@ function renderLibrary() {
       </section>`).join("");
   } else {
     list.innerHTML = `<div class="${gridClass}">${shown.map(libraryCard).join("")}</div>`;
+    mountCovers(list);
   }
   const rest = items.length - shown.length;
   more.hidden = rest <= 0;
@@ -3610,7 +3649,9 @@ function showMoreLibrary() {
 async function loadLibrary() {
   if (!libraryPayload) {
     if (libraryKind !== "suck") fillLibrarySort();
-    $("library-list").innerHTML = libraryKind === "suck" ? "" : `<div class="lib-grid">${skeletonCards(12)}</div>`;
+    const skShape = libraryKind === "jav" || libraryKind === "jav_vr" ? "wide" : "";
+    const skGrid = libraryKind === "jav" || libraryKind === "jav_vr" ? "lib-grid" : "lib-grid wide";
+    $("library-list").innerHTML = libraryKind === "suck" ? "" : `<div class="${skGrid}">${skeletonCards(12, skShape)}</div>`;
   }
   try {
     libraryPayload = await api("/api/library");
