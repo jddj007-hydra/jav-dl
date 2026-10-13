@@ -2712,7 +2712,6 @@ function renderReady(items) {
     const file = named && it.title && it.title !== it.work_title
       ? `<div class="ready-file">${escapeHtml(it.title)}</div>`
       : "";
-    const note = it.match === "miss" ? "没有对上 ThePornDB" : "";
     const cls = [
       it.library && it.library.present ? "in-library" : "",
       it.suck ? "is-suck" : "",
@@ -2725,7 +2724,6 @@ function renderReady(items) {
         ${people ? `<div class="ready-people">${escapeHtml(people)}</div>` : ""}
         <div class="res-meta"><span>${readyFacts(it)}</span></div>
         ${file}
-        ${note ? `<div class="ready-note">${note}</div>` : ""}
       </div>
       <div class="res-actions">
         <button type="button" data-ready-dl="${escapeHtml(it.info_hash)}"${it.suck ? " disabled" : ""}>${downloadLabel(it.library && it.library.present, it.suck)}</button>
@@ -2754,11 +2752,11 @@ function showReadySurface() {
   const scan = westernReadyScanning && westernReadyProgress ? ` · ${westernReadyProgress}` : "";
   const filling = westernReadyMatching ? " · 正在补元数据" : "";
   const pageLabel = westernLastPage ? ` · 第 ${westernPage} / ${westernLastPage} 页` : "";
-  setStatus(
-    $("western-status"),
-    westernReadyTotal ? `可下 ${westernReadyTotal} 部${pageLabel}${scan}${filling}` : "本地还没有可下的 VR 文件",
-    westernReadyTotal ? "good" : "",
-  );
+  let msg = `可下 ${westernReadyTotal} 部${pageLabel}${scan}${filling}`;
+  if (!westernReadyTotal && westernReadyScanning) msg = westernReadyProgress || "后台正在核对新文件…";
+  else if (!westernReadyTotal && westernReadyMatching) msg = "对上的才会列出来，后台还在查";
+  else if (!westernReadyTotal) msg = "还没有 2024 年起对上的 VR 文件";
+  setStatus($("western-status"), msg, westernReadyTotal ? "good" : "");
   scheduleReady();
 }
 
@@ -2938,7 +2936,8 @@ async function loadReady(page, quiet, refresh) {
     let msg = "";
     if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${pageLabel}${scan}${filling}`;
     else if (data.scanning) msg = data.progress || "后台正在核对新文件…";
-    else msg = "本地还没有可下的 VR 文件";
+    else if (data.matching) msg = "对上的才会列出来，后台还在查";
+    else msg = "还没有 2024 年起对上的 VR 文件";
     setStatus($("western-status"), msg, westernReadyTotal ? "good" : (data.scanning ? "" : "bad"));
     scheduleReady();
   } catch (err) {

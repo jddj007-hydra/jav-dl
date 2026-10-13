@@ -1,9 +1,9 @@
 """VR files that already have a magnet on 磁力猫.
 
-The list is a local feed. A background tick reads each studio from the newest
-page and stops when a stored hash shows up. A studio with nothing stored yet
-keeps only the newest few pages. The same tick fills a few unmatched names
-from ThePornDB. Opening the list only reads what is already stored.
+The list is a local feed of files that matched ThePornDB. A background tick
+reads each studio from the newest page, keeps releases from 2024 onward, and
+stops at a stored hash or at anything older. The same tick fills a few
+unmatched names. Opening the list only reads stored hits.
 """
 
 from __future__ import annotations
@@ -33,10 +33,11 @@ from app.sources.clm import (
 )
 from app.trackers import magnet_for
 
-# 磁力猫一页 12 条。没订过的片商只留最近几页；订过之后一直翻到遇见旧文件。
+# 磁力猫一页 12 条。从最新一页往下翻，到 2024 年以前或遇见已收下的文件就停。
 CLM_PAGE = 12
 FEED_PAGES = 5
-PAGE_CAP = 120
+OLDEST_YEAR = 2024
+PAGE_CAP = 300
 LIST_PAGE = 20
 TICK_PAGES = 2
 # 后台每一轮补几部还没查过的文件名。
@@ -107,18 +108,33 @@ def studio_finished(page: int, raw_count: int, total: int | None) -> bool:
     return page >= PAGE_CAP
 
 
+def created_year(value: str) -> int | None:
+    text = (value or "").strip()
+    if len(text) < 4 or not text[:4].isdigit():
+        return None
+    return int(text[:4])
+
+
+def recent_enough(value: str) -> bool:
+    """A missing date stays. A parsed year before 2024 does not."""
+    year = created_year(value)
+    if year is None:
+        return True
+    return year >= OLDEST_YEAR
+
+
 def feed_caught_up(
     page: int,
     raw_count: int,
     total: int | None,
     *,
     overlapped: bool,
-    subscribed: bool,
+    aged: bool = False,
 ) -> bool:
-    """Stop on a known file. A first look also stops at the feed window."""
-    if overlapped or studio_finished(page, raw_count, total):
+    """Stop on a known file, a pre-2024 file, or the end of the studio."""
+    if overlapped or aged or studio_finished(page, raw_count, total):
         return True
-    return not subscribed and page >= FEED_PAGES
+    return False
 
 
 def _tip_total(*chunks: str) -> int | None:
@@ -253,7 +269,11 @@ async def _advance(
     known = await db.vr_magnet_known(hashes)
     kept = []
     added = 0
+    aged = False
     for row in rows:
+        if not recent_enough(row.get("date") or ""):
+            aged = True
+            continue
         item = _kept_row(row, probe)
         if not item:
             continue
@@ -267,7 +287,7 @@ async def _advance(
         len(rows),
         total,
         overlapped=bool(known),
-        subscribed=bool(anchor),
+        aged=aged,
     )
     await db.vr_crawl_put(probe.query, page, reported, done, "", anchor)
     return None, added
@@ -411,13 +431,23 @@ def _progress(states: dict[str, dict], probes: tuple[Probe, ...]) -> tuple[bool,
     return False, ""
 
 
-async def _stored_page(db: Database, query: str, page: int) -> tuple[int, int, int, list[dict]]:
+async def _stored_page(
+    db: Database,
+    query: str,
+    page: int,
+    *,
+    matched_only: bool = False,
+) -> tuple[int, int, int, list[dict]]:
     page = max(1, page)
-    total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    total, rows = await db.list_vr_magnets(
+        query, LIST_PAGE, (page - 1) * LIST_PAGE, matched_only=matched_only,
+    )
     last_page = max(1, math.ceil(total / LIST_PAGE)) if total else 1
     if page > last_page:
         page = last_page
-        total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+        total, rows = await db.list_vr_magnets(
+            query, LIST_PAGE, (page - 1) * LIST_PAGE, matched_only=matched_only,
+        )
     return total, page, last_page, rows
 
 
@@ -455,12 +485,15 @@ async def read_downloadable(
     *,
     probes: tuple[Probe, ...] | None = None,
 ) -> dict:
-    """The stored page. Does not call 磁力猫 or ThePornDB."""
+    """Stored hits only. Does not call 磁力猫 or ThePornDB."""
     probes = probes if probes is not None else PROBES
-    total, page, last_page, rows = await _stored_page(db, query, page)
+    total, page, last_page, rows = await _stored_page(db, query, page, matched_only=True)
     states = await db.vr_crawl_all()
     scanning, progress = _progress(states, probes)
-    matching = bool((settings.tpdb_api_key or "").strip() and _unmatched(rows))
+    pending = []
+    if (settings.tpdb_api_key or "").strip():
+        pending = await db.list_unmatched_vr_magnets(1)
+    matching = bool(pending)
     return _downloadable_body(
         rows,
         page=page,

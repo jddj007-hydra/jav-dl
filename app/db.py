@@ -1029,14 +1029,33 @@ class Database:
             rows = await cur.fetchall()
         return {row["query"]: dict(row) for row in rows}
 
-    async def list_vr_magnets(self, query: str, limit: int, offset: int) -> tuple[int, list[dict]]:
+    async def list_vr_magnets(
+        self,
+        query: str,
+        limit: int,
+        offset: int,
+        *,
+        matched_only: bool = False,
+    ) -> tuple[int, list[dict]]:
         needle = (query or "").strip()
-        where = ""
+        clauses: list[str] = []
         args: list = []
+        if matched_only:
+            clauses.append("match_state = 'hit'")
         if needle:
-            where = "WHERE title LIKE ? ESCAPE '\\'"
             escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            args.append(f"%{escaped}%")
+            like = f"%{escaped}%"
+            if matched_only:
+                clauses.append(
+                    "(title LIKE ? ESCAPE '\\' OR meta_title LIKE ? ESCAPE '\\'"
+                    " OR meta_performers LIKE ? ESCAPE '\\' OR meta_site LIKE ? ESCAPE '\\'"
+                    " OR studio LIKE ? ESCAPE '\\')"
+                )
+                args.extend([like, like, like, like, like])
+            else:
+                clauses.append("title LIKE ? ESCAPE '\\'")
+                args.append(like)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(f"SELECT COUNT(*) AS n FROM vr_magnet {where}", args)

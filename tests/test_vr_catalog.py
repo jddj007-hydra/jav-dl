@@ -10,9 +10,9 @@ from app.db import Database
 from app.routers import western
 from app.sources.tpdb import TpdbError
 from app.vr_catalog import (
-    FEED_PAGES,
     LIST_PAGE,
     MATCH_BATCH,
+    PAGE_CAP,
     REFRESH_AFTER,
     Probe,
     crawl_tick,
@@ -20,6 +20,7 @@ from app.vr_catalog import (
     keep_file,
     list_downloadable,
     read_downloadable,
+    recent_enough,
     refresh_downloadable,
     studio_finished,
 )
@@ -41,17 +42,23 @@ def test_studio_finished_on_short_page_total_or_cap():
     assert studio_finished(1, 3, 100)
     assert not studio_finished(1, 12, 100)
     assert studio_finished(9, 12, 99)
-    assert studio_finished(120, 12, 5000)
-    assert not studio_finished(119, 12, 5000)
+    assert studio_finished(PAGE_CAP, 12, 5000)
+    assert not studio_finished(PAGE_CAP - 1, 12, 5000)
 
 
-def test_feed_stops_on_known_file_or_first_window():
-    assert feed_caught_up(1, 12, 500, overlapped=True, subscribed=True)
-    assert feed_caught_up(1, 0, None, overlapped=False, subscribed=False)
-    assert feed_caught_up(FEED_PAGES, 12, 5000, overlapped=False, subscribed=False)
-    assert not feed_caught_up(FEED_PAGES - 1, 12, 5000, overlapped=False, subscribed=False)
-    assert not feed_caught_up(FEED_PAGES, 12, 5000, overlapped=False, subscribed=True)
-    assert feed_caught_up(120, 12, 5000, overlapped=False, subscribed=True)
+def test_recent_enough_keeps_2024_and_drops_older_years():
+    assert recent_enough("2024-01-01")
+    assert recent_enough("2026-10-13")
+    assert recent_enough("")
+    assert not recent_enough("2023-12-31")
+
+
+def test_feed_stops_on_known_file_or_pre_2024():
+    assert feed_caught_up(1, 12, 500, overlapped=True)
+    assert feed_caught_up(1, 0, None, overlapped=False)
+    assert feed_caught_up(2, 12, 5000, overlapped=False, aged=True)
+    assert not feed_caught_up(8, 12, 5000, overlapped=False)
+    assert feed_caught_up(PAGE_CAP, 12, 5000, overlapped=False)
 
 
 def test_catalog_stores_pages_and_stops(tmp_path):
@@ -215,24 +222,35 @@ def test_refresh_stops_on_known_hash_and_can_be_forced(tmp_path):
     asyncio.run(run())
 
 
-def test_first_look_stops_at_the_feed_window(tmp_path):
+def test_crawl_stops_at_2024_and_skips_older_files(tmp_path):
     settings = _settings(tmp_path)
     probe = Probe("VirtualTaboo", "VirtualTaboo", False)
     calls = []
 
     async def fetch(query, page):
         calls.append(page)
-        return [_file(page * 100 + index) for index in range(12)], 5000, None
+        if page < 3:
+            return [_file(page * 100 + index, "2025-06-01") for index in range(12)], 5000, None
+        return [
+            _file(300, "2024-01-02"),
+            _file(301, "2023-12-01"),
+            _file(302, "2022-01-01"),
+        ], 5000, None
 
     async def run():
         db = Database(settings)
         await db.init()
-        await crawl_tick(settings, db, pages=10, fetch_page=fetch, probes=(probe,))
+        added = await crawl_tick(settings, db, pages=10, fetch_page=fetch, probes=(probe,))
+        assert calls == [1, 2, 3]
+        assert added == 12 * 2 + 1
+        stored = await db.list_vr_magnets("", 100, 0)
+        titles = [row["title"] for row in stored[1]]
+        assert stored[0] == 25
+        assert all("scene-301" not in title and "scene-302" not in title for title in titles)
         body = await list_downloadable(settings, db, 1, probes=(probe,), fetch_page=fetch)
-        assert calls == list(range(1, FEED_PAGES + 1))
-        assert body["total"] == FEED_PAGES * 12
+        assert calls == [1, 2, 3]
+        assert body["total"] == 25
         assert body["scanning"] is False
-        assert body["added"] == 0
 
     asyncio.run(run())
 
@@ -549,6 +567,22 @@ def test_read_downloadable_pages_the_local_list(tmp_path):
             for index in range(1, LIST_PAGE + 6)
         ]
         await db.upsert_vr_magnets(rows)
+        await db.upsert_vr_magnets([
+            _magnet(90, "file-miss.mp4", "2026-09-01"),
+            _magnet(91, "file-pending.mp4", "2026-09-02"),
+        ])
+        for row in rows:
+            await db.save_vr_match(row["info_hash"], "hit", {
+                "id": "id-" + row["title"],
+                "kind": "scene",
+                "title": "Official " + row["title"],
+                "site": "WankzVR",
+                "date": "2024-02-02",
+                "cover": "",
+                "performers": [],
+                "duration": 40,
+            })
+        await db.save_vr_match(f"{90:040x}", "miss", None)
         body = await read_downloadable(
             settings, db, 1, probes=(probe,),
         )
@@ -556,6 +590,7 @@ def test_read_downloadable_pages_the_local_list(tmp_path):
         assert body["total"] == LIST_PAGE + 5
         assert body["last_page"] == 2
         assert len(body["items"]) == LIST_PAGE
+        assert all(item["match"] == "hit" for item in body["items"])
         assert body["added"] == 0
         second = await read_downloadable(settings, db, 2, probes=(probe,))
         assert second["page"] == 2
@@ -597,7 +632,8 @@ def test_refresh_matches_stored_names_without_a_page_view(tmp_path):
         await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
         await db.upsert_vr_magnets([_magnet(1, "wankzvr-hit-one.mp4", "2026-10-03")])
         shown = await read_downloadable(settings, db, 1, probes=(probe,))
-        assert shown["items"][0]["match"] == "pending"
+        assert shown["items"] == []
+        assert shown["matching"] is True
         result = await refresh_downloadable(
             settings, db, probes=(probe,), fetch_page=fetch, match_title=match,
         )
