@@ -522,7 +522,7 @@ function setStatus(el, msg, kind) {
 }
 
 function skeletonCards(n, shape) {
-  const imgClass = shape === "wide" ? "sk-img wide" : "sk-img";
+  const imgClass = shape === "wide" ? "sk-img wide" : (shape === "cinema" ? "sk-img cinema" : "sk-img");
   return Array.from({ length: n }, () => (
     `<div class="skeleton"><div class="${imgClass}"></div><div class="sk-line"></div><div class="sk-line short"></div></div>`
   )).join("");
@@ -530,7 +530,7 @@ function skeletonCards(n, shape) {
 
 function showSkeleton(wrapId, listId) {
   $(wrapId).hidden = false;
-  const shape = listId === "works-list" ? "wide" : "";
+  const shape = listId === "works-list" ? "wide" : (listId === "western-works" ? "cinema" : "");
   $(listId).innerHTML = skeletonCards(12, shape);
 }
 
@@ -586,6 +586,13 @@ document.addEventListener("load", (event) => {
   const img = event.target;
   if (img instanceof HTMLImageElement) fitCoverFrame(img);
 }, true);
+
+function sceneArt(item) {
+  const poster = (item && item.cover) || "";
+  const wide = (item && item.background) || "";
+  if (/^https?:/i.test(wide) && wide !== poster) return wide;
+  return poster;
+}
 
 function coverImage(url, opts = {}) {
   const missing = !url;
@@ -2414,10 +2421,11 @@ function renderWesternWorks(items) {
   wrap.hidden = false;
   list.innerHTML = westernItems.map((it) => {
     const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
+    const art = sceneArt(it);
     return `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
       <span class="work-cover">
-        ${coverImage(it.cover, { lazy: true })}
+        ${coverImage(art, { lazy: true })}
         ${coverBadge(it)}
       </span>
       <span class="work-site">${escapeHtml(it.site || "")}</span>
@@ -2439,10 +2447,11 @@ function renderWesternMeta(item) {
   }
   const tags = westernTagButtons(item);
   const people = (item.performers || []).map((name) => browseButton(name, { facet: "performer" })).filter(Boolean).join("、");
+  const art = sceneArt(item);
   card.hidden = false;
   card.innerHTML = `
     <div class="meta-main">
-      ${coverImage(item.cover || item.background, { className: "cover", full: item.background || item.cover || "" })}
+      ${coverImage(art, { className: "cover", full: art || "" })}
       <div>
         ${libraryFlag(item.library, item.suck)}
         ${suckActions("western", item.id || "", item.title || "", !!(item.library && item.library.present), !!item.suck)}
@@ -2743,9 +2752,10 @@ function renderReady(items) {
     const title = it.id
       ? `<button type="button" class="ready-title"${open}>${escapeHtml(heading)}</button>`
       : `<div class="ready-title">${escapeHtml(heading)}</div>`;
+    const art = sceneArt(it);
     const cover = it.id
-      ? `<button type="button" class="ready-cover"${open}>${coverImage(it.cover, { lazy: true })}${coverBadge(it)}</button>`
-      : `<div class="ready-cover">${coverImage(it.cover, { lazy: true })}${coverBadge(it)}</div>`;
+      ? `<button type="button" class="ready-cover"${open}>${coverImage(art, { lazy: true })}${coverBadge(it)}</button>`
+      : `<div class="ready-cover">${coverImage(art, { lazy: true })}${coverBadge(it)}</div>`;
     const file = named && it.title && it.title !== it.work_title
       ? `<div class="ready-file">${escapeHtml(it.title)}</div>`
       : "";

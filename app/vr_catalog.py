@@ -3,7 +3,8 @@
 The list is a local feed of files that matched ThePornDB. A background tick
 reads each studio from the newest page, keeps releases from 2024 onward, and
 stops at a stored hash or at anything older. The same tick fills a few
-unmatched names. Opening the list only reads stored hits.
+unmatched names, then the wide cover on hits that only stored the poster.
+Opening the list only reads stored hits.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from app.config import Settings
 from app.db import Database
 from app.httputil import site_client
 from app.ranking import is_pack
-from app.sources.tpdb import TpdbError, fetch_by_filename
+from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail as fetch_tpdb_detail
 from app.sources.clm import (
     MagnetSearchError,
     _b64_word,
@@ -355,6 +356,7 @@ def _ready_item(row: dict) -> dict:
         "site": row.get("meta_site") or "",
         "release_date": row.get("meta_date") or "",
         "cover": row.get("meta_cover") or "",
+        "background": row.get("meta_background") or "",
         "performers": _meta_performers(row.get("meta_performers")),
         "duration": duration or None,
     }
@@ -394,6 +396,26 @@ async def _match_pending(settings: Settings, db: Database, rows: list[dict], mat
         await db.save_vr_match(row.get("info_hash") or "", state, item if state == "hit" else None)
         done += 1
     return done, note
+
+
+async def _fill_backgrounds(settings: Settings, db: Database, fetch_detail, limit: int = MATCH_BATCH) -> int:
+    """One detail lookup per old hit. A transport error leaves the row for the next tick."""
+    rows = await db.list_vr_hits_missing_background(limit)
+    done = 0
+    for row in rows:
+        kind = row.get("tpdb_kind") or "scene"
+        if kind not in ("scene", "movie"):
+            kind = "scene"
+        try:
+            item = await fetch_detail(settings, kind, row.get("tpdb_id") or "")
+        except TpdbError:
+            break
+        item = item or {}
+        wide = str(item.get("background") or "").strip()
+        poster = str(item.get("cover") or "").strip() or str(row.get("meta_cover") or "").strip()
+        await db.save_vr_background(row.get("info_hash") or "", wide or poster or "-")
+        done += 1
+    return done
 
 
 async def _fill_metadata(
@@ -515,6 +537,7 @@ async def refresh_downloadable(
     probes: tuple[Probe, ...] | None = None,
     fetch_page=None,
     match_title=None,
+    fetch_detail=None,
 ) -> dict:
     """One background slice: a few magnet pages, then a few unmatched names."""
     added = await crawl_tick(
@@ -527,6 +550,8 @@ async def refresh_downloadable(
         matched, note = await _match_pending(
             settings, db, pending, match_title or match_vr_title,
         )
+        if not note:
+            await _fill_backgrounds(settings, db, fetch_detail or fetch_tpdb_detail)
     return {"added": added, "matched": matched, "meta_error": note}
 
 

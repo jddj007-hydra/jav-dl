@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS vr_magnet (
     meta_site TEXT NOT NULL DEFAULT '',
     meta_date TEXT NOT NULL DEFAULT '',
     meta_cover TEXT NOT NULL DEFAULT '',
+    meta_background TEXT NOT NULL DEFAULT '',
     meta_performers TEXT NOT NULL DEFAULT '[]',
     meta_duration INTEGER NOT NULL DEFAULT 0,
     match_state TEXT NOT NULL DEFAULT ''
@@ -140,6 +141,7 @@ VR_MAGNET_COLUMNS = (
     ("meta_site", "TEXT NOT NULL DEFAULT ''"),
     ("meta_date", "TEXT NOT NULL DEFAULT ''"),
     ("meta_cover", "TEXT NOT NULL DEFAULT ''"),
+    ("meta_background", "TEXT NOT NULL DEFAULT ''"),
     ("meta_performers", "TEXT NOT NULL DEFAULT '[]'"),
     ("meta_duration", "INTEGER NOT NULL DEFAULT 0"),
     ("match_state", "TEXT NOT NULL DEFAULT ''"),
@@ -257,6 +259,16 @@ def _western_row(row: dict, now: float) -> dict:
         "poster": row.get("poster") or "",
         "shelf": (row.get("shelf") or "western").strip() or "western",
     }
+
+
+def _vr_background(state: str, item: dict) -> str:
+    """Wide image, or the poster when ThePornDB has none, so a hit is not fetched again."""
+    if state != "hit":
+        return ""
+    wide = str(item.get("background") or "").strip()
+    if wide:
+        return wide
+    return str(item.get("cover") or "").strip() or "-"
 
 
 class Database:
@@ -903,6 +915,7 @@ class Database:
                      meta_site = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_site ELSE '' END,
                      meta_date = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_date ELSE '' END,
                      meta_cover = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_cover ELSE '' END,
+                     meta_background = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_background ELSE '' END,
                      meta_performers = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_performers ELSE '[]' END,
                      meta_duration = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.meta_duration ELSE 0 END,
                      match_state = CASE WHEN vr_magnet.title = excluded.title THEN vr_magnet.match_state ELSE '' END""",
@@ -947,6 +960,7 @@ class Database:
                      meta_site = ?,
                      meta_date = ?,
                      meta_cover = ?,
+                     meta_background = ?,
                      meta_performers = ?,
                      meta_duration = ?
                    WHERE info_hash = ?""",
@@ -958,6 +972,7 @@ class Database:
                     str(item.get("site") or ""),
                     str(item.get("date") or "")[:10],
                     str(item.get("cover") or ""),
+                    _vr_background(state, item),
                     json.dumps(names, ensure_ascii=False),
                     duration,
                     info_hash,
@@ -1075,6 +1090,31 @@ class Database:
             cur = await db.execute(
                 """SELECT * FROM vr_magnet
                    WHERE match_state NOT IN ('hit', 'miss')
+                   ORDER BY (created = '') ASC, created DESC, title
+                   LIMIT ?""",
+                (max(1, limit),),
+            )
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+
+    async def save_vr_background(self, info_hash: str, url: str) -> None:
+        info_hash = (info_hash or "").strip()
+        if not info_hash:
+            return
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE vr_magnet SET meta_background = ? WHERE info_hash = ?",
+                (url or "-", info_hash),
+            )
+            await db.commit()
+
+    async def list_vr_hits_missing_background(self, limit: int) -> list[dict]:
+        """Hits stored before the wide cover was kept. Empty means not looked up."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """SELECT * FROM vr_magnet
+                   WHERE match_state = 'hit' AND tpdb_id != '' AND meta_background = ''
                    ORDER BY (created = '') ASC, created DESC, title
                    LIMIT ?""",
                 (max(1, limit),),

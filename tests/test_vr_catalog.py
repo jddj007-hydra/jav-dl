@@ -431,6 +431,7 @@ def test_downloadable_page_fills_metadata_and_keeps_it(tmp_path):
         assert hit["release_date"] == "2023-02-24"
         assert hit["duration"] == 56
         assert hit["cover"].endswith("/x.jpg")
+        assert hit["background"].endswith("/x.jpg")
         assert hit["id"] == "id-wankzvr-hit-one.mp4"
         assert body["items"][2]["match"] == "miss"
         assert body["items"][3]["match"] == "pending"
@@ -540,6 +541,7 @@ def test_old_vr_magnet_table_gains_metadata_columns(tmp_path):
             "site": "WankzVR",
             "date": "2024-01-02",
             "cover": "https://cdn.theporndb.net/a.jpg",
+            "background": "https://cdn.theporndb.net/wide.jpg",
             "performers": ["A"],
             "duration": 20,
         })
@@ -547,6 +549,7 @@ def test_old_vr_magnet_table_gains_metadata_columns(tmp_path):
         assert rows[0]["match_state"] == "hit"
         assert rows[0]["tpdb_id"] == "scene-1"
         assert rows[0]["meta_title"] == "Old Scene"
+        assert rows[0]["meta_background"] == "https://cdn.theporndb.net/wide.jpg"
 
     asyncio.run(run())
 
@@ -642,7 +645,72 @@ def test_refresh_matches_stored_names_without_a_page_view(tmp_path):
         again = await read_downloadable(settings, db, 1, probes=(probe,))
         assert again["items"][0]["match"] == "hit"
         assert again["items"][0]["work_title"] == "Official"
+        assert again["items"][0]["background"].endswith("/x.jpg")
         assert again["matching"] is False
+
+    asyncio.run(run())
+
+
+def test_refresh_fills_a_missing_wide_cover_once(tmp_path):
+    settings = _settings(tmp_path)
+    settings.tpdb_api_key = "token"
+    probe = Probe("WankzVR", "WankzVR", False)
+    calls = []
+
+    async def fetch(query, page):
+        raise AssertionError("should not crawl")
+
+    async def match(_settings, title):
+        raise AssertionError(title)
+
+    async def detail(_settings, kind, item_id):
+        calls.append((kind, item_id))
+        if item_id == "scene-miss":
+            raise TpdbError("ThePornDB HTTP 503")
+        if item_id == "scene-plain":
+            return {"cover": "https://cdn.theporndb.net/poster.jpg", "background": ""}
+        return {
+            "cover": "https://cdn.theporndb.net/poster.jpg",
+            "background": "https://cdn.theporndb.net/wide.jpg",
+        }
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        await db.upsert_vr_magnets([
+            _magnet(1, "wankzvr-wide.mp4", "2026-10-03"),
+            _magnet(2, "wankzvr-plain.mp4", "2026-10-02"),
+            _magnet(3, "wankzvr-down.mp4", "2026-10-01"),
+        ])
+        await db.save_vr_match(f"{1:040x}", "hit", {
+            "id": "scene-wide", "kind": "scene", "title": "Wide", "cover": "https://cdn.theporndb.net/old.jpg",
+        })
+        await db.save_vr_match(f"{2:040x}", "hit", {
+            "id": "scene-plain", "kind": "scene", "title": "Plain", "cover": "https://cdn.theporndb.net/poster.jpg",
+        })
+        await db.save_vr_match(f"{3:040x}", "hit", {
+            "id": "scene-miss", "kind": "scene", "title": "Down", "cover": "https://cdn.theporndb.net/down.jpg",
+        })
+        async with aiosqlite.connect(db.path) as conn:
+            await conn.execute("UPDATE vr_magnet SET meta_background = ''")
+            await conn.commit()
+        await refresh_downloadable(
+            settings, db, probes=(probe,), fetch_page=fetch, match_title=match, fetch_detail=detail,
+        )
+        assert calls == [("scene", "scene-wide"), ("scene", "scene-plain"), ("scene", "scene-miss")]
+        body = await read_downloadable(settings, db, 1, probes=(probe,))
+        by_title = {item["title"]: item for item in body["items"]}
+        assert by_title["wankzvr-wide.mp4"]["background"].endswith("/wide.jpg")
+        assert by_title["wankzvr-plain.mp4"]["background"].endswith("/poster.jpg")
+        assert by_title["wankzvr-down.mp4"]["background"] == ""
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-wide.mp4", "2026-10-03")])
+        kept = await read_downloadable(settings, db, 1, probes=(probe,))
+        assert kept["items"][0]["background"].endswith("/wide.jpg")
+        await refresh_downloadable(
+            settings, db, probes=(probe,), fetch_page=fetch, match_title=match, fetch_detail=detail,
+        )
+        assert calls == [("scene", "scene-wide"), ("scene", "scene-plain"), ("scene", "scene-miss"), ("scene", "scene-miss")]
 
     asyncio.run(run())
 
