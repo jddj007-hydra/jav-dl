@@ -146,6 +146,9 @@ class JobManager:
         self._picks: dict[str, dict] = {}
         self._last_follow = 0.0
         self._follow_task: asyncio.Task | None = None
+        self._last_vr = time.time()
+        self._vr_force = False
+        self._vr_task: asyncio.Task | None = None
         self._follow_locks: dict[str, asyncio.Lock] = {}
         self._listeners: set[asyncio.Queue] = set()
 
@@ -501,6 +504,7 @@ class JobManager:
             except Exception:
                 log.warning("下载目录监控失败", exc_info=True)
         self.kick_follow()
+        self.kick_vr()
         if self._listeners:
             items = [await self.public(job, snapshot) for job in visible]
             unread = await self.db.count_unread_hits()
@@ -524,6 +528,43 @@ class JobManager:
             await check_due(self)
         except Exception:
             log.warning("追更检查失败", exc_info=True)
+
+    def kick_vr(self, *, force: bool = False) -> None:
+        """Pull a slice of new VR magnets and metadata beside the download sync."""
+        from app.vr_catalog import TICK_EVERY
+
+        if force:
+            self._vr_force = True
+        task = self._vr_task
+        if task is not None and not task.done():
+            return
+        if not self._vr_force and time.time() - self._last_vr < TICK_EVERY:
+            return
+        force_now = self._vr_force
+        self._vr_force = False
+        self._last_vr = time.time()
+        self._vr_task = asyncio.create_task(self._run_vr(force_now))
+
+    async def _run_vr(self, force: bool) -> None:
+        from app.vr_catalog import refresh_downloadable
+
+        try:
+            result = await refresh_downloadable(self.settings, self.db, force=force)
+        except Exception:
+            log.warning("欧美 VR 可下刷新失败", exc_info=True)
+            return
+        if result.get("meta_error"):
+            log.info("欧美 VR 元数据 %s", result["meta_error"])
+
+    async def stop_vr(self) -> None:
+        task = self._vr_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def stop_follow(self) -> None:
         task = self._follow_task

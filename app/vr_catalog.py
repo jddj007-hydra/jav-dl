@@ -1,11 +1,9 @@
 """VR files that already have a magnet on 磁力猫.
 
-The list is a feed. A refresh reads each studio from the newest page and
-stops when a stored hash shows up. A studio with nothing stored yet keeps
-only the newest few pages; later refreshes add files that appeared since.
-
-Rows that match ThePornDB keep the cover, title, performers, and release
-date. Each page fills a few unmatched names so the list can come back first.
+The list is a local feed. A background tick reads each studio from the newest
+page and stops when a stored hash shows up. A studio with nothing stored yet
+keeps only the newest few pages. The same tick fills a few unmatched names
+from ThePornDB. Opening the list only reads what is already stored.
 """
 
 from __future__ import annotations
@@ -39,12 +37,14 @@ from app.trackers import magnet_for
 CLM_PAGE = 12
 FEED_PAGES = 5
 PAGE_CAP = 120
-LIST_PAGE = 40
+LIST_PAGE = 20
 TICK_PAGES = 2
-# 一页先补几部，剩下的等下一次打开再查，避免整页卡住。
+# 后台每一轮补几部还没查过的文件名。
 MATCH_BATCH = 3
-# 刚核对过的话，这段时间里打开页面直接用已收下的列表。
+# 一轮片商都看完之后，隔这么久再从最新页对一次。
 REFRESH_AFTER = 10 * 60
+# 后台两轮之间的间隔。上一轮还在跑就跳过。
+TICK_EVERY = 30
 # 小于这个的多半是预告或垃圾行。未知体积留着。
 MIN_BYTES = 200 * 1000**2
 _TIP_RE = re.compile(r"相关结果(?:<[^>]+>)?\s*(\d+)\s*(?:<[^>]+>)?\s*个")
@@ -361,6 +361,21 @@ def _unmatched(rows: list[dict]) -> list[dict]:
     return [row for row in rows if (row.get("match_state") or "") not in ("hit", "miss")]
 
 
+async def _match_pending(settings: Settings, db: Database, rows: list[dict], match_title) -> tuple[int, str]:
+    """Save a few matches. A transport error stops the batch and stays pending."""
+    done = 0
+    note = ""
+    for row in rows:
+        try:
+            state, item = await match_title(settings, row.get("title") or "")
+        except TpdbError as exc:
+            note = f"元数据暂时没查到：{exc}"
+            break
+        await db.save_vr_match(row.get("info_hash") or "", state, item if state == "hit" else None)
+        done += 1
+    return done, note
+
+
 async def _fill_metadata(
     settings: Settings,
     db: Database,
@@ -373,16 +388,7 @@ async def _fill_metadata(
     pending = _unmatched(rows)
     if not pending or not (settings.tpdb_api_key or "").strip():
         return rows, False, ""
-    done = 0
-    note = ""
-    for row in pending[:MATCH_BATCH]:
-        try:
-            state, item = await match_title(settings, row.get("title") or "")
-        except TpdbError as exc:
-            note = f"元数据暂时没查到：{exc}"
-            break
-        await db.save_vr_match(row.get("info_hash") or "", state, item if state == "hit" else None)
-        done += 1
+    done, note = await _match_pending(settings, db, pending[:MATCH_BATCH], match_title)
     if done:
         _total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
     return rows, bool(_unmatched(rows)), note
@@ -405,6 +411,92 @@ def _progress(states: dict[str, dict], probes: tuple[Probe, ...]) -> tuple[bool,
     return False, ""
 
 
+async def _stored_page(db: Database, query: str, page: int) -> tuple[int, int, int, list[dict]]:
+    page = max(1, page)
+    total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    last_page = max(1, math.ceil(total / LIST_PAGE)) if total else 1
+    if page > last_page:
+        page = last_page
+        total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    return total, page, last_page, rows
+
+
+def _downloadable_body(
+    rows: list[dict],
+    *,
+    page: int,
+    last_page: int,
+    total: int,
+    scanning: bool,
+    progress: str,
+    added: int,
+    matching: bool,
+    meta_error: str,
+) -> dict:
+    return {
+        "items": [_ready_item(row) for row in rows],
+        "page": page,
+        "last_page": last_page,
+        "total": total,
+        "page_size": LIST_PAGE,
+        "scanning": scanning,
+        "progress": progress,
+        "added": added,
+        "matching": matching,
+        "meta_error": meta_error,
+    }
+
+
+async def read_downloadable(
+    settings: Settings,
+    db: Database,
+    page: int,
+    query: str = "",
+    *,
+    probes: tuple[Probe, ...] | None = None,
+) -> dict:
+    """The stored page. Does not call 磁力猫 or ThePornDB."""
+    probes = probes if probes is not None else PROBES
+    total, page, last_page, rows = await _stored_page(db, query, page)
+    states = await db.vr_crawl_all()
+    scanning, progress = _progress(states, probes)
+    matching = bool((settings.tpdb_api_key or "").strip() and _unmatched(rows))
+    return _downloadable_body(
+        rows,
+        page=page,
+        last_page=last_page,
+        total=total,
+        scanning=scanning,
+        progress=progress,
+        added=0,
+        matching=matching,
+        meta_error="",
+    )
+
+
+async def refresh_downloadable(
+    settings: Settings,
+    db: Database,
+    *,
+    force: bool = False,
+    probes: tuple[Probe, ...] | None = None,
+    fetch_page=None,
+    match_title=None,
+) -> dict:
+    """One background slice: a few magnet pages, then a few unmatched names."""
+    added = await crawl_tick(
+        settings, db, fetch_page=fetch_page, probes=probes, force=force,
+    )
+    matched = 0
+    note = ""
+    if (settings.tpdb_api_key or "").strip():
+        pending = await db.list_unmatched_vr_magnets(MATCH_BATCH)
+        matched, note = await _match_pending(
+            settings, db, pending, match_title or match_vr_title,
+        )
+    return {"added": added, "matched": matched, "meta_error": note}
+
+
 async def list_downloadable(
     settings: Settings,
     db: Database,
@@ -418,12 +510,7 @@ async def list_downloadable(
 ) -> dict:
     probes = probes if probes is not None else PROBES
     added = await crawl_tick(settings, db, fetch_page=fetch_page, probes=probes, force=refresh)
-    page = max(1, page)
-    total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
-    last_page = max(1, math.ceil(total / LIST_PAGE)) if total else 1
-    if page > last_page:
-        page = last_page
-        total, rows = await db.list_vr_magnets(query, LIST_PAGE, (page - 1) * LIST_PAGE)
+    total, page, last_page, rows = await _stored_page(db, query, page)
     rows, matching, meta_error = await _fill_metadata(
         settings,
         db,
@@ -434,14 +521,14 @@ async def list_downloadable(
     )
     states = await db.vr_crawl_all()
     scanning, progress = _progress(states, probes)
-    return {
-        "items": [_ready_item(row) for row in rows],
-        "page": page,
-        "last_page": last_page,
-        "total": total,
-        "scanning": scanning,
-        "progress": progress,
-        "added": added,
-        "matching": matching,
-        "meta_error": meta_error,
-    }
+    return _downloadable_body(
+        rows,
+        page=page,
+        last_page=last_page,
+        total=total,
+        scanning=scanning,
+        progress=progress,
+        added=added,
+        matching=matching,
+        meta_error=meta_error,
+    )

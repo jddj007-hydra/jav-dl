@@ -11,6 +11,7 @@ from app.routers import western
 from app.sources.tpdb import TpdbError
 from app.vr_catalog import (
     FEED_PAGES,
+    LIST_PAGE,
     MATCH_BATCH,
     REFRESH_AFTER,
     Probe,
@@ -18,6 +19,8 @@ from app.vr_catalog import (
     feed_caught_up,
     keep_file,
     list_downloadable,
+    read_downloadable,
+    refresh_downloadable,
     studio_finished,
 )
 
@@ -528,3 +531,113 @@ def test_old_vr_magnet_table_gains_metadata_columns(tmp_path):
         assert rows[0]["meta_title"] == "Old Scene"
 
     asyncio.run(run())
+
+
+def test_read_downloadable_pages_the_local_list(tmp_path):
+    settings = _settings(tmp_path)
+    probe = Probe("WankzVR", "WankzVR", False)
+
+    async def fetch(query, page):
+        raise AssertionError(f"should not crawl {query} {page}")
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        rows = [
+            _magnet(index, f"file-{index}.mp4", f"2026-10-{index:02d}")
+            for index in range(1, LIST_PAGE + 6)
+        ]
+        await db.upsert_vr_magnets(rows)
+        body = await read_downloadable(
+            settings, db, 1, probes=(probe,),
+        )
+        assert body["page_size"] == LIST_PAGE
+        assert body["total"] == LIST_PAGE + 5
+        assert body["last_page"] == 2
+        assert len(body["items"]) == LIST_PAGE
+        assert body["added"] == 0
+        second = await read_downloadable(settings, db, 2, probes=(probe,))
+        assert second["page"] == 2
+        assert len(second["items"]) == 5
+        refreshed = await refresh_downloadable(
+            settings, db, probes=(probe,), fetch_page=fetch,
+        )
+        assert refreshed["added"] == 0
+        assert refreshed["matched"] == 0
+
+    asyncio.run(run())
+
+
+def test_refresh_matches_stored_names_without_a_page_view(tmp_path):
+    settings = _settings(tmp_path)
+    settings.tpdb_api_key = "token"
+    probe = Probe("WankzVR", "WankzVR", False)
+    calls = []
+
+    async def fetch(query, page):
+        raise AssertionError("should not crawl")
+
+    async def match(_settings, title):
+        calls.append(title)
+        return "hit", {
+            "id": "scene-1",
+            "kind": "scene",
+            "title": "Official",
+            "site": "WankzVR",
+            "date": "2023-02-24",
+            "cover": "https://cdn.theporndb.net/x.jpg",
+            "performers": ["Valentina Nappi"],
+            "duration": 56,
+        }
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.vr_crawl_put(probe.query, 1, 1, True, "", 1)
+        await db.upsert_vr_magnets([_magnet(1, "wankzvr-hit-one.mp4", "2026-10-03")])
+        shown = await read_downloadable(settings, db, 1, probes=(probe,))
+        assert shown["items"][0]["match"] == "pending"
+        result = await refresh_downloadable(
+            settings, db, probes=(probe,), fetch_page=fetch, match_title=match,
+        )
+        assert result["matched"] == 1
+        assert calls == ["wankzvr-hit-one.mp4"]
+        again = await read_downloadable(settings, db, 1, probes=(probe,))
+        assert again["items"][0]["match"] == "hit"
+        assert again["items"][0]["work_title"] == "Official"
+        assert again["matching"] is False
+
+    asyncio.run(run())
+
+
+def test_downloadable_route_refresh_does_not_wait_on_magnets(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+
+    async def fetch(_settings, query, page):
+        raise AssertionError("route should not crawl")
+
+    monkeypatch.setattr("app.vr_catalog.fetch_magnet_page", fetch)
+    app = FastAPI()
+    app.include_router(western.router)
+
+    class Jobs:
+        def __init__(self):
+            self.force = None
+
+        def kick_vr(self, force=False):
+            self.force = force
+
+    async def prepare():
+        db = Database(settings)
+        await db.init()
+        return db
+
+    jobs = Jobs()
+    app.state.settings = settings
+    app.state.db = asyncio.run(prepare())
+    app.state.jobs = jobs
+    response = TestClient(app).get("/api/western/downloadable", params={"refresh": 1})
+    assert response.status_code == 200
+    assert response.json()["added"] == 0
+    assert jobs.force is True

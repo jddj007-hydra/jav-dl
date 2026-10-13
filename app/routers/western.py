@@ -17,7 +17,7 @@ from app.sources.tpdb import (
     search_catalog,
     theme_tag,
 )
-from app.vr_catalog import list_downloadable
+from app.vr_catalog import read_downloadable
 
 router = APIRouter()
 
@@ -147,14 +147,17 @@ async def western_downloadable(
     q: str = Query(""),
     refresh: int = Query(0, ge=0, le=1),
 ):
-    """VR files already on 磁力猫. A due call reads only newer pages."""
-    data = await list_downloadable(
+    """Stored VR magnets. A refresh asks the background tick to look again."""
+    data = await read_downloadable(
         request.app.state.settings,
         request.app.state.db,
         page,
         q.strip()[:80],
-        refresh=bool(refresh),
     )
+    if refresh:
+        jobs = getattr(request.app.state, "jobs", None)
+        if jobs is not None:
+            jobs.kick_vr(force=True)
     ids = [str(item.get("id") or "") for item in data["items"]]
     library = getattr(request.app.state, "library", None)
     hits = await library.western_many(ids) if library is not None else {}

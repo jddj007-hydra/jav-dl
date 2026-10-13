@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=40" />
+  <link rel="stylesheet" href="/static/style.css?v=41" />
 </head>
 <body>
   <header class="top">
@@ -152,10 +152,14 @@
       </div>
       <div id="western-ready-wrap" hidden>
         <div class="table-head">
-          <h2>可下</h2>
-          <p class="hint">来源：磁力猫里已经有磁链的 VR 文件。对得上 ThePornDB 的会显示封面、片名、演员和发行日。点封面打开详情，下载仍用这条磁链。</p>
+          <div>
+            <h2>可下</h2>
+            <p class="hint">本地已收下的磁链，每页 20 部。后台定时补新文件和 ThePornDB 元数据。点封面打开详情，下载仍用这条磁链。</p>
+          </div>
+          <span class="pager" id="western-ready-pager"></span>
         </div>
         <div id="western-ready" class="ready-list"></div>
+        <div class="ready-pager"><span class="pager" id="western-ready-pager-bottom"></span></div>
       </div>
       <article id="western-meta" class="card meta" hidden></article>
       <div id="western-resources-wrap" hidden>
@@ -439,6 +443,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=67"></script>
+  <script src="/static/app.js?v=68"></script>
 </body>
 </html>

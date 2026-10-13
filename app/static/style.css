@@ -825,6 +825,12 @@ img.is-fallback,
   flex-direction: column;
   gap: 10px;
 }
+.ready-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.ready-empty { color: var(--muted); margin: 8px 0 0; }
 .ready-card {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) auto;

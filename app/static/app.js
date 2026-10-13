@@ -54,8 +54,7 @@ let westernReadyProgress = "";
 let westernReadySignature = "";
 let westernCurrent = null;
 let readyTimer = 0;
-const READY_POLL_MS = 1500;
-const READY_REFRESH_MS = 60 * 1000;
+const READY_REFRESH_MS = 30 * 1000;
 let queueItems = [];
 let queueFilter = "all";
 let pendingItems = [];
@@ -2654,12 +2653,21 @@ function stopReadyPoll() {
   readyTimer = 0;
 }
 
-function scheduleReady(scanning, matching) {
+function scheduleReady() {
   stopReadyPoll();
   if (westernMode !== "ready") return;
   readyTimer = setTimeout(() => {
     if (westernMode === "ready") loadReady(westernPage, true).catch(() => {});
-  }, (scanning || matching) ? READY_POLL_MS : READY_REFRESH_MS);
+  }, READY_REFRESH_MS);
+}
+
+function paintReadyPagers() {
+  const pick = (next) => pushHash(westernPageHash(next, "", ""));
+  renderPager($("western-pager"), westernPage, westernLastPage, pick);
+  renderPager($("western-ready-pager"), westernPage, westernLastPage, pick);
+  renderPager($("western-ready-pager-bottom"), westernPage, westernLastPage, pick);
+  const bottom = $("western-ready-pager-bottom").parentElement;
+  if (bottom) bottom.hidden = !(westernLastPage > 1);
 }
 
 function hideReadyList() {
@@ -2683,12 +2691,11 @@ function renderReady(items) {
   const wrap = $("western-ready-wrap");
   const list = $("western-ready");
   $("western-ready-btn").classList.toggle("on", true);
+  wrap.hidden = false;
   if (!westernReadyItems.length) {
-    wrap.hidden = true;
-    list.innerHTML = "";
+    list.innerHTML = `<p class="ready-empty">这一页没有可下的文件</p>`;
     return;
   }
-  wrap.hidden = false;
   list.innerHTML = westernReadyItems.map((it) => {
     const named = it.match === "hit" && it.work_title;
     const heading = named ? it.work_title : (it.title || "");
@@ -2705,9 +2712,7 @@ function renderReady(items) {
     const file = named && it.title && it.title !== it.work_title
       ? `<div class="ready-file">${escapeHtml(it.title)}</div>`
       : "";
-    let note = "";
-    if (it.match === "miss") note = "没有对上 ThePornDB";
-    else if (it.match !== "hit" && westernReadyMatching) note = "正在查元数据";
+    const note = it.match === "miss" ? "没有对上 ThePornDB" : "";
     const cls = [
       it.library && it.library.present ? "in-library" : "",
       it.suck ? "is-suck" : "",
@@ -2745,17 +2750,16 @@ function showReadySurface() {
   $("western-themes").hidden = true;
   $("western-ready-btn").classList.add("on");
   renderReady(westernReadyItems);
-  renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
-    pushHash(westernPageHash(next, "", ""));
-  });
+  paintReadyPagers();
   const scan = westernReadyScanning && westernReadyProgress ? ` · ${westernReadyProgress}` : "";
   const filling = westernReadyMatching ? " · 正在补元数据" : "";
+  const pageLabel = westernLastPage ? ` · 第 ${westernPage} / ${westernLastPage} 页` : "";
   setStatus(
     $("western-status"),
-    westernReadyTotal ? `可下 ${westernReadyTotal} 部${scan}${filling}` : "正在核对磁力猫上的新文件…",
+    westernReadyTotal ? `可下 ${westernReadyTotal} 部${pageLabel}${scan}${filling}` : "本地还没有可下的 VR 文件",
     westernReadyTotal ? "good" : "",
   );
-  scheduleReady(westernReadyScanning, westernReadyMatching);
+  scheduleReady();
 }
 
 function showWesternListSurface() {
@@ -2808,7 +2812,7 @@ function applyWestern(query) {
       loadWesternDetail(id, westernKind);
       return;
     }
-    if (westernListKey() === westernLoadedKey && !westernReadyScanning && !westernReadyMatching) {
+    if (westernListKey() === westernLoadedKey && westernReadyItems.length) {
       showReadySurface();
       return;
     }
@@ -2894,6 +2898,7 @@ async function loadReady(page, quiet, refresh) {
   westernMode = "ready";
   westernFormat = "vr";
   westernBrowse = null;
+  const samePage = westernPage === page;
   westernPage = page;
   markSeg("western-format", "vr");
   $("western-ready-btn").classList.add("on");
@@ -2902,8 +2907,13 @@ async function loadReady(page, quiet, refresh) {
   $("western-resources-wrap").hidden = true;
   $("western-feed").hidden = false;
   $("western-themes").hidden = true;
-  if (!quiet) showSkeleton("western-works-wrap", "western-works");
-  if (!quiet) setStatus($("western-status"), "正在核对磁力猫上的新文件…");
+  const cached = !refresh && samePage && westernReadyItems.length;
+  if (cached) {
+    $("western-works-wrap").hidden = true;
+    $("western-ready-wrap").hidden = false;
+  } else if (!quiet) {
+    setStatus($("western-status"), "正在读取可下列表…");
+  }
   const q = $("western-input").value.trim();
   try {
     const params = new URLSearchParams({ page: String(page) });
@@ -2921,19 +2931,16 @@ async function loadReady(page, quiet, refresh) {
     const signature = JSON.stringify(nextItems);
     if (signature !== westernReadySignature) renderReady(nextItems);
     westernLoadedKey = westernListKey();
-    renderPager($("western-pager"), westernPage, westernLastPage, (next) => {
-      pushHash(westernPageHash(next, "", ""));
-    });
+    paintReadyPagers();
     const scan = data.scanning && data.progress ? ` · ${data.progress}` : "";
-    const added = data.added ? ` · 新收 ${data.added} 部` : "";
-    const filling = data.meta_error ? ` · ${data.meta_error}` : (data.matching ? " · 正在补元数据" : "");
-    const failed = !data.scanning && data.progress ? data.progress : "";
+    const filling = data.matching ? " · 正在补元数据" : "";
+    const pageLabel = westernLastPage ? ` · 第 ${data.page || page} / ${westernLastPage} 页` : "";
     let msg = "";
-    if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${added}${scan}${filling}`;
-    else if (data.scanning) msg = data.progress || "正在核对磁力猫上的新文件…";
-    else msg = failed || "磁力猫里还没有收下 VR 文件";
+    if (westernReadyTotal) msg = `可下 ${westernReadyTotal} 部${pageLabel}${scan}${filling}`;
+    else if (data.scanning) msg = data.progress || "后台正在核对新文件…";
+    else msg = "本地还没有可下的 VR 文件";
     setStatus($("western-status"), msg, westernReadyTotal ? "good" : (data.scanning ? "" : "bad"));
-    scheduleReady(!!data.scanning, !!data.matching);
+    scheduleReady();
   } catch (err) {
     if (view !== westernView) return;
     setStatus($("western-status"), err.message, "bad");

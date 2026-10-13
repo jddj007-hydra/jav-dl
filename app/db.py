@@ -1049,3 +1049,16 @@ class Database:
             )
             rows = await cur.fetchall()
         return total, [dict(row) for row in rows]
+
+    async def list_unmatched_vr_magnets(self, limit: int) -> list[dict]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """SELECT * FROM vr_magnet
+                   WHERE match_state NOT IN ('hit', 'miss')
+                   ORDER BY (created = '') ASC, created DESC, title
+                   LIMIT ?""",
+                (max(1, limit),),
+            )
+            rows = await cur.fetchall()
+        return [dict(row) for row in rows]
