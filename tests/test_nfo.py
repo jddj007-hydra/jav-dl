@@ -62,3 +62,23 @@ def test_nfo_actor_thumb_skips_blank_photo():
     assert by_name["空白"].find("thumb") is None
     assert by_name["没有"].find("thumb") is None
     assert by_name["只是名字"].find("thumb") is None
+
+
+def test_nfo_actor_thumb_skips_nowprinting_filename():
+    xml = build_nfo({
+        "code": "SSIS-001",
+        "actors": [
+            {"name": "占位", "photo": "https://www.javbus.com/pics/actress/nowprinting.gif"},
+            {"name": "大写查询", "photo": "/imgs/actress/NOWPRINTING.gif?v=1"},
+            {"name": "正常", "photo": "https://www.javbus.com/pics/actress/2xi_a.jpg"},
+            {"name": "查询串", "photo": "https://www.javbus.com/pics/actress/2xi_a.jpg?file=nowprinting"},
+            {"name": "目录", "photo": "https://www.javbus.com/nowprinting/actress/2xi_a.jpg"},
+        ],
+    })
+    root = ET.fromstring(xml)
+    by_name = {actor.findtext("name"): actor for actor in root.findall("actor")}
+    assert by_name["占位"].find("thumb") is None
+    assert by_name["大写查询"].find("thumb") is None
+    assert by_name["正常"].findtext("thumb") == "https://www.javbus.com/pics/actress/2xi_a.jpg"
+    assert by_name["查询串"].findtext("thumb") == "https://www.javbus.com/pics/actress/2xi_a.jpg?file=nowprinting"
+    assert by_name["目录"].findtext("thumb") == "https://www.javbus.com/nowprinting/actress/2xi_a.jpg"

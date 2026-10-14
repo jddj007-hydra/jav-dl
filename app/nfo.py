@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 
 def _text(parent: ET.Element, tag: str, value: object | None) -> None:
@@ -17,6 +18,11 @@ def _text(parent: ET.Element, tag: str, value: object | None) -> None:
 def runtime_minutes(runtime: str | None) -> str:
     m = re.search(r"(\d+)", runtime or "")
     return m.group(1) if m else ""
+
+
+def _placeholder_actor_photo(photo: str) -> bool:
+    filename = urlsplit(photo.strip()).path.rstrip("/").rsplit("/", 1)[-1]
+    return "nowprinting" in filename.casefold()
 
 
 def build_nfo(meta: dict) -> str:
@@ -67,6 +73,8 @@ def build_nfo(meta: dict) -> str:
         _text(a_el, "name", name)
         _text(a_el, "type", "Actor")
         photo = actor.get("photo") if isinstance(actor, dict) else ""
+        if isinstance(photo, str) and _placeholder_actor_photo(photo):
+            photo = ""
         _text(a_el, "thumb", photo)
     url = (meta.get("url") or "").strip()
     if url:
