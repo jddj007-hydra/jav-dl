@@ -1009,3 +1009,221 @@ def test_rescrape_leaves_sidecars_when_cover_download_fails(tmp_path, monkeypatc
     assert (dest / "poster.jpg").read_bytes() == b"old-poster"
     assert (dest / "fanart.jpg").read_bytes() == b"old-fanart"
     assert "old" in (dest / "SSIS-001.nfo").read_text(encoding="utf-8")
+
+
+def _release_meta(title: str = "禁欲") -> tuple[dict, object]:
+    shared = {
+        "code": "SSIS-001",
+        "title": title,
+        "release_date": "2021-02-18",
+        "cover": "",
+        "actors": [],
+        "genres": [{"name": "戏剧", "url": "http://example/g"}],
+    }
+
+    async def fake_meta(settings, db, code):
+        return shared
+
+    return shared, fake_meta
+
+
+def test_scrape_job_archives_flags_from_source_names(tmp_path, monkeypatch):
+    from xml.etree import ElementTree as ET
+
+    cases = [
+        ("SSIS-001-C", "plain.mp4", "禁欲流出破解", 1, 0, ["中文字幕"]),
+        ("SSIS-001-UC", "plain.mp4", "禁欲", 1, 1, ["中文字幕", "破解"]),
+        ("SSIS-001", "SONE-760CH.mp4", "禁欲", 1, 0, ["中文字幕"]),
+    ]
+    for folder, video, title, has_sub, has_cracked, labels in cases:
+        shared, fake_meta = _release_meta(title)
+        original = shared["genres"]
+        monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+        root = tmp_path / folder
+        settings = Settings(
+            data_dir=root / "data",
+            download_dir=root / "dl",
+            media_dir=root / "media",
+            scrape_min_mb=0,
+        )
+        settings.ensure_dirs()
+        dest = settings.download_dir / folder
+        dest.mkdir(parents=True)
+        (dest / video).write_bytes(b"x" * 8)
+
+        async def run(settings=settings, dest=dest, title=title):
+            db = Database(settings)
+            await db.init()
+            return await scrape_job(settings, db, {
+                "code": "SSIS-001",
+                "dest": str(dest),
+                "title": title,
+            })
+
+        result = asyncio.run(run())
+        archived = settings.media_dir / "202102" / "SSIS-001"
+        nfo = ET.fromstring((archived / "SSIS-001.nfo").read_text(encoding="utf-8"))
+        genres = [item.text for item in nfo.findall("genre")]
+        assert result["has_sub"] == has_sub, folder
+        assert result["has_cracked"] == has_cracked, folder
+        assert (archived / "SSIS-001.mp4").is_file(), folder
+        assert shared["genres"] is original
+        assert shared["genres"] == [{"name": "戏剧", "url": "http://example/g"}]
+        assert "戏剧" in genres
+        for label in labels:
+            assert genres.count(label) == 1, folder
+        if "破解" not in labels:
+            assert "破解" not in genres, folder
+
+
+def test_scrape_job_reads_magnet_title_but_not_work_title(tmp_path, monkeypatch):
+    from xml.etree import ElementTree as ET
+
+    shared, fake_meta = _release_meta("禁欲流出")
+    original = shared["genres"]
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    settings = _scrape_settings(tmp_path)
+    dest = settings.download_dir / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "plain.mp4").write_bytes(b"x" * 8)
+
+    async def run(title: str):
+        db = Database(settings)
+        await db.init()
+        return await scrape_job(settings, db, {
+            "code": "SSIS-001",
+            "dest": str(dest),
+            "title": title,
+        })
+
+    missed = asyncio.run(run("禁欲流出"))
+    archived = settings.media_dir / "202102" / "SSIS-001"
+    genres = [
+        item.text
+        for item in ET.fromstring((archived / "SSIS-001.nfo").read_text(encoding="utf-8")).findall("genre")
+    ]
+    assert missed["has_sub"] == 0
+    assert missed["has_cracked"] == 0
+    assert "破解" not in genres
+    assert "中文字幕" not in genres
+    assert shared["genres"] is original
+
+    (archived / "SSIS-001.mp4").unlink()
+    (archived / "SSIS-001.nfo").unlink()
+    dest.mkdir(parents=True)
+    (dest / "plain.mp4").write_bytes(b"x" * 8)
+    hit = asyncio.run(run("SSIS-001-UC"))
+    genres = [
+        item.text
+        for item in ET.fromstring((archived / "SSIS-001.nfo").read_text(encoding="utf-8")).findall("genre")
+    ]
+    assert hit["has_sub"] == 1
+    assert hit["has_cracked"] == 1
+    assert genres.count("中文字幕") == 1
+    assert genres.count("破解") == 1
+    assert shared["genres"] is original
+    assert shared["genres"] == [{"name": "戏剧", "url": "http://example/g"}]
+
+
+def test_scrape_job_archives_glued_uc_magnet_title(tmp_path, monkeypatch):
+    from xml.etree import ElementTree as ET
+
+    shared, fake_meta = _release_meta("禁欲")
+    original = shared["genres"]
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    settings = _scrape_settings(tmp_path)
+    dest = settings.download_dir / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "plain.mp4").write_bytes(b"x" * 8)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        return await scrape_job(settings, db, {
+            "code": "SSIS-001",
+            "dest": str(dest),
+            "title": "SSIS-001UC",
+        })
+
+    result = asyncio.run(run())
+    archived = settings.media_dir / "202102" / "SSIS-001"
+    genres = [
+        item.text
+        for item in ET.fromstring((archived / "SSIS-001.nfo").read_text(encoding="utf-8")).findall("genre")
+    ]
+    assert result["has_sub"] == 1
+    assert result["has_cracked"] == 1
+    assert genres.count("中文字幕") == 1
+    assert genres.count("破解") == 1
+    assert shared["genres"] is original
+
+
+def test_scrape_job_does_not_write_release_labels_into_metadata_cache(tmp_path):
+    from app.sources.javbus import CACHE_VER
+
+    payload = {
+        "code": "SSIS-001",
+        "title": "禁欲",
+        "release_date": "2021-02-18",
+        "cover": "",
+        "actors": [],
+        "genres": [{"name": "戏剧", "url": "http://example/g"}],
+    }
+    settings = _scrape_settings(tmp_path)
+    dest = settings.download_dir / "SSIS-001-UC"
+    dest.mkdir(parents=True)
+    (dest / "plain.mp4").write_bytes(b"x" * 8)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        await db.put_metadata(f"{CACHE_VER}:SSIS-001", payload)
+        result = await scrape_job(settings, db, {
+            "code": "SSIS-001",
+            "dest": str(dest),
+            "title": payload["title"],
+        })
+        cached = await db.get_metadata_any(f"{CACHE_VER}:SSIS-001")
+        assert result["has_sub"] == 1
+        assert result["has_cracked"] == 1
+        assert cached["genres"] == payload["genres"]
+
+    asyncio.run(run())
+
+
+def test_refresh_jav_sidecars_keeps_release_labels(tmp_path, monkeypatch):
+    from xml.etree import ElementTree as ET
+
+    from app.nfo import build_nfo
+    from app.scrape import refresh_jav_sidecars
+
+    shared, fake_meta = _release_meta("新标题")
+    shared["genres"] = [{"name": "中文字幕", "url": "http://example/g"}]
+    original = shared["genres"]
+    monkeypatch.setattr("app.scrape.resolve_metadata", fake_meta)
+    dest = tmp_path / "media" / "202102" / "SSIS-001"
+    dest.mkdir(parents=True)
+    (dest / "SSIS-001.mp4").write_bytes(b"video-bytes")
+    (dest / "SSIS-001.nfo").write_text(build_nfo({
+        "code": "SSIS-001",
+        "title": "旧",
+        "genres": ["戏剧", "中文字幕", "破解"],
+    }), encoding="utf-8")
+    settings = _scrape_settings(tmp_path)
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        return await refresh_jav_sidecars(settings, db, dest, "SSIS-001")
+
+    row = asyncio.run(run())
+    nfo = ET.fromstring((dest / "SSIS-001.nfo").read_text(encoding="utf-8"))
+    genres = [item.text for item in nfo.findall("genre")]
+    assert row["has_sub"] == 1
+    assert row["has_cracked"] == 1
+    assert "新标题" in (nfo.findtext("title") or "")
+    assert genres.count("中文字幕") == 1
+    assert genres.count("破解") == 1
+    assert (dest / "SSIS-001.mp4").read_bytes() == b"video-bytes"
+    assert shared["genres"] is original
+    assert shared["genres"] == [{"name": "中文字幕", "url": "http://example/g"}]

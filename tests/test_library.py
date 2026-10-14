@@ -8,10 +8,13 @@ from fastapi import HTTPException
 
 from app.library import (
     Library,
+    append_release_genres,
     attach_library,
     attach_western,
+    detect_flags,
     library_info,
     poster_file,
+    release_flags,
     scan_media,
     scan_western,
 )
@@ -466,6 +469,157 @@ def test_drop_version_removes_files_and_keeps_suck_and_plays(tmp_path):
     assert not (studio / "clip-poster.jpg").exists()
     assert (studio / "other.mp4").read_bytes() == b"o"
     assert (secret / "x").read_text(encoding="utf-8") == "no"
+
+
+def test_detect_flags_spellings():
+    sub_only = [
+        "中文字幕",
+        "中字",
+        "SSIS-001-C",
+        "SSIS-001-CH",
+        "SSIS-001_C",
+        "ssis-001-c.mp4",
+        "IRO061C",
+        "SONE-760CH",
+        "SONE-760CHS",
+        "SONE-760CHT",
+        "MIRD-181CHSUB",
+        "SSIS-001-CHSUB",
+        "[CHS]",
+        "SSIS-001 UC",
+    ]
+    for name in sub_only:
+        flags = detect_flags(name)
+        assert flags["has_sub"] == 1, name
+        if name in ("SSIS-001 UC",):
+            assert flags["has_cracked"] == 1, name
+        else:
+            assert flags["has_cracked"] == 0, name
+
+    both = [
+        "SSIS-001-UC",
+        "SSIS-001_UC",
+        "ssis-001-uc.mp4",
+        "SSIS-001-UC.1080p.mp4",
+        "IRO061UC",
+        "SSIS-001UC",
+        "SONE-760UC",
+        "300MAAN-802UC",
+        "无码破解",
+        "無碼破解",
+    ]
+    for name in both:
+        assert detect_flags(name) == {"has_sub": 1, "has_cracked": 1}, name
+
+    cracked_only = [
+        "IPX-001-破解.mp4",
+        "流出",
+        "SSIS-001-uncensored.mkv",
+        "無修正",
+        "无修正",
+        "SSIS-001-U",
+        "SSIS-001-U.mp4",
+        "SSIS-001_U",
+    ]
+    for name in cracked_only:
+        flags = detect_flags(name)
+        assert flags["has_cracked"] == 1, name
+        assert flags["has_sub"] == 0, name
+
+    # ranking 单独的 U / C。本地正则没覆盖的空格、点号和紧贴数字写法一并算上。
+    for name in ("无码", "無碼", "SSIS-001 U", "SSIS-001.U", "IRO061U", "REDUCING MOSAIC"):
+        flags = detect_flags(name)
+        assert flags["has_cracked"] == 1, name
+        assert flags["has_sub"] == 0, name
+    for name in ("SSIS-001 C", "SSIS-001.C", "[C]"):
+        flags = detect_flags(name)
+        assert flags["has_sub"] == 1, name
+        assert flags["has_cracked"] == 0, name
+
+
+def test_detect_flags_ignores_code_letters_and_ordinary_words():
+    for name in [
+        "CAWD-123",
+        "CAWD-123.mp4",
+        "CHN-123",
+        "CHN-123.mkv",
+        "CH-123",
+        "UC-001",
+        "CHS-123",
+        "SSIS-001.HEVC",
+        "SSIS-001.HEVC.mp4",
+        "SSIS-001-HEVC",
+        "ABC-123-CD1",
+        "ABC-123-CD1.mp4",
+        "SSIS-001-cd2",
+        "SSIS-001-cd2.mkv",
+        "ABC-123_CD1",
+        "SSIS-001-UPDATE",
+        "SSIS-001-ULTRA",
+        "SSIS-001-USER",
+        "SSIS-001-UNC",
+        "SSIS-001-CHAPTER",
+        "SSIS-001.mp4",
+        "SSIS-001-cd1",
+        "SSIS-001-CD2",
+        "ABC-123.1080p.x264",
+        "MIDE-123 [FHD]",
+        "SSIS-001-UNCUT",
+        "UC-001.mp4",
+        "",
+    ]:
+        assert detect_flags(name) == {"has_sub": 0, "has_cracked": 0}, name
+
+
+def test_release_flags_keeps_genre_rules():
+    assert release_flags(["SSIS-001.mp4"], ["中文字幕"])["has_sub"] == 1
+    assert release_flags(["SSIS-001"], ["字幕"])["has_sub"] == 1
+    assert release_flags(["SSIS-001"], ["无码"])["has_uncensored"] == 1
+    assert release_flags(["SSIS-001"], ["無碼"])["has_uncensored"] == 1
+    plain = release_flags(["SSIS-001", "SSIS-001.mp4", "SSIS-001.nfo"], ["无码破解"])
+    assert plain["has_uncensored"] == 1
+    assert plain["has_cracked"] == 1
+    assert plain["has_sub"] == 0
+    assert release_flags(["SSIS-001"], ["流出"])["has_cracked"] == 1
+    renamed = release_flags(["SSIS-001", "SSIS-001.mp4", "SSIS-001.nfo"], [])
+    assert renamed == {"has_sub": 0, "has_uncensored": 0, "has_cracked": 0}
+    marked = release_flags(["SSIS-001", "SSIS-001.mp4", "SSIS-001.nfo"], ["中文字幕", "破解"])
+    assert marked["has_sub"] == 1
+    assert marked["has_cracked"] == 1
+    uc = release_flags(["SSIS-001-UC.mkv"], [])
+    assert uc["has_sub"] == 1 and uc["has_cracked"] == 1 and uc["has_uncensored"] == 0
+    leaked = release_flags(["SSIS-001-uncensored.mp4"], [])
+    assert leaked["has_cracked"] == 1 and leaked["has_uncensored"] == 0 and leaked["has_sub"] == 0
+    assert release_flags(["SSIS-001-C.mp4"], [])["has_sub"] == 1
+    assert release_flags(["SSIS-001-U.mp4"], []) == {
+        "has_sub": 0,
+        "has_uncensored": 0,
+        "has_cracked": 1,
+    }
+
+
+def test_append_release_genres_copies_and_dedupes_by_name():
+    meta = {
+        "title": "禁欲",
+        "genres": [{"name": "戏剧", "url": "http://example/g"}, "中文字幕"],
+    }
+    original = meta["genres"]
+    updated = append_release_genres(meta, ["SSIS-001-UC"])
+    assert meta["genres"] is original
+    assert [item if isinstance(item, str) else item["name"] for item in updated["genres"]] == [
+        "戏剧",
+        "中文字幕",
+        "破解",
+    ]
+    assert updated is not meta
+    already = {"genres": ["破解", "中文字幕"]}
+    assert append_release_genres(already, ["SSIS-001-C"]) is already
+    plain = {"genres": ["戏剧"]}
+    assert append_release_genres(plain, ["SSIS-001.mp4"]) is plain
+    kept = append_release_genres({"title": "新", "genres": ["戏剧"]}, [], ["中文字幕", "破解"])
+    assert kept["genres"] == ["戏剧", "中文字幕", "破解"]
+    only_sub = append_release_genres({"genres": []}, [], ["中文字幕"])
+    assert only_sub["genres"] == ["中文字幕"]
 
 
 def test_library_card_offers_delete_without_removing_rescrape():

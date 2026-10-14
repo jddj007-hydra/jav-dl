@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from app.codes import jav_vr_maker, normalize_code
 from app.config import Settings
 from app.db import Database
+from app.ranking import detect_tags
 from app.scrape import is_video
 from app.western_archive import western_fs_rel
 
@@ -145,22 +146,104 @@ def resolution_of(name: str) -> str:
     return ""
 
 
+# 单字母 C / CH 只认分隔符或紧贴数字，避免番号前缀（CAWD、CHN）和 -CD1 被当成中字。
+# UC / CHS / CHT / CHSUB 可以跟在任意非字母数字后面，但不要从字符串开头认，避免 UC-001 这种前缀。
+# 紧贴数字的 UC、无码破解，以及 ranking 单独的 U / C，以 detect_tags 为准，避免两套规则漂移。
+_SUB_RE = re.compile(
+    r"中文字幕|中字|"
+    r"[-_](?:chsub|chs|cht|uc|ch|c)(?![A-Za-z0-9])|"
+    r"(?<=\d)(?:chsub|chs|cht|uc|ch|c)(?![A-Za-z0-9])|"
+    r"(?<=[^A-Za-z0-9])(?:chsub|chs|cht|uc)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_CRACK_RE = re.compile(
+    r"破解|流出|無修正|无修正|"
+    r"uncensored|"
+    r"(?<=[^A-Za-z0-9])uc(?![A-Za-z0-9])|"
+    r"[-_]u(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_RELEASE_SUB = "中文字幕"
+_RELEASE_CRACK = "破解"
+# ranking 会把厂牌前缀 UC-001 标成 UC。这是番号，不是发行标记。
+_LEADING_UC_CODE = re.compile(r"^UC(?=[-_]?\d)", re.IGNORECASE)
+
+
+def _release_tags(text: str) -> set[str]:
+    """复用 ranking.detect_tags。去掉开头的厂牌前缀后再看后半段还有没有标记。"""
+    tags = set(detect_tags(text))
+    if "UC" not in tags or _LEADING_UC_CODE.match(text) is None:
+        return tags
+    rest = set(detect_tags(_LEADING_UC_CODE.sub("", text, count=1)))
+    if "UC" in rest:
+        return tags
+    return rest
+
+
+def detect_flags(name: str) -> dict:
+    """从文件名或目录名识别中字、破解。不看作品片名。"""
+    text = name or ""
+    tags = _release_tags(text)
+    # UC 已经包含 U+C：中字和破解同时成立。
+    has_sub = bool(_SUB_RE.search(text)) or "C" in tags or "UC" in tags
+    has_cracked = bool(_CRACK_RE.search(text)) or "U" in tags or "UC" in tags
+    return {
+        "has_sub": 1 if has_sub else 0,
+        "has_cracked": 1 if has_cracked else 0,
+    }
+
+
+def _genre_name(genre: object) -> str:
+    if isinstance(genre, dict):
+        return str(genre.get("name") or "").strip()
+    return str(genre or "").strip()
+
+
+def append_release_genres(
+    meta: dict,
+    names: list[str],
+    labels: list[str] | None = None,
+) -> dict:
+    """需要追加标签时返回副本。不改传入的 meta，避免写脏元数据缓存。"""
+    has_sub = False
+    has_cracked = False
+    for label in labels or []:
+        if label == _RELEASE_SUB:
+            has_sub = True
+        elif label == _RELEASE_CRACK:
+            has_cracked = True
+    for name in names:
+        flags = detect_flags(name)
+        if flags["has_sub"]:
+            has_sub = True
+        if flags["has_cracked"]:
+            has_cracked = True
+    if not has_sub and not has_cracked:
+        return meta
+    raw = meta.get("genres")
+    genres = list(raw) if isinstance(raw, list) else []
+    seen = {_genre_name(item) for item in genres}
+    extra: list[str] = []
+    if has_sub and _RELEASE_SUB not in seen:
+        extra.append(_RELEASE_SUB)
+    if has_cracked and _RELEASE_CRACK not in seen:
+        extra.append(_RELEASE_CRACK)
+    if not extra:
+        return meta
+    copied = dict(meta)
+    copied["genres"] = [*genres, *extra]
+    return copied
+
+
 def release_flags(names: list[str], genres: list[str]) -> dict:
     has_sub = False
     uncensored = False
     cracked = False
     for name in names:
-        stem = Path(name).stem
-        low = stem.lower()
-        if low.endswith("-uc") or low.endswith("-c"):
+        flags = detect_flags(name)
+        if flags["has_sub"]:
             has_sub = True
-        if (
-            "破解" in stem
-            or "uncensored" in low
-            or "流出" in stem
-            or low.endswith("-uc")
-            or low.endswith("-u")
-        ):
+        if flags["has_cracked"]:
             cracked = True
     for genre in genres:
         if "中文字幕" in genre or genre == "字幕":

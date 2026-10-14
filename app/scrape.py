@@ -596,6 +596,21 @@ def _commit_jav(
     return has_poster, has_fanart
 
 
+def _release_flag_names(job: dict, src: Path, videos: list[Path], work_title: str) -> list[str]:
+    """磁链标题、来源目录名和原视频文件名。
+
+    单条下载和订阅把磁链标题写进 downloads.title；批量入队优先写 JavBus 片名。
+    与作品片名相同的 title 不参与识别，避免片名里的「流出」「破解」被当成标记。
+    """
+    names: list[str] = []
+    title = str(job.get("title") or "").strip()
+    if title and title != str(work_title or "").strip():
+        names.append(title)
+    names.append(src.name)
+    names.extend(video.name for video in videos)
+    return names
+
+
 async def scrape_job(
     settings: Settings,
     db,
@@ -617,6 +632,12 @@ async def scrape_job(
         raise ScrapeError("下载尚未完成")
 
     meta = await resolve_metadata(settings, db, code)
+    from app.library import append_release_genres
+
+    meta = append_release_genres(
+        meta,
+        _release_flag_names(job, src, videos, str(meta.get("title") or "")),
+    )
     month, dest_dir = jav_archive_dest(settings, code, meta.get("release_date"))
     nfo_xml = build_nfo(meta)
 
@@ -722,6 +743,28 @@ async def fill_jav_folder(settings: Settings, db, dest_dir: Path, code: str) -> 
     return index_code_dir(dest_dir, dest_dir.parent.name)
 
 
+def _saved_release_labels(dest_dir: Path) -> list[str]:
+    """旧 NFO 里由归档写入的中字、破解标签。重新刮削时带回去。"""
+    from app.library import nfo_fields
+
+    found: list[str] = []
+    try:
+        entries = list(dest_dir.iterdir())
+    except OSError:
+        return found
+    for path in entries:
+        if not path.is_file() or path.suffix.lower() != ".nfo":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in nfo_fields(text)["genres"]:
+            if name in ("中文字幕", "破解") and name not in found:
+                found.append(name)
+    return found
+
+
 async def refresh_jav_sidecars(settings: Settings, db, dest_dir: Path, code: str) -> dict | None:
     """Rewrite NFO, poster, fanart, and extrafanart for one archived code. The video stays."""
     try:
@@ -730,7 +773,11 @@ async def refresh_jav_sidecars(settings: Settings, db, dest_dir: Path, code: str
         return None
     if not videos:
         return None
+    kept = _saved_release_labels(dest_dir)
     meta = await resolve_metadata(settings, db, code)
+    from app.library import append_release_genres
+
+    meta = append_release_genres(meta, [], kept)
     poster_bytes = None
     cover = (meta.get("cover") or "").strip()
     if cover:
