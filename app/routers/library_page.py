@@ -34,6 +34,7 @@ async def library_page(request: Request):
         item = {
             "code": row.get("code") or "",
             "path": rel,
+            "video": str(row.get("video") or "").replace("\\", "/").lstrip("/"),
             "full_path": str(archived_jav_path(settings, rel)),
             "has_nfo": bool(row.get("has_nfo")),
             "has_poster": bool(row.get("has_poster")),
@@ -73,6 +74,7 @@ async def library_page(request: Request):
             "title": row.get("title") or "",
             "tpdb_id": row.get("tpdb_id") or "",
             "path": rel,
+            "video": fs_rel,
             "full_path": str(root / fs_rel) if root and fs_rel else fs_rel,
             "has_nfo": bool(row.get("has_nfo")),
             "has_poster": bool(row.get("has_poster")),

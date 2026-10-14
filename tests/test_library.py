@@ -236,6 +236,7 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         assert body["jav_vr"][1]["items"][0]["code"] == "DSVR-1124"
         first = body["jav"][0]["items"][0]
         assert first["full_path"].endswith("202102/SSIS-001")
+        assert first["video"] == ""
         assert first["title"] == "Title"
         assert first["actors"] == ["葵つかさ"]
         assert first["studio"] == "S1"
@@ -244,9 +245,52 @@ def test_library_page_groups_jav_by_month_and_western_by_studio(tmp_path):
         assert first["added_at"] > 0
         assert body["western"][0]["studio"] == "Brazzers"
         assert body["western"][0]["items"][0]["full_path"].endswith("Brazzers/a.mp4")
+        assert body["western"][0]["items"][0]["video"] == "Brazzers/a.mp4"
         assert body["western"][0]["items"][0]["studio"] == "Brazzers"
         assert "series" not in body["western"][0]["items"][0]
         assert (await db.western_by_ids(["abc"]))["abc"]["title"] == "Scene"
+
+    asyncio.run(run())
+
+
+def test_library_page_video_is_relative_to_the_player_root(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        download_dir=tmp_path / "dl",
+        media_dir=tmp_path / "media",
+        western_media_dir=str(tmp_path / "west"),
+        vr_media_dir=str(tmp_path / "vrporn" / "western"),
+    )
+    settings.ensure_dirs()
+
+    async def run():
+        db = Database(settings)
+        await db.init()
+        lib = Library(settings, db)
+        await db.upsert_library({
+            "code": "SSIS-001", "month": "202102", "path": "202102/SSIS-001", "has_video": 1,
+            "video": "202102/SSIS-001/SSIS-001.mp4",
+        })
+        await db.upsert_library({
+            "code": "DSVR-1124", "month": "DSVR", "path": "DSVR/DSVR-1124", "has_video": 1,
+            "video": "DSVR/DSVR-1124/DSVR-1124.mp4",
+        })
+        await lib.remember_western({"entries": [
+            {"path": "Brazzers/a.mp4", "tpdb_id": "flat", "studio": "Brazzers", "title": "Flat"},
+            {
+                "path": "vr/VRBangers/headset.mp4",
+                "tpdb_id": "headset",
+                "studio": "VRBangers",
+                "title": "Headset",
+                "shelf": "vr",
+            },
+        ]})
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings, db=db)))
+        body = await library_page(request)
+        assert body["jav"][0]["items"][0]["video"] == "202102/SSIS-001/SSIS-001.mp4"
+        assert body["jav_vr"][0]["items"][0]["video"] == "DSVR/DSVR-1124/DSVR-1124.mp4"
+        assert body["western"][0]["items"][0]["video"] == "Brazzers/a.mp4"
+        assert body["vr"][0]["items"][0]["video"] == "VRBangers/headset.mp4"
 
     asyncio.run(run())
 

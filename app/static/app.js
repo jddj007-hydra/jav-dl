@@ -3511,13 +3511,45 @@ function libraryCard(item) {
 function libraryCardActions(item) {
   const jav = libraryKind === "jav" || libraryKind === "jav_vr";
   const key = jav ? item.code : item.tpdb_id;
-  if (!key) return "";
-  const title = item.title || key;
+  const title = item.title || key || "";
   const kind = jav ? "jav" : "western";
-  return `<div class="lib-actions">
-    <button type="button" class="ghost small danger" data-drop-version="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}">删除此版本</button>
-    <button type="button" class="ghost small danger lib-suck" data-suck-mark="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}" data-remove="1">标 suck</button>
-  </div>`;
+  const video = item.video || "";
+  const play = video
+    ? `<button type="button" class="ghost small lib-play" data-play-kind="${escapeHtml(libraryKind)}" data-play-path="${escapeHtml(video)}" data-play-key="${escapeHtml(key || "")}" title="交给本机 PotPlayer">播放</button>`
+    : "";
+  const manage = key
+    ? `<button type="button" class="ghost small danger" data-drop-version="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}">删除此版本</button>
+    <button type="button" class="ghost small danger lib-suck" data-suck-mark="${kind}" data-key="${escapeHtml(key)}" data-title="${escapeHtml(title)}" data-remove="1">标 suck</button>`
+    : "";
+  if (!play && !manage) return "";
+  return `<div class="lib-actions">${play}${manage}</div>`;
+}
+
+function openPotPlayer(kind, path) {
+  const url = `javplayer:play?kind=${encodeURIComponent(kind)}&path=${encodeURIComponent(path)}`;
+  const link = document.createElement("a");
+  link.href = url;
+  link.click();
+}
+
+async function playInPotPlayer(el) {
+  const shelf = el.dataset.playKind || "";
+  const path = el.dataset.playPath || "";
+  const key = el.dataset.playKey || "";
+  if (!shelf || !path) return;
+  openPotPlayer(shelf, path);
+  const status = $("library-status");
+  const markKind = shelf === "jav" || shelf === "jav_vr" ? "jav" : "western";
+  if (!key) {
+    setStatus(status, "已交给 PotPlayer", "good");
+    return;
+  }
+  try {
+    await api("/api/player/played", { method: "POST", body: JSON.stringify({ kind: markKind, key }) });
+    setStatus(status, "已交给 PotPlayer", "good");
+  } catch (err) {
+    setStatus(status, `已交给 PotPlayer，播放记录没写上：${err.message}`, "bad");
+  }
 }
 
 async function commitDropVersion(el) {
@@ -3857,6 +3889,11 @@ $("library-list").addEventListener("click", async (e) => {
     if (facet.dataset.libStudio) libraryStudio = facet.dataset.libStudio;
     if (facet.dataset.libSeries) librarySeries = facet.dataset.libSeries;
     pushHash(libraryHash());
+    return;
+  }
+  const play = e.target.closest("[data-play-kind]");
+  if (play) {
+    playInPotPlayer(play);
     return;
   }
   const drop = e.target.closest("[data-drop-version]");
