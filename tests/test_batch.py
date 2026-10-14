@@ -45,6 +45,12 @@ def test_parse_batch_codes_keeps_full_fc2_lines():
     ]
 
 
+def test_parse_batch_codes_keeps_numeric_prefix():
+    assert parse_batch_codes("259LUXU-1234") == ["259LUXU-1234"]
+    assert parse_batch_codes("300MAAN-123 200GANA-2000") == ["300MAAN-123", "200GANA-2000"]
+    assert parse_batch_codes("259LUXU-1234.1080p X265HEVC") == ["259LUXU-1234"]
+
+
 def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):
     async def fake_search(settings, code, pages=2):
         if code == "SSIS-001":

@@ -85,3 +85,36 @@ def test_date_code_in_studio_folder_counts_as_jav_vr():
     assert is_jav_vr_entry("012822-01", "10mu")
     assert not is_jav_vr_entry("021622-001")
     assert not is_jav_vr_entry("021622-001", "")
+
+
+def test_numeric_prefix_amateur_codes():
+    from app.codes import code_maker, jav_vr_maker
+
+    assert normalize_code("259LUXU-1234") == "259LUXU-1234"
+    assert normalize_code("259luxu1234") == "259LUXU-1234"
+    assert normalize_code("300MAAN-123") == "300MAAN-123"
+    assert normalize_code("300maan123") == "300MAAN-123"
+    assert normalize_code("200GANA-2000") == "200GANA-2000"
+    assert normalize_code("200gana_2000") == "200GANA-2000"
+    assert extract_codes("259LUXU-1234") == ["259LUXU-1234"]
+    assert extract_codes("259luxu-1234") == ["259LUXU-1234"]
+    assert extract_codes("300MAAN-123") == ["300MAAN-123"]
+    assert extract_codes("200GANA-2000") == ["200GANA-2000"]
+    assert extract_codes("259LUXU1234") == ["259LUXU-1234"]
+    assert extract_codes("LUXU-1234") == ["LUXU-1234"]
+    assert extract_code("259LUXU-1234.mp4") == "259LUXU-1234"
+    assert extract_codes("259LUXU-1234.1080p.x265.hevc") == ["259LUXU-1234"]
+    assert extract_codes("hhd800.com@259LUXU-1234") == ["259LUXU-1234"]
+    assert code_maker("259LUXU-1234") == "259LUXU"
+    assert jav_vr_maker("259LUXU-1234") is None
+    assert normalize_code("123HEVC-1080") is None
+    assert extract_codes("123HEVC-1080") == []
+    assert extract_codes("123BLURAY-1080") == []
+    assert normalize_code("X265HEVC") is None
+    assert normalize_code("1080P") is None
+    assert extract_codes("X265HEVC") == []
+    assert extract_codes("1080P") == []
+    assert extract_codes("SSIS-001.1080p.X265HEVC") == ["SSIS-001"]
+    noise = extract_codes("movie.1080p.X265.HEVC")
+    assert noise == ["MOVIE-1080", "PX-265"]
+    assert all(not code[0].isdigit() for code in noise)

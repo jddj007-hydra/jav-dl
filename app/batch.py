@@ -11,6 +11,7 @@ from app.codes import (
     DATE_HYPHEN_RE,
     FALSE_PREFIXES,
     FC2_HYPHEN_RE,
+    PREFIXED_HYPHEN_RE,
     normalize_code,
 )
 from app.config import Settings
@@ -51,9 +52,19 @@ def parse_batch_codes(text: str) -> list[str]:
         fc2_spans.append(match.span())
     for match in DATE_HYPHEN_RE.finditer(folded):
         add(f"{match.group(1)}-{match.group(2)}")
-    for match in CODE_HYPHEN_RE.finditer(folded):
+    # 259LUXU-1234 要整段保留。后面的厂牌正则会切成 LUXU-1234，跳过这段。
+    prefixed_spans: list[tuple[int, int]] = []
+    for match in PREFIXED_HYPHEN_RE.finditer(folded):
         start, end = match.span()
         if any(span_start < end and span_end > start for span_start, span_end in fc2_spans):
+            continue
+        prefixed_spans.append(match.span())
+        maker, num = match.group(1), match.group(2)
+        add(normalize_code(f"{maker}-{num}"))
+    blocked = [*fc2_spans, *prefixed_spans]
+    for match in CODE_HYPHEN_RE.finditer(folded):
+        start, end = match.span()
+        if any(span_start < end and span_end > start for span_start, span_end in blocked):
             continue
         prefix, num = match.group(1), match.group(2)
         if prefix not in FALSE_PREFIXES:

@@ -6,6 +6,12 @@ CODE_RE = re.compile(r"^([A-Z]{2,5})-?(\d{2,5})$")
 # 数字后再跟数字就不是这一段，避免从 010120 里截出 01012。
 CODE_HYPHEN_RE = re.compile(r"([A-Z]{2,5})-(\d{2,5})(?!\d)", re.I)
 CODE_LOOSE_RE = re.compile(r"([A-Z]{2,5})(\d{3,5})", re.I)
+# MGS 素人番号带三位数字前缀，如 259LUXU-1234。字母段撞上分辨率或编码噪声则不算。
+PREFIXED_CODE_RE = re.compile(r"^(\d{3}[A-Z]{2,6})-?(\d{3,5})$")
+PREFIXED_HYPHEN_RE = re.compile(
+    r"(?<![A-Z0-9])(\d{3}[A-Z]{2,6})-?(\d{3,5})(?!\d)",
+    re.I,
+)
 # DANDYHQVR / URVRSP / 3DSVR 比普通厂牌长，或带数字。短正则会切成 YHQVR-015。
 VR_HYPHEN_RE = re.compile(r"(?<![A-Z0-9])([A-Z0-9]{2,12})-(\d{2,5})(?!\d)", re.I)
 VR_CODE_HYPHEN_RE = re.compile(r"^([A-Z0-9]{2,12})-(\d{2,5})$")
@@ -45,8 +51,16 @@ def _vr_code(maker: str, number: str) -> str | None:
     return None
 
 
+def _prefixed_code(maker: str, number: str) -> str | None:
+    maker = (maker or "").upper()
+    letters = maker[3:]
+    if not letters or letters in FALSE_PREFIXES:
+        return None
+    return f"{maker}-{number}"
+
+
 def normalize_code(raw: str) -> str | None:
-    """ssis001 / SSIS-001 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
+    """ssis001 / SSIS-001 / 259LUXU-1234 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
     if raw is None:
         return None
     s = raw.strip().upper().replace("_", "-").replace(" ", "")
@@ -56,6 +70,9 @@ def normalize_code(raw: str) -> str | None:
     dated = DATE_CODE_RE.fullmatch(s)
     if dated:
         return f"{dated.group(1)}-{dated.group(2)}"
+    prefixed = PREFIXED_CODE_RE.fullmatch(s)
+    if prefixed:
+        return _prefixed_code(prefixed.group(1), prefixed.group(2))
     m = CODE_RE.fullmatch(s)
     if m:
         return f"{m.group(1)}-{m.group(2)}"
@@ -121,7 +138,17 @@ def extract_codes(raw: str) -> list[str]:
             continue
         _add_code(found, seen, code)
         vr_spans.append(m.span())
-    taken = [*fc2_spans, *vr_spans, *date_spans]
+    blocked = [*fc2_spans, *vr_spans, *date_spans]
+    prefixed_spans: list[tuple[int, int]] = []
+    for m in PREFIXED_HYPHEN_RE.finditer(text):
+        if _overlaps(m.start(), m.end(), blocked):
+            continue
+        prefixed_spans.append(m.span())
+        code = _prefixed_code(m.group(1), m.group(2))
+        if not code:
+            continue
+        _add_code(found, seen, code)
+    taken = [*blocked, *prefixed_spans]
     for m in CODE_HYPHEN_RE.finditer(text):
         if _overlaps(m.start(), m.end(), taken):
             continue
@@ -134,15 +161,16 @@ def extract_codes(raw: str) -> list[str]:
     compact = re.sub(r"[^A-Z0-9]", "", text)
     origin = [i for i, ch in enumerate(text) if ("A" <= ch <= "Z") or ("0" <= ch <= "9")]
 
-    def loose_overlaps_date(match: re.Match[str]) -> bool:
-        if not date_spans:
+    def loose_overlaps_span(match: re.Match[str]) -> bool:
+        spans = [*date_spans, *prefixed_spans]
+        if not spans:
             return False
         start = origin[match.start()]
         end = origin[match.end() - 1] + 1
-        return _overlaps(start, end, date_spans)
+        return _overlaps(start, end, spans)
 
     for m in VR_LOOSE_RE.finditer(compact):
-        if loose_overlaps_date(m):
+        if loose_overlaps_span(m):
             continue
         code = _vr_code(m.group(1), m.group(2))
         if code:
@@ -150,7 +178,7 @@ def extract_codes(raw: str) -> list[str]:
     if found:
         return found
     for m in CODE_LOOSE_RE.finditer(compact):
-        if loose_overlaps_date(m):
+        if loose_overlaps_span(m):
             continue
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
