@@ -431,6 +431,7 @@ def _commit_western(
             "has_poster": 1 if poster else 0,
             "actors": meta.get("actors") or [],
             "release_date": release,
+            "video_size": path.stat().st_size,
             **western_catalog_fields(
                 western_db_path(f"{folder.name}/{path.name}", shelf),
                 release,

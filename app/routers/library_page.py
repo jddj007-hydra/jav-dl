@@ -44,6 +44,7 @@ async def library_page(request: Request):
             "series": row.get("series") or "",
             "release_date": row.get("release_date") or "",
             "added_at": row.get("added_at") or 0,
+            "video_size": int(row.get("video_size") or 0),
         }
         bucket = vr_months if is_jav_vr_entry(row.get("code") or "", row.get("month") or "") else months
         bucket.setdefault(row.get("month") or "", []).append(item)
@@ -82,6 +83,7 @@ async def library_page(request: Request):
             "studio": row.get("studio") or "",
             "release_date": row.get("release_date") or "",
             "added_at": row.get("added_at") or 0,
+            "video_size": int(row.get("video_size") or 0),
         }
         bucket = vr_studios if shelf == "vr" else studios
         bucket.setdefault(row.get("studio") or "", []).append(item)

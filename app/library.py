@@ -608,6 +608,7 @@ def scan_western(root: Path | None, shelf: str = "western") -> list[dict]:
                 "actors": fields["actors"],
                 "release_date": fields["release_date"],
                 "added_at": _mtime(video),
+                "video_size": _file_size(video),
                 **western_catalog_fields(
                     path, fields["release_date"], fields["runtime_min"], poster_rel,
                 ),
@@ -661,6 +662,7 @@ def reindex_western_video(video: Path, studio: str, shelf: str, db_path: str) ->
         "actors": fields["actors"],
         "release_date": fields["release_date"],
         "added_at": _mtime(video),
+        "video_size": _file_size(video),
         **western_catalog_fields(db_path, fields["release_date"], fields["runtime_min"], poster_rel),
     }
 

@@ -182,6 +182,7 @@ WESTERN_COLUMNS = (
     ("resolution", "TEXT NOT NULL DEFAULT ''"),
     ("poster", "TEXT NOT NULL DEFAULT ''"),
     ("shelf", "TEXT NOT NULL DEFAULT 'western'"),
+    ("video_size", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -258,6 +259,7 @@ def _western_row(row: dict, now: float) -> dict:
         "resolution": row.get("resolution") or "",
         "poster": row.get("poster") or "",
         "shelf": (row.get("shelf") or "western").strip() or "western",
+        "video_size": _as_int(row.get("video_size")),
     }
 
 
@@ -493,10 +495,10 @@ class Database:
                     """INSERT INTO western_library
                        (path, tpdb_id, studio, title, has_nfo, has_poster,
                         actors, release_date, added_at, updated_at,
-                        runtime_min, year, resolution, poster, shelf)
+                        runtime_min, year, resolution, poster, shelf, video_size)
                        VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
                         :actors, :release_date, :added_at, :updated_at,
-                        :runtime_min, :year, :resolution, :poster, :shelf)""",
+                        :runtime_min, :year, :resolution, :poster, :shelf, :video_size)""",
                     [_western_row(row, now) for row in rows],
                 )
             await db.commit()
@@ -508,10 +510,10 @@ class Database:
                 """INSERT INTO western_library
                    (path, tpdb_id, studio, title, has_nfo, has_poster,
                     actors, release_date, added_at, updated_at,
-                    runtime_min, year, resolution, poster, shelf)
+                    runtime_min, year, resolution, poster, shelf, video_size)
                    VALUES (:path, :tpdb_id, :studio, :title, :has_nfo, :has_poster,
                     :actors, :release_date, :added_at, :updated_at,
-                    :runtime_min, :year, :resolution, :poster, :shelf)
+                    :runtime_min, :year, :resolution, :poster, :shelf, :video_size)
                    ON CONFLICT(path) DO UPDATE SET
                      tpdb_id=excluded.tpdb_id,
                      studio=excluded.studio,
@@ -526,7 +528,8 @@ class Database:
                      year=excluded.year,
                      resolution=excluded.resolution,
                      poster=excluded.poster,
-                     shelf=excluded.shelf""",
+                     shelf=excluded.shelf,
+                     video_size=excluded.video_size""",
                 payload,
             )
             await db.commit()

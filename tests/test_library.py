@@ -37,6 +37,7 @@ def test_scan_media_indexes_code_folders(tmp_path):
     assert by_code["SSIS-001"]["path"] == "202102/SSIS-001"
     assert by_code["SSIS-001"]["has_nfo"] == 1
     assert by_code["SSIS-001"]["has_poster"] == 1
+    assert by_code["SSIS-001"]["video_size"] == 1
     assert "IPX-001" not in by_code
 
 
@@ -160,6 +161,7 @@ def test_scan_western_reads_tpdb_id(tmp_path):
     assert rows[0]["path"] == "Brazzers/clip.mp4"
     assert rows[0]["has_poster"] == 1
     assert rows[0]["shelf"] == "western"
+    assert rows[0]["video_size"] == 1
 
     vr = tmp_path / "vr" / "VRBangers"
     vr.mkdir(parents=True)
@@ -269,14 +271,14 @@ def test_library_page_video_is_relative_to_the_player_root(tmp_path):
         lib = Library(settings, db)
         await db.upsert_library({
             "code": "SSIS-001", "month": "202102", "path": "202102/SSIS-001", "has_video": 1,
-            "video": "202102/SSIS-001/SSIS-001.mp4",
+            "video": "202102/SSIS-001/SSIS-001.mp4", "video_size": 2500000000,
         })
         await db.upsert_library({
             "code": "DSVR-1124", "month": "DSVR", "path": "DSVR/DSVR-1124", "has_video": 1,
             "video": "DSVR/DSVR-1124/DSVR-1124.mp4",
         })
         await lib.remember_western({"entries": [
-            {"path": "Brazzers/a.mp4", "tpdb_id": "flat", "studio": "Brazzers", "title": "Flat"},
+            {"path": "Brazzers/a.mp4", "tpdb_id": "flat", "studio": "Brazzers", "title": "Flat", "video_size": 1800000000},
             {
                 "path": "vr/VRBangers/headset.mp4",
                 "tpdb_id": "headset",
@@ -288,8 +290,11 @@ def test_library_page_video_is_relative_to_the_player_root(tmp_path):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings, db=db)))
         body = await library_page(request)
         assert body["jav"][0]["items"][0]["video"] == "202102/SSIS-001/SSIS-001.mp4"
+        assert body["jav"][0]["items"][0]["video_size"] == 2500000000
         assert body["jav_vr"][0]["items"][0]["video"] == "DSVR/DSVR-1124/DSVR-1124.mp4"
+        assert body["jav_vr"][0]["items"][0]["video_size"] == 0
         assert body["western"][0]["items"][0]["video"] == "Brazzers/a.mp4"
+        assert body["western"][0]["items"][0]["video_size"] == 1800000000
         assert body["vr"][0]["items"][0]["video"] == "VRBangers/headset.mp4"
 
     asyncio.run(run())
