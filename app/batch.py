@@ -13,6 +13,7 @@ from app.codes import (
     FC2_HYPHEN_RE,
     HEYZO_HYPHEN_RE,
     PREFIXED_HYPHEN_RE,
+    XXX_AV_HYPHEN_RE,
     normalize_code,
 )
 from app.config import Settings
@@ -71,7 +72,16 @@ def parse_batch_codes(text: str) -> list[str]:
             continue
         heyzo_spans.append(match.span())
         add(f"HEYZO-{match.group(1)}")
-    blocked = [*claimed, *heyzo_spans]
+    # XXX-AV-12345 收成 XXX-AV-编号。后面的厂牌正则会切成 AV-12345，跳过。
+    xxx_av_spans: list[tuple[int, int]] = []
+    claimed_xxx = [*claimed, *heyzo_spans]
+    for match in XXX_AV_HYPHEN_RE.finditer(folded):
+        start, end = match.span()
+        if any(span_start < end and span_end > start for span_start, span_end in claimed_xxx):
+            continue
+        xxx_av_spans.append(match.span())
+        add(f"XXX-AV-{match.group(1)}")
+    blocked = [*claimed_xxx, *xxx_av_spans]
     for match in CODE_HYPHEN_RE.finditer(folded):
         start, end = match.span()
         if any(span_start < end and span_end > start for span_start, span_end in blocked):
@@ -84,6 +94,9 @@ def parse_batch_codes(text: str) -> list[str]:
         if not compact:
             continue
         add(normalize_code(compact))
+        # 压扁后的 XXXAV12345 会被 loose 收成 XXXAV-编号。专用规则已经收过。
+        if XXX_AV_HYPHEN_RE.fullmatch(compact):
+            continue
         match = CODE_LOOSE_RE.fullmatch(compact)
         if not match:
             continue

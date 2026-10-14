@@ -19,6 +19,8 @@ VR_CODE_COMPACT_RE = re.compile(r"^([A-Z0-9]{2,12}?)(\d{3,5})$")
 VR_LOOSE_RE = re.compile(r"([A-Z0-9]{2,12}?)(\d{3,5})")
 # heyzo_hd_2345 压扁后是 HEYZOHD2345。HD 被当成画质丢掉后，loose 会从中间截出 YZOHD。
 HEYZO_HYPHEN_RE = re.compile(r"HEYZO[-_ ]*(?:HD[-_ ]*)?(\d{4})(?!\d)", re.I)
+# XXX-AV-12345 会被普通厂牌规则切成 AV-12345，压扁后又变成 XXXAV-12345。
+XXX_AV_HYPHEN_RE = re.compile(r"XXX-?AV-?(\d{4,5})(?!\d)", re.I)
 # 加勒比、一本道、天然むすめ这一类是日期加序号，不是字母厂牌。
 DATE_CODE_RE = re.compile(r"^(\d{6})-(\d{2,4})$")
 DATE_HYPHEN_RE = re.compile(r"(?<!\d)(\d{6})-(\d{2,4})(?!\d)")
@@ -62,7 +64,7 @@ def _prefixed_code(maker: str, number: str) -> str | None:
 
 
 def normalize_code(raw: str) -> str | None:
-    """ssis001 / SSIS-001 / 259LUXU-1234 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
+    """ssis001 / SSIS-001 / 259LUXU-1234 / XXX-AV-12345 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
     if raw is None:
         return None
     s = raw.strip().upper().replace("_", "-").replace(" ", "")
@@ -78,6 +80,9 @@ def normalize_code(raw: str) -> str | None:
     heyzo = HEYZO_HYPHEN_RE.fullmatch(s)
     if heyzo:
         return f"HEYZO-{heyzo.group(1)}"
+    xxx_av = XXX_AV_HYPHEN_RE.fullmatch(s)
+    if xxx_av:
+        return f"XXX-AV-{xxx_av.group(1)}"
     m = CODE_RE.fullmatch(s)
     if m:
         return f"{m.group(1)}-{m.group(2)}"
@@ -159,7 +164,13 @@ def extract_codes(raw: str) -> list[str]:
             continue
         heyzo_spans.append(m.span())
         _add_code(found, seen, f"HEYZO-{m.group(1)}")
-    taken = [*blocked, *prefixed_spans, *heyzo_spans]
+    xxx_av_spans: list[tuple[int, int]] = []
+    for m in XXX_AV_HYPHEN_RE.finditer(text):
+        if _overlaps(m.start(), m.end(), blocked):
+            continue
+        xxx_av_spans.append(m.span())
+        _add_code(found, seen, f"XXX-AV-{m.group(1)}")
+    taken = [*blocked, *prefixed_spans, *heyzo_spans, *xxx_av_spans]
     for m in CODE_HYPHEN_RE.finditer(text):
         if _overlaps(m.start(), m.end(), taken):
             continue
@@ -173,7 +184,7 @@ def extract_codes(raw: str) -> list[str]:
     origin = [i for i, ch in enumerate(text) if ("A" <= ch <= "Z") or ("0" <= ch <= "9")]
 
     def loose_overlaps_span(match: re.Match[str]) -> bool:
-        spans = [*date_spans, *prefixed_spans, *heyzo_spans]
+        spans = [*date_spans, *prefixed_spans, *heyzo_spans, *xxx_av_spans]
         if not spans:
             return False
         start = origin[match.start()]

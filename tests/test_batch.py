@@ -52,6 +52,14 @@ def test_parse_batch_codes_heyzo_hd():
     assert parse_batch_codes("[HD]HEYZO-0123.mp4") == ["HEYZO-0123"]
 
 
+def test_parse_batch_codes_xxx_av():
+    assert parse_batch_codes("XXX-AV-12345") == ["XXX-AV-12345"]
+    assert parse_batch_codes("xxxav12345") == ["XXX-AV-12345"]
+    assert parse_batch_codes("XXX-AV-1234") == ["XXX-AV-1234"]
+    assert parse_batch_codes("XXX-AV-12345-FHD.mp4") == ["XXX-AV-12345"]
+    assert parse_batch_codes("[FHD]XXX-AV-12345.mp4") == ["XXX-AV-12345"]
+
+
 def test_parse_batch_codes_keeps_numeric_prefix():
     assert parse_batch_codes("259LUXU-1234") == ["259LUXU-1234"]
     assert parse_batch_codes("300MAAN-123 200GANA-2000") == ["300MAAN-123", "200GANA-2000"]

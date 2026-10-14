@@ -128,3 +128,19 @@ def test_heyzo_hd_segment():
     assert extract_codes("HEYZO-1234") == ["HEYZO-1234"]
     assert extract_codes("heyzo1234") == ["HEYZO-1234"]
     assert extract_code("heyzo_hd_2345") == "HEYZO-2345"
+
+
+def test_xxx_av_code():
+    from app.codes import code_maker, jav_vr_maker
+
+    assert normalize_code("XXX-AV-12345") == "XXX-AV-12345"
+    assert normalize_code("xxxav12345") == "XXX-AV-12345"
+    assert normalize_code("XXX-AV-1234") == "XXX-AV-1234"
+    assert extract_codes("XXX-AV-12345") == ["XXX-AV-12345"]
+    assert extract_codes("xxxav12345") == ["XXX-AV-12345"]
+    assert extract_codes("[FHD]XXX-AV-12345.mp4") == ["XXX-AV-12345"]
+    assert extract_code("XXX-AV-12345") == "XXX-AV-12345"
+    assert extract_code("[FHD]XXX-AV-12345.mp4") == "XXX-AV-12345"
+    assert extract_codes("XXX-AV-12345 SSIS-001") == ["XXX-AV-12345", "SSIS-001"]
+    assert code_maker("XXX-AV-12345") == "XXX"
+    assert jav_vr_maker("XXX-AV-12345") is None
