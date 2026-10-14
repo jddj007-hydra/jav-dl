@@ -4,6 +4,8 @@ import time
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from app.config import Settings
 from app.db import Database
 from app.downloader.jobs import JobManager
@@ -22,6 +24,16 @@ from app.scrape import (
     safe_rmtree,
     scrape_job,
 )
+
+
+@pytest.fixture(autouse=True)
+def _gfriends_offline(monkeypatch):
+    """这些用例不访问 gfriends。补头像的行为在 tests/test_gfriends.py。"""
+
+    async def empty(settings, name):
+        return ""
+
+    monkeypatch.setattr("app.scrape.gfriends.actor_photo", empty)
 
 
 def test_archive_month_from_release_date():

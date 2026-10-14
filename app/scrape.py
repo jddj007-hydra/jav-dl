@@ -14,7 +14,8 @@ from app.western_magnets import is_western_release_name
 from app.config import Settings
 from app.httputil import site_client
 from app.imgcache import trim_img_cache
-from app.nfo import build_nfo
+from app.nfo import _placeholder_actor_photo, build_nfo
+from app.sources import gfriends
 from app.sources.javbus import CACHE_VER, MetadataError, fetch_metadata
 
 VIDEO_EXTS = {
@@ -611,6 +612,36 @@ def _release_flag_names(job: dict, src: Path, videos: list[Path], work_title: st
     return names
 
 
+async def _meta_for_nfo(settings: Settings, meta: dict) -> dict:
+    """给缺头像的演员补上 gfriends URL。复制 meta，不改元数据缓存对象。"""
+    try:
+        actors = meta.get("actors")
+        if not isinstance(actors, list) or not actors:
+            return meta
+        updates: dict[int, dict] = {}
+        for index, actor in enumerate(actors):
+            if not isinstance(actor, dict):
+                continue
+            name = str(actor.get("name") or "").strip()
+            if not name:
+                continue
+            photo = actor.get("photo")
+            if isinstance(photo, str) and photo.strip() and not _placeholder_actor_photo(photo):
+                continue
+            url = await gfriends.actor_photo(settings, name)
+            if not url:
+                continue
+            updates[index] = {**actor, "photo": url}
+        if not updates:
+            return meta
+        copied = dict(meta)
+        copied["actors"] = [updates.get(index, actor) for index, actor in enumerate(actors)]
+        return copied
+    except Exception as exc:
+        log.warning("补演员头像失败: %s", exc)
+        return meta
+
+
 async def scrape_job(
     settings: Settings,
     db,
@@ -639,6 +670,7 @@ async def scrape_job(
         _release_flag_names(job, src, videos, str(meta.get("title") or "")),
     )
     month, dest_dir = jav_archive_dest(settings, code, meta.get("release_date"))
+    meta = await _meta_for_nfo(settings, meta)
     nfo_xml = build_nfo(meta)
 
     poster_bytes = None
@@ -735,8 +767,9 @@ async def fill_jav_folder(settings: Settings, db, dest_dir: Path, code: str) -> 
         except ScrapeError:
             poster_bytes = None
     extra_images = await download_extrafanart(settings, dest_dir, meta.get("samples"))
+    nfo_xml = build_nfo(await _meta_for_nfo(settings, meta))
     await asyncio.to_thread(
-        _write_jav_sidecars, dest_dir, videos, build_nfo(meta), poster_bytes, extra_images,
+        _write_jav_sidecars, dest_dir, videos, nfo_xml, poster_bytes, extra_images,
     )
     from app.library import index_code_dir
 
@@ -785,11 +818,12 @@ async def refresh_jav_sidecars(settings: Settings, db, dest_dir: Path, code: str
     extra_images = await download_extrafanart(
         settings, dest_dir, meta.get("samples"), replace=True,
     )
+    nfo_xml = build_nfo(await _meta_for_nfo(settings, meta))
     await asyncio.to_thread(
         _overwrite_jav_sidecars,
         dest_dir,
         videos,
-        build_nfo(meta),
+        nfo_xml,
         poster_bytes,
         extra_images,
     )
