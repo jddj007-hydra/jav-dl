@@ -189,3 +189,61 @@ def test_settings_update_accepts_downloader():
     dumped = body.model_dump(exclude_none=True)
     assert dumped["downloader"] == "xunlei"
     assert dumped["xunlei_password"] == ""
+
+
+def test_javdb_cookie_is_hidden_blank_keeps_it_and_blank_base_clears(tmp_path):
+    s = Settings(data_dir=tmp_path, download_dir=tmp_path / "dl", javdb_cookie="", javdb_base="https://javdb.com")
+    s.ensure_dirs()
+    assert s.public_dict()["javdb_cookie_set"] is False
+    assert "javdb_cookie" not in s.public_dict()
+
+    saved = save_user_config(s, {
+        "javdb_base": "https://JavDB.com/v/abc?q=1",
+        "javdb_cookie": "cf_clearance=secret",
+    })
+    assert saved.javdb_base == "https://javdb.com"
+    assert saved.javdb_cookie == "cf_clearance=secret"
+    public = saved.public_dict()
+    assert public["javdb_base"] == "https://javdb.com"
+    assert public["javdb_cookie_set"] is True
+    assert "javdb_cookie" not in public
+    assert "cf_clearance=secret" not in json.dumps(public)
+
+    current = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
+    assert current.javdb_cookie == "cf_clearance=secret"
+    kept = save_user_config(current, {"javdb_cookie": ""})
+    assert kept.javdb_cookie == "cf_clearance=secret"
+    kept = save_user_config(kept, {"javdb_cookie": "  "})
+    assert kept.javdb_cookie == "cf_clearance=secret"
+
+    cleared = save_user_config(kept, {"javdb_base": "  "})
+    assert cleared.javdb_base == ""
+    assert cleared.javdb_cookie == "cf_clearance=secret"
+    assert cleared.public_dict()["javdb_base"] == ""
+    assert cleared.public_dict()["javdb_cookie_set"] is True
+
+    restored = save_user_config(cleared, {"javdb_base": "https://keep.example:8443/search"})
+    assert restored.javdb_base == "https://keep.example:8443"
+    ignored = save_user_config(restored, {"javdb_base": "notaurl"})
+    assert ignored.javdb_base == "https://keep.example:8443"
+
+
+def test_javdb_env_is_overridden_by_config_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAVDB_BASE", "https://env.javdb.test/search")
+    monkeypatch.setenv("JAVDB_COOKIE", "from-env")
+    loaded = Settings(data_dir=tmp_path, download_dir=tmp_path / "dl")
+    assert loaded.javdb_base == "https://env.javdb.test/search"
+    assert loaded.javdb_cookie == "from-env"
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config.json").write_text(
+        json.dumps({
+            "javdb_base": "https://File.Example/v/1",
+            "javdb_cookie": "from-file",
+        }),
+        encoding="utf-8",
+    )
+    over = _overlay(Settings(data_dir=tmp_path, download_dir=tmp_path / "dl"))
+    assert over.javdb_base == "https://file.example"
+    assert over.javdb_cookie == "from-file"
+    assert "from-file" not in json.dumps(over.public_dict())

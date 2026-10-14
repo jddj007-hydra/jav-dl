@@ -600,12 +600,11 @@ function coverImage(url, opts = {}) {
   const attrs = [
     classes.length ? `class="${classes.join(" ")}"` : "",
     missing ? `data-fallback="1"` : "",
-    `src="${coverSrc(url)}"`,
     opts.lazy ? `loading="lazy"` : "",
     opts.full ? `data-full="${escapeHtml(opts.full)}"` : "",
     `alt="${escapeHtml(opts.alt || "")}"`,
   ].filter(Boolean).join(" ");
-  return `<img ${attrs} />`;
+  return `<img src="${coverSrc(url)}" ${attrs} />`;
 }
 
 function normalizeActors(actors) {
@@ -2243,6 +2242,9 @@ async function loadSettings() {
   form.clm_home.value = s.clm_home || "";
   form.clm_search.value = s.clm_search || "";
   form.clm_search_backup.value = s.clm_search_backup || "";
+  form.javdb_base.value = s.javdb_base || "";
+  form.javdb_cookie.value = "";
+  form.javdb_cookie.placeholder = s.javdb_cookie_set ? "已保存，留空不改" : "可空";
   form.tpdb_api_key.value = "";
   form.tpdb_api_key.placeholder = s.tpdb_api_key_set ? "已保存，留空不改" : "";
   form.downloader.value = s.downloader === "xunlei" ? "xunlei" : "aria2";
@@ -2314,6 +2316,7 @@ $("settings-form").addEventListener("submit", async (e) => {
     clm_home: form.clm_home.value.trim(),
     clm_search: form.clm_search.value.trim(),
     clm_search_backup: form.clm_search_backup.value.trim(),
+    javdb_base: form.javdb_base.value.trim(),
     tpdb_api_key: form.tpdb_api_key.value.trim(),
     downloader: form.downloader.value,
     xunlei_url: form.xunlei_url.value.trim(),
@@ -2333,6 +2336,8 @@ $("settings-form").addEventListener("submit", async (e) => {
   const pw = form.xunlei_password.value;
   if (pw) body.xunlei_password = pw;
   if (!body.tpdb_api_key) delete body.tpdb_api_key;
+  const javdbCookie = form.javdb_cookie.value.trim();
+  if (javdbCookie) body.javdb_cookie = javdbCookie;
   body.notify_channel = form.notify_channel.value;
   body.notify_telegram_chat = form.notify_telegram_chat.value.trim();
   const telegramToken = form.notify_telegram_token.value.trim();
@@ -2356,7 +2361,13 @@ $("settings-form").addEventListener("submit", async (e) => {
 function showLightbox(src) {
   if (!src) return;
   const box = $("lightbox");
-  box.querySelector("img").src = src;
+  let img = box.querySelector("img");
+  if (!img) {
+    img = document.createElement("img");
+    img.alt = "";
+    box.appendChild(img);
+  }
+  img.src = src;
   box.hidden = false;
 }
 
@@ -2399,7 +2410,8 @@ $("meta-card").addEventListener("click", (e) => {
 
 $("lightbox").addEventListener("click", () => {
   $("lightbox").hidden = true;
-  $("lightbox").querySelector("img").src = "";
+  const img = $("lightbox").querySelector("img");
+  if (img) img.removeAttribute("src");
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {

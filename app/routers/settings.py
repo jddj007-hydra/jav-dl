@@ -35,6 +35,8 @@ async def put_settings(request: Request, body: SettingsUpdate):
         updates.pop("xunlei_password")
     if updates.get("tpdb_api_key") == "":
         updates.pop("tpdb_api_key")
+    if "javdb_cookie" in updates and not str(updates.get("javdb_cookie") or "").strip():
+        updates.pop("javdb_cookie", None)
     for key in ("notify_telegram_token", "notify_bark_url", "notify_serverchan_key"):
         if updates.get(key) == "":
             updates.pop(key)

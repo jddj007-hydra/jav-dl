@@ -10,6 +10,8 @@ USER_KEYS = (
     "proxy_enabled",
     "proxy_url",
     "javbus_base",
+    "javdb_base",
+    "javdb_cookie",
     "clm_home",
     "clm_search",
     "clm_search_backup",
@@ -119,6 +121,8 @@ class Settings(BaseSettings):
     proxy_enabled: bool = False
     proxy_url: str = "http://127.0.0.1:7890"
     javbus_base: str = "https://www.javbus.com"
+    javdb_base: str = "https://javdb.com"
+    javdb_cookie: str = ""
     clm_home: str = "https://clm.cc"
     clm_search: str = "https://clm64.top"
     clm_search_backup: str = ""
@@ -178,6 +182,8 @@ class Settings(BaseSettings):
             "proxy_enabled": self.proxy_enabled,
             "proxy_url": self.proxy_url,
             "javbus_base": self.javbus_base,
+            "javdb_base": self.javdb_base or "",
+            "javdb_cookie_set": bool((self.javdb_cookie or "").strip()),
             "clm_home": self.clm_home,
             "clm_search": self.clm_search,
             "clm_search_backup": self.clm_search_backup or "",
@@ -227,6 +233,17 @@ def _keep_paths(allowed: dict) -> None:
         else:
             allowed["vr_media_dir"] = str(root)
     # 备用域留空表示关掉。非法地址不覆盖原来的值。
+    # JavDB 地址同样：留空关掉回退，非法地址不覆盖。
+    if "javdb_base" in allowed:
+        raw = str(allowed["javdb_base"]).strip()
+        if not raw:
+            allowed["javdb_base"] = ""
+        else:
+            origin = site_origin(raw)
+            if not origin:
+                allowed.pop("javdb_base")
+            else:
+                allowed["javdb_base"] = origin
     if "clm_search_backup" in allowed:
         raw = str(allowed["clm_search_backup"]).strip()
         if not raw:
@@ -286,6 +303,12 @@ def load_settings() -> Settings:
 
 def save_user_config(settings: Settings, updates: dict) -> Settings:
     allowed = {k: updates[k] for k in USER_KEYS if k in updates}
+    if "javdb_cookie" in allowed:
+        cookie = str(allowed.get("javdb_cookie") or "").strip()
+        if not cookie:
+            allowed.pop("javdb_cookie")
+        else:
+            allowed["javdb_cookie"] = cookie
     if "downloader" in allowed:
         allowed["downloader"] = normalize_downloader(str(allowed["downloader"]))
     _keep_paths(allowed)

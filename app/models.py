@@ -92,6 +92,8 @@ class SettingsUpdate(BaseModel):
     proxy_enabled: bool | None = None
     proxy_url: str | None = None
     javbus_base: str | None = None
+    javdb_base: str | None = None
+    javdb_cookie: str | None = None
     clm_home: str | None = None
     clm_search: str | None = None
     clm_search_backup: str | None = None

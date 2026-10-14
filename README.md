@@ -119,7 +119,7 @@ FastAPI :8787
 
 查站走 HTTP 代理（可选），磁力只拼 `magnet:?xt=urn:btih:` + 公共 tracker，BT 本身不走代理。
 
-ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bearer <token>`。最新列表按 `orderBy=recently_released`。封面代理允许 `theporndb.net` 和 `metadataapi.net`。
+ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bearer <token>`。最新列表按 `orderBy=recently_released`。封面代理允许 `theporndb.net`、`metadataapi.net`、`javdb.com` 和 `jdbstatic.com`。JavDB 封面（`jdbstatic.com` 或 JavDB 站点自己的域名）下载时用 JavDB 地址做 Referer。
 
 ## 配置
 
@@ -144,6 +144,8 @@ ThePornDB 基址是 `https://api.theporndb.net`，请求头 `Authorization: Bear
 | `ARIA2_RPC` | `http://127.0.0.1:6800/jsonrpc` | Docker 里是 `http://aria2:6800/jsonrpc` |
 | `ARIA2_SECRET` | `jav-dl-rpc` | 与 aria2 RPC 密钥一致 |
 | `CLM_SEARCH_BACKUP` | 空 | 主搜索域失败或没有结果时再用的磁力猫域名。设置页可改，留空保存会清掉 |
+| `JAVDB_BASE` | `https://javdb.com` | JavBus 返回 404 时才回退的 JavDB 地址。设置页可改，留空保存会清掉并关掉回退。被拦截不会回退 |
+| `JAVDB_COOKIE` | 空 | 访问 JavDB 的 Cookie，可空。设置页留空保存不改已填写的值，接口只返回是否已填 |
 | `PROXY_ENABLED` | `false` | 查站代理 |
 | `PROXY_URL` | `http://127.0.0.1:7890` | Docker 里可写 `http://host.docker.internal:7890` |
 | `AUTH_USER` / `AUTH_PASS` | 空 | 同时非空则开 HTTP Basic，`/api/health` 也要登录。都空着时启动会警告 |

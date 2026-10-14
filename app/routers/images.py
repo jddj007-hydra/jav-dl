@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
+from app.config import site_origin
 from app.httputil import image_client
 from app.imgcache import trim_img_cache
 
@@ -21,6 +22,8 @@ ALLOWED_SUFFIXES = (
     "theporndb.net",
     "metadataapi.net",
     "fc2.com",
+    "javdb.com",
+    "jdbstatic.com",
 )
 MIRROR_NAMES = {"seejav", "cdnbus"}
 MAX_REDIRECTS = 3
@@ -47,19 +50,37 @@ def _is_tpdb(host: str) -> bool:
     return any(host_is(host, name) for name in ("theporndb.net", "metadataapi.net"))
 
 
-def _allowed(url: str, javbus_base: str) -> bool:
+def _allowed(url: str, javbus_base: str, *extra_bases: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or parsed.username or parsed.password:
         return False
     host = _host(url)
     if not host:
         return False
-    base_host = _host(javbus_base)
-    if base_host and host_is(host, base_host):
-        return True
+    for base in (javbus_base, *extra_bases):
+        base_host = _host(base)
+        if base_host and host_is(host, base_host):
+            return True
     if any(host_is(host, suffix) for suffix in ALLOWED_SUFFIXES):
         return True
     return _mirror_name(host)
+
+
+def image_referer(settings, url: str) -> str:
+    """JavDB 图床用 JavDB 地址做 Referer，其余保持原来的站点。"""
+    host = _host(url)
+    if _is_tpdb(host):
+        return "https://theporndb.net/"
+    javdb = (getattr(settings, "javdb_base", "") or "").strip()
+    javdb_host = _host(javdb) if javdb else ""
+    if host and (
+        host_is(host, "javdb.com")
+        or host_is(host, "jdbstatic.com")
+        or (javdb_host and host_is(host, javdb_host))
+    ):
+        origin = site_origin(javdb) if javdb else ""
+        return (origin or "https://javdb.com") + "/"
+    return (getattr(settings, "javbus_base", "") or "").rstrip("/") + "/"
 
 
 def image_media_type(content: bytes) -> str | None:
@@ -74,11 +95,11 @@ def image_media_type(content: bytes) -> str | None:
     return None
 
 
-async def fetch_image(settings, url: str, referer: str, javbus_base: str) -> tuple[bytes, str]:
+async def fetch_image(settings, url: str, referer: str, javbus_base: str, *extra_bases: str) -> tuple[bytes, str]:
     client = image_client(settings)
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        if not _allowed(current, javbus_base):
+        if not _allowed(current, javbus_base, *extra_bases):
             raise HTTPException(400, "不允许的图片地址")
         response = await client.get(current, headers={"Referer": referer})
         if response.status_code in {301, 302, 303, 307, 308}:
@@ -103,7 +124,9 @@ async def proxy_img(request: Request, url: str = Query(...)):
     settings = request.app.state.settings
     if url.startswith("/"):
         url = settings.javbus_base.rstrip("/") + url
-    if not _allowed(url, settings.javbus_base):
+    javdb_base = (getattr(settings, "javdb_base", "") or "").strip()
+    extra = (javdb_base,) if javdb_base else ()
+    if not _allowed(url, settings.javbus_base, *extra):
         raise HTTPException(400, "不允许的图片地址")
     cache_dir: Path = settings.data_dir / "img_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -115,12 +138,8 @@ async def proxy_img(request: Request, url: str = Query(...)):
         if media not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
             media = "image/jpeg"
         return FileResponse(cached, media_type=media)
-    referer = (
-        "https://theporndb.net/"
-        if _is_tpdb(_host(url))
-        else settings.javbus_base.rstrip("/") + "/"
-    )
-    content, media = await fetch_image(settings, url, referer, settings.javbus_base)
+    referer = image_referer(settings, url)
+    content, media = await fetch_image(settings, url, referer, settings.javbus_base, *extra)
     cached.write_bytes(content)
     meta.write_text(media, encoding="utf-8")
     trim_img_cache(cache_dir)

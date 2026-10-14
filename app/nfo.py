@@ -46,6 +46,7 @@ def build_nfo(meta: dict) -> str:
     _text(movie, "label", meta.get("label"))
     _text(movie, "director", meta.get("director"))
     _text(movie, "id", code)
+    source = (meta.get("source") or "").strip().lower()
     external_id = (meta.get("uniqueid") or "").strip()
     external_type = (meta.get("uniqueid_type") or "").strip()
     if external_id and external_type:
@@ -54,7 +55,11 @@ def build_nfo(meta: dict) -> str:
     elif code:
         uid = ET.SubElement(movie, "uniqueid", {"type": "num", "default": "true"})
         uid.text = code
-        uid_bus = ET.SubElement(movie, "uniqueid", {"type": "javbus"})
+        uid_bus = ET.SubElement(
+            movie,
+            "uniqueid",
+            {"type": "javdb" if source == "javdb" else "javbus"},
+        )
         uid_bus.text = code
     series = (meta.get("series") or "").strip()
     if series:

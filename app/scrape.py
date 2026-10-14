@@ -9,14 +9,16 @@ import shutil
 from datetime import date
 from pathlib import Path
 
-from app.codes import extract_code, jav_vr_maker, normalize_code, title_mentions_code
+from app.codes import extract_code, fc2_number, jav_vr_maker, normalize_code, title_mentions_code
 from app.western_magnets import is_western_release_name
 from app.config import Settings
 from app.httputil import site_client
 from app.imgcache import trim_img_cache
 from app.nfo import _placeholder_actor_photo, build_nfo
+from app.routers.images import image_referer
 from app.sources import gfriends
 from app.sources.javbus import CACHE_VER, MetadataError, fetch_metadata
+from app.sources.javdb import fetch_javdb_metadata
 
 VIDEO_EXTS = {
     ".mp4", ".mkv", ".avi", ".wmv", ".iso", ".ts", ".m2ts",
@@ -383,6 +385,20 @@ def safe_rmtree(path: Path, root: Path) -> None:
     shutil.rmtree(resolved, ignore_errors=True)
 
 
+def _javdb_fallback(settings: Settings, code: str, exc: MetadataError) -> bool:
+    if exc.status != 404 or fc2_number(code):
+        return False
+    return bool((getattr(settings, "javdb_base", "") or "").strip())
+
+
+def _javdb_fallback_message(exc: MetadataError) -> str:
+    if exc.status == 503:
+        return "刮削元数据失败: JavBus 没有该番号；JavDB 被拦截"
+    if exc.status == 404:
+        return "刮削元数据失败: JavBus 和 JavDB 都没有该番号"
+    return f"刮削元数据失败: JavBus 没有该番号；JavDB {exc}"
+
+
 async def resolve_metadata(settings: Settings, db, code: str) -> dict:
     key = f"{CACHE_VER}:{code}"
     cached = await db.get_metadata_any(key)
@@ -390,8 +406,13 @@ async def resolve_metadata(settings: Settings, db, code: str) -> dict:
         return cached
     try:
         meta = await fetch_metadata(settings, code)
-    except MetadataError as e:
-        raise ScrapeError(f"刮削元数据失败: {e}") from e
+    except MetadataError as exc:
+        if not _javdb_fallback(settings, code, exc):
+            raise ScrapeError(f"刮削元数据失败: {exc}") from exc
+        try:
+            meta = await fetch_javdb_metadata(settings, code)
+        except MetadataError as javdb_exc:
+            raise ScrapeError(_javdb_fallback_message(javdb_exc)) from javdb_exc
     await db.put_metadata(key, meta)
     return meta
 
@@ -415,7 +436,7 @@ async def fetch_cover_bytes(settings: Settings, url: str, referer: str | None = 
     if cached.exists() and cached.stat().st_size > 0:
         return cached.read_bytes()
     async with site_client(settings) as client:
-        page = referer or (settings.javbus_base.rstrip("/") + "/")
+        page = referer or image_referer(settings, url)
         response = await client.get(url, headers={"Referer": page})
     content = _checked_image(response, "封面下载失败", "封面过大")
     cached.write_bytes(content)
@@ -464,12 +485,11 @@ async def download_extrafanart(
     if not pending:
         return []
     saved: list[tuple[str, bytes]] = []
-    page = settings.javbus_base.rstrip("/") + "/"
     try:
         async with site_client(settings) as client:
             for name, url in pending:
                 try:
-                    response = await client.get(url, headers={"Referer": page})
+                    response = await client.get(url, headers={"Referer": image_referer(settings, url)})
                     saved.append((name, _checked_image(response, "图片下载失败", "图片过大")))
                 except Exception as exc:
                     log.warning("预览图跳过 %s: %s", name, exc)

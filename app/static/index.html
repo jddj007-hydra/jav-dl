@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>jav-dl</title>
-  <link rel="stylesheet" href="/static/style.css?v=43" />
+  <link rel="stylesheet" href="/static/style.css?v=44" />
 </head>
 <body>
   <header class="top">
@@ -322,6 +322,15 @@
             </label>
           </div>
           <p class="hint">主搜索域打不开或没结果时再试备用域。同一个番号或关键词，十分钟内直接用上次的磁链。</p>
+          <div class="field-row">
+            <label>JavDB
+              <input name="javdb_base" placeholder="留空则关掉" />
+            </label>
+            <label>JavDB Cookie
+              <input name="javdb_cookie" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <p class="hint">只在 JavBus 没有这部片时才查 JavDB，被拦截不会改走这里。地址留空则关掉。Cookie 可空，留空保存不改。</p>
           <label>ThePornDB token
             <input name="tpdb_api_key" type="password" autocomplete="off" />
           </label>
@@ -428,9 +437,7 @@
       </div>
     </section>
   </main>
-  <div id="lightbox" class="lightbox" hidden>
-    <img alt="" />
-  </div>
+  <div id="lightbox" class="lightbox" hidden></div>
   <div id="file-picker" class="picker" hidden>
     <div class="picker-card" role="dialog" aria-modal="true" aria-labelledby="file-picker-title">
       <h2 id="file-picker-title">选择要下载的文件</h2>
@@ -443,6 +450,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=71"></script>
+  <script src="/static/app.js?v=72"></script>
 </body>
 </html>
