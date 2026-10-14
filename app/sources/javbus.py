@@ -300,6 +300,34 @@ def parse_star_links(html: str, base: str) -> list[dict]:
     return found
 
 
+_BLOCKER_MARKERS = (
+    "driver-verify",
+    "challenge-platform",
+    "cf-browser-verification",
+    "just a moment",
+    "enable javascript and cookies",
+)
+_VERIFY_MESSAGE = "JavBus 返回了验证页，不是没有这部片。换代理或稍后再试"
+
+
+def detect_blocker(url: str = "", html: str = "") -> bool:
+    """最终地址或正文是 driver-verify / Cloudflare 时为拦截，不是没有这部片。"""
+    if "driver-verify" in (url or "").lower():
+        return True
+    low = (html or "").lower()
+    return any(marker in low for marker in _BLOCKER_MARKERS)
+
+
+def _reject_blocker(response: httpx.Response) -> None:
+    final = ""
+    try:
+        final = str(response.url)
+    except RuntimeError:
+        final = ""
+    if detect_blocker(final, response.text):
+        raise MetadataError(_VERIFY_MESSAGE, 503)
+
+
 async def fetch_javbus_html(settings: Settings, url: str) -> str:
     base = settings.javbus_base.rstrip("/")
     allowed = (urlparse(base).hostname or "").lower()
@@ -312,6 +340,7 @@ async def fetch_javbus_html(settings: Settings, url: str) -> str:
             response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+    _reject_blocker(response)
     if response.status_code >= 400:
         raise MetadataError(f"JavBus HTTP {response.status_code}", response.status_code)
     return response.text
@@ -345,6 +374,7 @@ async def fetch_latest(settings: Settings, kind: str, page: int = 1, fmt: str = 
             response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+    _reject_blocker(response)
     if response.status_code == 404:
         return []
     if response.status_code >= 400:
@@ -367,6 +397,7 @@ async def search_works(settings: Settings, query: str, pages: int = 2) -> list[d
             except httpx.HTTPError as e:
                 last_err = MetadataError(f"JavBus 请求失败: {e}")
                 break
+            _reject_blocker(r)
             if r.status_code == 404:
                 if page == 1:
                     last_err = MetadataError("没有搜到作品", 404)
@@ -406,6 +437,7 @@ async def fetch_metadata(settings: Settings, code: str) -> dict:
             except httpx.HTTPError as e:
                 last_err = MetadataError(f"JavBus 请求失败: {e}")
                 continue
+            _reject_blocker(r)
             if r.status_code == 404:
                 last_err = MetadataError("未找到该番号", 404)
                 continue
