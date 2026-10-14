@@ -62,9 +62,23 @@ def test_iter_videos_skips_small_and_incomplete(tmp_path):
 def test_looks_like_pack():
     assert looks_like_pack("SSIS 001-100")
     assert looks_like_pack("SSIS.FHD.Pack.001-100")
+    assert looks_like_pack("SSIS-001~010")
+    assert looks_like_pack("001-010")
     assert looks_like_pack("18部合集SSIS")
     assert not looks_like_pack("SSIS-001-UC")
     assert not looks_like_pack("ssis-001-uncensored")
+    assert not looks_like_pack("carib-010120-001.mp4")
+    assert not looks_like_pack("092126-001.mp4")
+
+
+def test_date_code_files_ready_not_pack(tmp_path):
+    carib = tmp_path / "carib-010120-001.mp4"
+    dated = tmp_path / "092126-001.mp4"
+    carib.write_bytes(b"x" * 80)
+    dated.write_bytes(b"x" * 80)
+    now = max(carib.stat().st_mtime, dated.stat().st_mtime)
+    ready = list_ready_sources(tmp_path, min_bytes=50, settle=0, now=now)
+    assert ready == [("092126-001", dated), ("010120-001", carib)]
 
 
 def test_find_code_videos_in_xunlei_named_folder(tmp_path):

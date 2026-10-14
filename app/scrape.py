@@ -30,7 +30,8 @@ SKIP_DIR_NAMES = {
     ".bt",
     "western",
 }
-PACK_RANGE_RE = re.compile(r"\d{3}\s*[-~]\s*\d{3}")
+# 两侧不能再贴着数字，否则 010120-001 里的 120-001 会被当成合集区间。
+PACK_RANGE_RE = re.compile(r"(?<!\d)\d{3}\s*[-~]\s*\d{3}(?!\d)")
 
 MONTH_RE = re.compile(r"(\d{4})[-/.](\d{1,2})")
 BUCKET_DIRS = {"jav-dl", "xunlei", "western"}

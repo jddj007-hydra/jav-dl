@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 
 CODE_RE = re.compile(r"^([A-Z]{2,5})-?(\d{2,5})$")
-CODE_HYPHEN_RE = re.compile(r"([A-Z]{2,5})-(\d{2,5})", re.I)
+# 数字后再跟数字就不是这一段，避免从 010120 里截出 01012。
+CODE_HYPHEN_RE = re.compile(r"([A-Z]{2,5})-(\d{2,5})(?!\d)", re.I)
 CODE_LOOSE_RE = re.compile(r"([A-Z]{2,5})(\d{3,5})", re.I)
 # DANDYHQVR / URVRSP / 3DSVR 比普通厂牌长，或带数字。短正则会切成 YHQVR-015。
 VR_HYPHEN_RE = re.compile(r"(?<![A-Z0-9])([A-Z0-9]{2,12})-(\d{2,5})(?!\d)", re.I)
@@ -95,6 +96,10 @@ def _add_code(found: list[str], seen: set[str], code: str) -> None:
     found.append(code)
 
 
+def _overlaps(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < span_end and end > span_start for span_start, span_end in spans)
+
+
 def extract_codes(raw: str) -> list[str]:
     if not raw:
         return []
@@ -105,8 +110,10 @@ def extract_codes(raw: str) -> list[str]:
     for m in FC2_HYPHEN_RE.finditer(text):
         _add_code(found, seen, _fc2_code(m.group(1)))
         fc2_spans.append(m.span())
+    date_spans: list[tuple[int, int]] = []
     for m in DATE_HYPHEN_RE.finditer(text):
         _add_code(found, seen, f"{m.group(1)}-{m.group(2)}")
+        date_spans.append(m.span())
     vr_spans: list[tuple[int, int]] = []
     for m in VR_HYPHEN_RE.finditer(text):
         code = _vr_code(m.group(1), m.group(2))
@@ -114,8 +121,9 @@ def extract_codes(raw: str) -> list[str]:
             continue
         _add_code(found, seen, code)
         vr_spans.append(m.span())
+    taken = [*fc2_spans, *vr_spans, *date_spans]
     for m in CODE_HYPHEN_RE.finditer(text):
-        if any(m.start() < end and m.end() > start for start, end in (*fc2_spans, *vr_spans)):
+        if _overlaps(m.start(), m.end(), taken):
             continue
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
@@ -124,13 +132,26 @@ def extract_codes(raw: str) -> list[str]:
     if found:
         return found
     compact = re.sub(r"[^A-Z0-9]", "", text)
+    origin = [i for i, ch in enumerate(text) if ("A" <= ch <= "Z") or ("0" <= ch <= "9")]
+
+    def loose_overlaps_date(match: re.Match[str]) -> bool:
+        if not date_spans:
+            return False
+        start = origin[match.start()]
+        end = origin[match.end() - 1] + 1
+        return _overlaps(start, end, date_spans)
+
     for m in VR_LOOSE_RE.finditer(compact):
+        if loose_overlaps_date(m):
+            continue
         code = _vr_code(m.group(1), m.group(2))
         if code:
             _add_code(found, seen, code)
     if found:
         return found
     for m in CODE_LOOSE_RE.finditer(compact):
+        if loose_overlaps_date(m):
+            continue
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
             continue

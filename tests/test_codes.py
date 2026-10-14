@@ -46,6 +46,13 @@ def test_extract_code_from_torrent_names():
     assert extract_codes("SSIS-001-C") == ["SSIS-001"]
 
 
+def test_extract_date_code_with_studio_prefix():
+    names = ("carib-010120-001", "1pondo_010120_001", "010120_001-1pon")
+    for name in names:
+        assert extract_codes(name) == ["010120-001"]
+        assert extract_code(name) == "010120-001"
+
+
 def test_jav_vr_maker():
     from app.codes import jav_vr_maker
 
