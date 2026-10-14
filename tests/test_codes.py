@@ -118,3 +118,13 @@ def test_numeric_prefix_amateur_codes():
     noise = extract_codes("movie.1080p.X265.HEVC")
     assert noise == ["MOVIE-1080", "PX-265"]
     assert all(not code[0].isdigit() for code in noise)
+
+
+def test_heyzo_hd_segment():
+    assert normalize_code("heyzo_hd_2345") == "HEYZO-2345"
+    assert normalize_code("HEYZO-1234") == "HEYZO-1234"
+    assert normalize_code("heyzo1234") == "HEYZO-1234"
+    assert extract_codes("heyzo_hd_2345") == ["HEYZO-2345"]
+    assert extract_codes("HEYZO-1234") == ["HEYZO-1234"]
+    assert extract_codes("heyzo1234") == ["HEYZO-1234"]
+    assert extract_code("heyzo_hd_2345") == "HEYZO-2345"

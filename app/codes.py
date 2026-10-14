@@ -17,6 +17,8 @@ VR_HYPHEN_RE = re.compile(r"(?<![A-Z0-9])([A-Z0-9]{2,12})-(\d{2,5})(?!\d)", re.I
 VR_CODE_HYPHEN_RE = re.compile(r"^([A-Z0-9]{2,12})-(\d{2,5})$")
 VR_CODE_COMPACT_RE = re.compile(r"^([A-Z0-9]{2,12}?)(\d{3,5})$")
 VR_LOOSE_RE = re.compile(r"([A-Z0-9]{2,12}?)(\d{3,5})")
+# heyzo_hd_2345 压扁后是 HEYZOHD2345。HD 被当成画质丢掉后，loose 会从中间截出 YZOHD。
+HEYZO_HYPHEN_RE = re.compile(r"HEYZO[-_ ]*(?:HD[-_ ]*)?(\d{4})(?!\d)", re.I)
 # 加勒比、一本道、天然むすめ这一类是日期加序号，不是字母厂牌。
 DATE_CODE_RE = re.compile(r"^(\d{6})-(\d{2,4})$")
 DATE_HYPHEN_RE = re.compile(r"(?<!\d)(\d{6})-(\d{2,4})(?!\d)")
@@ -73,6 +75,9 @@ def normalize_code(raw: str) -> str | None:
     prefixed = PREFIXED_CODE_RE.fullmatch(s)
     if prefixed:
         return _prefixed_code(prefixed.group(1), prefixed.group(2))
+    heyzo = HEYZO_HYPHEN_RE.fullmatch(s)
+    if heyzo:
+        return f"HEYZO-{heyzo.group(1)}"
     m = CODE_RE.fullmatch(s)
     if m:
         return f"{m.group(1)}-{m.group(2)}"
@@ -148,7 +153,13 @@ def extract_codes(raw: str) -> list[str]:
         if not code:
             continue
         _add_code(found, seen, code)
-    taken = [*blocked, *prefixed_spans]
+    heyzo_spans: list[tuple[int, int]] = []
+    for m in HEYZO_HYPHEN_RE.finditer(text):
+        if _overlaps(m.start(), m.end(), blocked):
+            continue
+        heyzo_spans.append(m.span())
+        _add_code(found, seen, f"HEYZO-{m.group(1)}")
+    taken = [*blocked, *prefixed_spans, *heyzo_spans]
     for m in CODE_HYPHEN_RE.finditer(text):
         if _overlaps(m.start(), m.end(), taken):
             continue
@@ -162,7 +173,7 @@ def extract_codes(raw: str) -> list[str]:
     origin = [i for i, ch in enumerate(text) if ("A" <= ch <= "Z") or ("0" <= ch <= "9")]
 
     def loose_overlaps_span(match: re.Match[str]) -> bool:
-        spans = [*date_spans, *prefixed_spans]
+        spans = [*date_spans, *prefixed_spans, *heyzo_spans]
         if not spans:
             return False
         start = origin[match.start()]

@@ -11,6 +11,7 @@ from app.codes import (
     DATE_HYPHEN_RE,
     FALSE_PREFIXES,
     FC2_HYPHEN_RE,
+    HEYZO_HYPHEN_RE,
     PREFIXED_HYPHEN_RE,
     normalize_code,
 )
@@ -61,7 +62,16 @@ def parse_batch_codes(text: str) -> list[str]:
         prefixed_spans.append(match.span())
         maker, num = match.group(1), match.group(2)
         add(normalize_code(f"{maker}-{num}"))
-    blocked = [*fc2_spans, *prefixed_spans]
+    # HEYZO-HD-2345 收成 HEYZO-四位。后面的厂牌正则会从这段里切出 YZOHD，跳过。
+    heyzo_spans: list[tuple[int, int]] = []
+    claimed = [*fc2_spans, *prefixed_spans]
+    for match in HEYZO_HYPHEN_RE.finditer(folded):
+        start, end = match.span()
+        if any(span_start < end and span_end > start for span_start, span_end in claimed):
+            continue
+        heyzo_spans.append(match.span())
+        add(f"HEYZO-{match.group(1)}")
+    blocked = [*claimed, *heyzo_spans]
     for match in CODE_HYPHEN_RE.finditer(folded):
         start, end = match.span()
         if any(span_start < end and span_end > start for span_start, span_end in blocked):
