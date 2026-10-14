@@ -45,13 +45,22 @@ def _fc2_code(number: str) -> str:
     return f"FC2-PPV-{number}"
 
 
+def _letter_code(maker: str, number: str) -> str:
+    """普通字母厂牌和 VR。DMM 把编号补成 5 位且以 00 开头时，去掉前两个 0。"""
+    maker = (maker or "").upper()
+    digits = number or ""
+    if len(digits) == 5 and digits.startswith("00"):
+        digits = digits[2:]
+    return f"{maker}-{digits}"
+
+
 def _vr_code(maker: str, number: str) -> str | None:
     maker = (maker or "").upper()
     number = (number or "").strip()
     if not maker or not number or maker in FALSE_PREFIXES:
         return None
     if maker in _JAV_VR_MAKERS or "VR" in maker:
-        return f"{maker}-{number}"
+        return _letter_code(maker, number)
     return None
 
 
@@ -64,7 +73,7 @@ def _prefixed_code(maker: str, number: str) -> str | None:
 
 
 def normalize_code(raw: str) -> str | None:
-    """ssis001 / SSIS-001 / 259LUXU-1234 / XXX-AV-12345 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
+    """ssis001 / SSIS-001 / ssis00123 / 259LUXU-1234 / XXX-AV-12345 / 092126-001 / FC2PPV-3237415 → 统一番号。非法输入 → None。"""
     if raw is None:
         return None
     s = raw.strip().upper().replace("_", "-").replace(" ", "")
@@ -85,7 +94,7 @@ def normalize_code(raw: str) -> str | None:
         return f"XXX-AV-{xxx_av.group(1)}"
     m = CODE_RE.fullmatch(s)
     if m:
-        return f"{m.group(1)}-{m.group(2)}"
+        return _letter_code(m.group(1), m.group(2))
     vr = VR_CODE_HYPHEN_RE.fullmatch(s)
     if vr:
         return _vr_code(vr.group(1), vr.group(2))
@@ -177,7 +186,7 @@ def extract_codes(raw: str) -> list[str]:
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
             continue
-        _add_code(found, seen, f"{prefix}-{num}")
+        _add_code(found, seen, _letter_code(prefix, num))
     if found:
         return found
     compact = re.sub(r"[^A-Z0-9]", "", text)
@@ -205,7 +214,7 @@ def extract_codes(raw: str) -> list[str]:
         prefix, num = m.group(1).upper(), m.group(2)
         if prefix in FALSE_PREFIXES:
             continue
-        _add_code(found, seen, f"{prefix}-{num}")
+        _add_code(found, seen, _letter_code(prefix, num))
     return found
 
 

@@ -14,6 +14,7 @@ from app.codes import (
     HEYZO_HYPHEN_RE,
     PREFIXED_HYPHEN_RE,
     XXX_AV_HYPHEN_RE,
+    _letter_code,
     normalize_code,
 )
 from app.config import Settings
@@ -88,7 +89,7 @@ def parse_batch_codes(text: str) -> list[str]:
             continue
         prefix, num = match.group(1), match.group(2)
         if prefix not in FALSE_PREFIXES:
-            add(f"{prefix}-{num}")
+            add(_letter_code(prefix, num))
     for token in _SPLIT.split(folded):
         compact = re.sub(r"[^A-Z0-9]", "", token)
         if not compact:
@@ -102,7 +103,7 @@ def parse_batch_codes(text: str) -> list[str]:
             continue
         prefix, num = match.group(1), match.group(2)
         if prefix not in FALSE_PREFIXES:
-            add(f"{prefix}-{num}")
+            add(_letter_code(prefix, num))
     return found
 
 

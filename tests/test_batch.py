@@ -66,6 +66,20 @@ def test_parse_batch_codes_keeps_numeric_prefix():
     assert parse_batch_codes("259LUXU-1234.1080p X265HEVC") == ["259LUXU-1234"]
 
 
+def test_parse_batch_codes_strips_dmm_padding():
+    assert parse_batch_codes("ssis00123") == ["SSIS-123"]
+    assert parse_batch_codes("SSIS-00123") == ["SSIS-123"]
+    assert parse_batch_codes("SSIS-00123.mp4") == ["SSIS-123"]
+    assert parse_batch_codes("dsvr00123") == ["DSVR-123"]
+    assert parse_batch_codes("DSVR-00123.mp4") == ["DSVR-123"]
+    assert parse_batch_codes("SIRO-4567") == ["SIRO-4567"]
+    assert parse_batch_codes("HEYZO-0123") == ["HEYZO-0123"]
+    assert parse_batch_codes("259LUXU-00123") == ["259LUXU-00123"]
+    assert parse_batch_codes("XXX-AV-00123") == ["XXX-AV-00123"]
+    assert parse_batch_codes("FC2-00123456") == ["FC2-PPV-00123456"]
+    assert parse_batch_codes("092126-001") == ["092126-001"]
+
+
 def test_preview_picks_the_existing_sort_and_skips_empties(monkeypatch):
     async def fake_search(settings, code, pages=2):
         if code == "SSIS-001":

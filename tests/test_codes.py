@@ -144,3 +144,47 @@ def test_xxx_av_code():
     assert extract_codes("XXX-AV-12345 SSIS-001") == ["XXX-AV-12345", "SSIS-001"]
     assert code_maker("XXX-AV-12345") == "XXX"
     assert jav_vr_maker("XXX-AV-12345") is None
+
+
+def test_dmm_content_id_drops_two_leading_zeros():
+    assert normalize_code("ssis00123") == "SSIS-123"
+    assert normalize_code("SSIS-00123") == "SSIS-123"
+    assert normalize_code("dsvr00123") == "DSVR-123"
+    assert normalize_code("DSVR-00123") == "DSVR-123"
+    assert normalize_code("3DSVR-00123") == "3DSVR-123"
+    assert normalize_code("DANDYHQVR-00123") == "DANDYHQVR-123"
+    assert extract_codes("ssis00123") == ["SSIS-123"]
+    assert extract_codes("SSIS-00123") == ["SSIS-123"]
+    assert extract_code("ssis00123") == "SSIS-123"
+    assert extract_code("SSIS-00123") == "SSIS-123"
+    assert extract_code("ssis00123.mp4") == "SSIS-123"
+    assert extract_code("SSIS-00123.mp4") == "SSIS-123"
+    # normalize_code 只整串匹配裸番号；带扩展名的文件名由 extract_code 截出。
+    assert (
+        normalize_code("SSIS-00123.mp4") is None
+        and extract_code("SSIS-00123.mp4") == "SSIS-123"
+    )
+    assert extract_codes("dsvr00123") == ["DSVR-123"]
+    assert extract_code("dsvr00123") == "DSVR-123"
+    assert extract_code("DSVR-00123.mp4") == "DSVR-123"
+    assert extract_code("3DSVR-00123") == "3DSVR-123"
+    assert extract_code("DANDYHQVR-00123.mp4") == "DANDYHQVR-123"
+    assert normalize_code("SIRO-4567") == "SIRO-4567"
+    assert extract_codes("SIRO-4567") == ["SIRO-4567"]
+    assert normalize_code("HEYZO-0123") == "HEYZO-0123"
+    assert extract_codes("HEYZO-0123") == ["HEYZO-0123"]
+    assert extract_code("HEYZO-0123") == "HEYZO-0123"
+    assert normalize_code("259LUXU-00123") == "259LUXU-00123"
+    assert extract_codes("259LUXU-00123") == ["259LUXU-00123"]
+    assert extract_code("259LUXU-00123") == "259LUXU-00123"
+    assert normalize_code("XXX-AV-00123") == "XXX-AV-00123"
+    assert extract_codes("XXX-AV-00123") == ["XXX-AV-00123"]
+    assert extract_code("XXX-AV-00123") == "XXX-AV-00123"
+    assert normalize_code("SSIS-12345") == "SSIS-12345"
+    assert normalize_code("SSIS-01234") == "SSIS-01234"
+    assert normalize_code("SSIS-0012") == "SSIS-0012"
+    assert normalize_code("SSIS-00012") == "SSIS-012"
+    assert normalize_code("FC2-00123456") == "FC2-PPV-00123456"
+    assert extract_codes("FC2-00123456") == ["FC2-PPV-00123456"]
+    assert normalize_code("092126-001") == "092126-001"
+    assert extract_codes("092126-001") == ["092126-001"]
