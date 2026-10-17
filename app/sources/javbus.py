@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import normalize_code
 from app.config import Settings
-from app.httputil import site_client
+from app.httputil import describe_http_error, site_client
 
 DATE_SUFFIX_RE = re.compile(r"_\d{4}-\d{2}-\d{2}$")
 _THUMB_RE = re.compile(r"/pics/thumb/([^/?#]+)\.(jpe?g|png|webp)(?=$|[?#])", re.I)
@@ -339,7 +339,7 @@ async def fetch_javbus_html(settings: Settings, url: str) -> str:
         try:
             response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
-            raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+            raise MetadataError(f"JavBus 请求失败: {describe_http_error(exc)}") from exc
     _reject_blocker(response)
     if response.status_code >= 400:
         raise MetadataError(f"JavBus HTTP {response.status_code}", response.status_code)
@@ -373,7 +373,7 @@ async def fetch_latest(settings: Settings, kind: str, page: int = 1, fmt: str = 
         try:
             response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
-            raise MetadataError(f"JavBus 请求失败: {exc}") from exc
+            raise MetadataError(f"JavBus 请求失败: {describe_http_error(exc)}") from exc
     _reject_blocker(response)
     if response.status_code == 404:
         return []
@@ -395,7 +395,7 @@ async def search_works(settings: Settings, query: str, pages: int = 2) -> list[d
             try:
                 r = await client.get(url, headers=headers)
             except httpx.HTTPError as e:
-                last_err = MetadataError(f"JavBus 请求失败: {e}")
+                last_err = MetadataError(f"JavBus 请求失败: {describe_http_error(e)}")
                 break
             _reject_blocker(r)
             if r.status_code == 404:
@@ -435,7 +435,7 @@ async def fetch_metadata(settings: Settings, code: str) -> dict:
             try:
                 r = await client.get(url, headers=headers)
             except httpx.HTTPError as e:
-                last_err = MetadataError(f"JavBus 请求失败: {e}")
+                last_err = MetadataError(f"JavBus 请求失败: {describe_http_error(e)}")
                 continue
             _reject_blocker(r)
             if r.status_code == 404:

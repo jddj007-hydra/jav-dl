@@ -8,7 +8,7 @@ from urllib.parse import quote
 import httpx
 
 from app.config import Settings
-from app.httputil import site_client
+from app.httputil import describe_http_error, site_client
 from app.studios import compact_site as _compact_site
 from app.studios import is_vr_work, pick_site
 from app.western_magnets import parse_release_date, release_text, split_release_name, words
@@ -209,7 +209,7 @@ async def _get_json(settings: Settings, path: str, params: dict | None = None) -
         try:
             response = await client.get(API_BASE + path, params=params or None, headers=headers)
         except httpx.HTTPError as exc:
-            raise TpdbError(f"ThePornDB 请求失败: {exc}") from exc
+            raise TpdbError(f"ThePornDB 请求失败: {describe_http_error(exc)}") from exc
     if response.status_code == 401:
         raise TpdbError("ThePornDB token 无效")
     if response.status_code >= 400:

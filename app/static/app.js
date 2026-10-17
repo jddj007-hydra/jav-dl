@@ -533,7 +533,7 @@ function skeletonCards(n, shape) {
 
 function showSkeleton(wrapId, listId) {
   $(wrapId).hidden = false;
-  const shape = listId === "works-list" ? "wide" : (listId === "western-works" ? "cinema" : "");
+  const shape = (listId === "works-list" || listId === "western-works") ? "cinema" : "";
   $(listId).innerHTML = skeletonCards(12, shape);
 }
 
@@ -558,37 +558,11 @@ function coverSrc(url) {
   return "/api/img?url=" + encodeURIComponent(url);
 }
 
-function coverFrameKind(img) {
-  const width = img.naturalWidth;
-  const height = img.naturalHeight;
-  if (!width || !height) return "";
-  const ratio = width / height;
-  if (ratio >= 1.65) return "frame-wide";
-  if (ratio >= 1.05) return "frame-mid";
-  return "frame-tall";
+function coverVar(url) {
+  if (!url) return "";
+  const src = url.startsWith("/") ? url : coverSrc(url);
+  return ` style="--cover:url(${JSON.stringify(src)})"`;
 }
-
-function fitCoverFrame(img) {
-  if (!(img instanceof HTMLImageElement)) return;
-  const frame = img.closest(".work-cover, .lib-cover, .ready-cover, .batch-cover");
-  if (!frame) return;
-  const kind = coverFrameKind(img);
-  if (!kind) return;
-  frame.classList.remove("frame-wide", "frame-mid", "frame-tall");
-  frame.classList.add(kind);
-}
-
-function mountCovers(root) {
-  if (!root) return;
-  root.querySelectorAll("img").forEach((img) => {
-    if (img.complete) fitCoverFrame(img);
-  });
-}
-
-document.addEventListener("load", (event) => {
-  const img = event.target;
-  if (img instanceof HTMLImageElement) fitCoverFrame(img);
-}, true);
 
 function sceneArt(item) {
   const poster = (item && item.cover) || "";
@@ -641,6 +615,13 @@ function libraryFlag(lib, suck) {
   return parts.join("");
 }
 
+function libraryPlayButton(lib, key) {
+  const video = lib && lib.present && lib.video;
+  const kind = lib && lib.play_kind;
+  if (!video || !kind) return "";
+  return `<p class="suck-actions"><button type="button" class="ghost small lib-play" data-play-kind="${escapeHtml(kind)}" data-play-path="${escapeHtml(video)}" data-play-key="${escapeHtml(key || "")}" title="交给本机 PotPlayer">播放</button></p>`;
+}
+
 function downloadLabel(present, suck) {
   if (suck) return "已标 suck";
   if (present) return "下载（库里已有）";
@@ -686,7 +667,7 @@ function renderMeta(payload) {
   if (!meta) {
     if ((lastLibrary && lastLibrary.present) || lastSuck || detailFromLibrary) {
       card.hidden = false;
-      card.innerHTML = libraryFlag(lastLibrary, lastSuck) + actions + otherVersionsButton("jav");
+      card.innerHTML = libraryFlag(lastLibrary, lastSuck) + libraryPlayButton(lastLibrary, detailCode) + actions + otherVersionsButton("jav");
       return;
     }
     card.hidden = true;
@@ -718,6 +699,7 @@ function renderMeta(payload) {
       ${coverImage(meta.cover, { className: "cover", full: meta.cover || "" })}
       <div>
         ${libraryFlag(lastLibrary, lastSuck)}
+        ${libraryPlayButton(lastLibrary, detailCode)}
         ${actions}
         ${otherVersionsButton("jav")}
         <h1><span class="code">${payload.code}</span> ${escapeHtml(meta.title || "")}</h1>
@@ -776,7 +758,7 @@ function renderWorks(items) {
   wrap.hidden = false;
   list.innerHTML = items.map((it) => `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-code="${escapeHtml(it.code)}">
-      <span class="work-cover">
+      <span class="work-cover"${coverVar(it.cover)}>
         ${coverImage(it.cover, { lazy: true })}
         ${coverBadge(it)}
       </span>
@@ -784,7 +766,6 @@ function renderWorks(items) {
       <span class="work-title">${escapeHtml(it.title || "")}</span>
       <span class="work-date">${escapeHtml(it.release_date || "")}</span>
     </button>`).join("");
-  mountCovers(list);
 }
 
 function renderResources(items) {
@@ -1588,7 +1569,7 @@ function renderBatch(items) {
       <label class="batch-check">
         <input type="checkbox" data-batch-code="${escapeHtml(row.code)}"${canSelect ? " checked" : " disabled"} />
       </label>
-      <button type="button" class="batch-cover" data-batch-open="${escapeHtml(row.code)}" title="打开详情">
+      <button type="button" class="batch-cover" data-batch-open="${escapeHtml(row.code)}" title="打开详情"${coverVar(meta.cover)}>
         ${coverImage(meta.cover, { lazy: true, alt: row.code })}
         ${badges}
       </button>
@@ -1606,7 +1587,6 @@ function renderBatch(items) {
       </div>
     </li>`;
   }).join("");
-  mountCovers(list);
   updateBatchConfirm();
 }
 
@@ -2405,6 +2385,12 @@ function openLightbox(url) {
 $("follow-browse").addEventListener("click", () => commitFollowActress($("follow-browse")));
 
 $("meta-card").addEventListener("click", (e) => {
+  const play = e.target.closest("[data-play-kind]");
+  if (play) {
+    e.preventDefault();
+    playInPotPlayer(play);
+    return;
+  }
   const follow = e.target.closest("[data-follow-target]");
   if (follow) {
     commitFollowActress(follow);
@@ -2463,7 +2449,7 @@ function renderWesternWorks(items) {
     const art = sceneArt(it);
     return `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind || westernKind)}">
-      <span class="work-cover">
+      <span class="work-cover"${coverVar(art)}>
         ${coverImage(art, { lazy: true })}
         ${coverBadge(it)}
       </span>
@@ -2473,7 +2459,6 @@ function renderWesternWorks(items) {
       <span class="work-date">${escapeHtml(when)}</span>
     </button>`;
   }).join("");
-  mountCovers(list);
 }
 
 function renderWesternMeta(item) {
@@ -2493,6 +2478,7 @@ function renderWesternMeta(item) {
       ${coverImage(art, { className: "cover", full: art || "" })}
       <div>
         ${libraryFlag(item.library, item.suck)}
+        ${libraryPlayButton(item.library, item.id || "")}
         ${suckActions("western", item.id || "", item.title || "", !!(item.library && item.library.present), !!item.suck)}
         ${otherVersionsButton("western")}
         <h1>${escapeHtml(item.title || "")}</h1>
@@ -2795,8 +2781,8 @@ function renderReady(items) {
       : `<div class="ready-title">${escapeHtml(heading)}</div>`;
     const art = sceneArt(it);
     const cover = it.id
-      ? `<button type="button" class="ready-cover"${open}>${coverImage(art, { lazy: true })}${coverBadge(it)}</button>`
-      : `<div class="ready-cover">${coverImage(art, { lazy: true })}${coverBadge(it)}</div>`;
+      ? `<button type="button" class="ready-cover"${open}${coverVar(art)}>${coverImage(art, { lazy: true })}${coverBadge(it)}</button>`
+      : `<div class="ready-cover"${coverVar(art)}>${coverImage(art, { lazy: true })}${coverBadge(it)}</div>`;
     const file = named && it.title && it.title !== it.work_title
       ? `<div class="ready-file">${escapeHtml(it.title)}</div>`
       : "";
@@ -2819,7 +2805,6 @@ function renderReady(items) {
       </div>
     </article>`;
   }).join("");
-  mountCovers(list);
 }
 
 function westernPager(page, lastPage, facet, id) {
@@ -3455,6 +3440,12 @@ $("western-resources").addEventListener("click", async (e) => {
 });
 
 $("western-meta").addEventListener("click", (e) => {
+  const play = e.target.closest("[data-play-kind]");
+  if (play) {
+    e.preventDefault();
+    playInPotPlayer(play);
+    return;
+  }
   const suck = e.target.closest("[data-suck-mark], [data-suck-clear]");
   if (suck) {
     commitSuck(suck);
@@ -3587,7 +3578,7 @@ function libraryCard(item) {
       ${jav ? `data-code="${escapeHtml(item.code)}"` : ""}
       ${!jav && item.tpdb_id ? `data-tpdb="${escapeHtml(item.tpdb_id)}"` : ""}
       ${poster ? `data-poster="${escapeHtml(poster)}"` : ""}>
-      <div class="lib-cover">
+      <div class="lib-cover"${coverVar(poster)}>
         ${poster ? `<img src="${poster}" loading="lazy" alt="" />` : `<div class="lib-ph">${escapeHtml(name)}</div>`}
         ${flags ? `<div class="lib-flags">${flags}</div>` : ""}
         <button type="button" class="lib-copy" data-copy-path="${escapeHtml(item.full_path || "")}">复制路径</button>
@@ -3631,7 +3622,7 @@ async function playInPotPlayer(el) {
   const key = el.dataset.playKey || "";
   if (!shelf || !path) return;
   openPotPlayer(shelf, path);
-  const status = $("library-status");
+  const status = visibleStatus();
   const markKind = shelf === "jav" || shelf === "jav_vr" ? "jav" : "western";
   if (!key) {
     setStatus(status, "已交给 PotPlayer", "good");
@@ -3780,7 +3771,6 @@ function renderLibrary() {
       </section>`).join("");
   } else {
     list.innerHTML = `<div class="${gridClass}">${shown.map(libraryCard).join("")}</div>`;
-    mountCovers(list);
   }
   const rest = items.length - shown.length;
   more.hidden = rest <= 0;
@@ -3796,9 +3786,8 @@ function showMoreLibrary() {
 async function loadLibrary() {
   if (!libraryPayload) {
     if (libraryKind !== "suck") fillLibrarySort();
-    const skShape = libraryKind === "jav" || libraryKind === "jav_vr" ? "wide" : "";
     const skGrid = libraryKind === "jav" || libraryKind === "jav_vr" ? "lib-grid" : "lib-grid wide";
-    $("library-list").innerHTML = libraryKind === "suck" ? "" : `<div class="${skGrid}">${skeletonCards(12, skShape)}</div>`;
+    $("library-list").innerHTML = libraryKind === "suck" ? "" : `<div class="${skGrid}">${skeletonCards(12)}</div>`;
   }
   try {
     libraryPayload = await api("/api/library");

@@ -192,6 +192,8 @@ def test_attach_western_marks_present():
     )
     assert items[0]["library"]["present"] is True
     assert items[0]["library"]["path"] == "Brazzers/clip.mp4"
+    assert items[0]["library"]["video"] == "Brazzers/clip.mp4"
+    assert items[0]["library"]["play_kind"] == "western"
     assert items[1]["library"]["present"] is False
 
 
@@ -308,8 +310,47 @@ def test_attach_library():
     )
     assert items[0]["library"]["present"] is True
     assert items[0]["library"]["path"] == "202102/SSIS-001"
+    assert items[0]["library"]["play_kind"] == "jav"
+    assert items[0]["library"]["video"] == ""
     assert items[1]["library"]["present"] is False
     assert library_info(None) == {"present": False}
+
+
+def test_library_info_exposes_play_path():
+    jav = library_info({
+        "code": "SSIS-001",
+        "month": "202102",
+        "path": "202102/SSIS-001",
+        "has_video": 1,
+        "video": "202102/SSIS-001/SSIS-001.mp4",
+    })
+    assert jav["present"] is True
+    assert jav["video"] == "202102/SSIS-001/SSIS-001.mp4"
+    assert jav["play_kind"] == "jav"
+    vr = library_info({
+        "code": "DSVR-1124",
+        "month": "DSVR",
+        "path": "DSVR/DSVR-1124",
+        "has_video": 1,
+        "video": "DSVR/DSVR-1124/DSVR-1124.mp4",
+    })
+    assert vr["play_kind"] == "jav_vr"
+    west = library_info({
+        "tpdb_id": "abc",
+        "path": "Brazzers/a.mp4",
+        "has_video": 1,
+        "shelf": "western",
+    })
+    assert west["play_kind"] == "western"
+    assert west["video"] == "Brazzers/a.mp4"
+    headset = library_info({
+        "tpdb_id": "vr1",
+        "path": "vr/VRBangers/headset.mp4",
+        "has_video": 1,
+        "shelf": "vr",
+    })
+    assert headset["play_kind"] == "vr"
+    assert headset["video"] == "VRBangers/headset.mp4"
 
 
 def test_refresh_scrapes_missing_vr_sidecars(tmp_path, monkeypatch):
@@ -678,3 +719,9 @@ def test_library_card_offers_delete_without_removing_rescrape():
     assert "文件会删掉" in script
     assert 'data-act="rescrape"' in script
     assert "/api/library/remove" in script
+    assert "function libraryPlayButton" in script
+    assert "libraryPlayButton(lastLibrary, detailCode)" in script
+    assert "libraryPlayButton(item.library, item.id || \"\")" in script
+    html = (root / "index.html").read_text(encoding="utf-8")
+    assert "app.js?v=78" in html
+    assert "style.css?v=46" in html

@@ -7,7 +7,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
-from app.codes import jav_vr_maker, normalize_code
+from app.codes import is_jav_vr_entry, jav_vr_maker, normalize_code
 from app.config import Settings
 from app.db import Database
 from app.ranking import detect_tags
@@ -20,14 +20,45 @@ POSTER_NAMES = ("poster.jpg", "poster.png", "poster.jpeg", "folder.jpg", "cover.
 WESTERN_POSTER_SUFFIXES = ("-poster.jpg", ".jpg", "-poster.png")
 
 
+_PLAY_FILE = (".mp4", ".mkv", ".avi", ".wmv", ".iso", ".m4v", ".ts", ".mov", ".webm")
+
+
+def _rel_video(path: str) -> str:
+    return str(path or "").replace("\\", "/").lstrip("/")
+
+
+def _play_kind(hit: dict) -> str:
+    path = _rel_video(hit.get("path") or "")
+    shelf = (hit.get("shelf") or "").strip()
+    if shelf == "vr" or path.startswith("vr/"):
+        return "vr"
+    if shelf == "western" or hit.get("tpdb_id"):
+        return "western"
+    code = str(hit.get("code") or "")
+    month = str(hit.get("month") or "")
+    if is_jav_vr_entry(code, month):
+        return "jav_vr"
+    suffix = Path(path).suffix.lower()
+    if suffix in _PLAY_FILE:
+        return "western"
+    return "jav"
+
+
 def library_info(hit: dict | None) -> dict:
     if not hit or not hit.get("has_video"):
         return {"present": False}
+    kind = _play_kind(hit)
+    video = _rel_video(hit.get("video") or "")
+    path = hit.get("path") or ""
+    if not video and kind in ("western", "vr"):
+        video = western_fs_rel(path)
     return {
         "present": True,
-        "path": hit.get("path") or "",
+        "path": path,
         "has_nfo": bool(hit.get("has_nfo")),
         "has_poster": bool(hit.get("has_poster")),
+        "video": video,
+        "play_kind": kind,
     }
 
 
