@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.codes import jav_vr_maker, normalize_code
 from app.follow import javbus_list_url, javbus_page_kind, javbus_page_url
 from app.library import attach_library, item_code
+from app.paging import JAVBUS_FULL, PAGE_SIZE, SOURCE_CAP, extend_wall, last_page_of, slice_page
 from app.sources.javbus import (
     CACHE_VER,
     MetadataError,
@@ -20,8 +21,8 @@ from app.sources.tpdb import is_excluded_orientation
 router = APIRouter()
 
 # One actress wall page. JavBus lists about 30 credits per page, newest first;
-# 42 tiles the desktop grid (7×6 or 6×7) after omnibus discs are dropped.
-_ACTRESS_PAGE = 42
+# later star pages are read until this wall page fills.
+_ACTRESS_PAGE = PAGE_SIZE
 # Stop scanning so a star with hundreds of omnibus discs cannot walk the whole catalog.
 _ACTRESS_SCAN_CAP = 20
 
@@ -56,7 +57,7 @@ async def _save_actress_cache(db, key: str, payload: dict) -> None:
 
 async def actress_works(settings, db, list_url: str, page: int) -> list[dict]:
     """Solo titles for one wall page, reading later star pages until this page fills."""
-    key = f"actress-solo:v1:{list_url}"
+    key = f"actress-solo:v2:{list_url}"
     cached = await _actress_cache(db, key, settings.latest_ttl)
     items = list(cached["items"]) if cached else []
     scanned = int(cached.get("scanned") or 0) if cached else 0
@@ -92,8 +93,52 @@ async def actress_works(settings, db, list_url: str, page: int) -> list[dict]:
             exhausted = True
             break
     await _save_actress_cache(db, key, {"items": items, "scanned": scanned, "exhausted": exhausted})
-    start = (page - 1) * _ACTRESS_PAGE
-    return items[start : start + _ACTRESS_PAGE]
+    return slice_page(items, page, _ACTRESS_PAGE)
+
+
+def _filter_jav_list(items: list[dict], fmt: str) -> list[dict]:
+    kept = [item for item in items if not is_excluded_orientation([], item.get("title") or "")]
+    if fmt == "flat":
+        return _keep_format(kept, "flat")
+    return kept
+
+
+async def _jav_wall(db, key: str, ttl: int, page: int, pull) -> tuple[list[dict], int | None]:
+    cached = await _actress_cache(db, key, ttl)
+    state = cached if cached else {"items": [], "scanned": 0, "exhausted": False}
+    items = list(state.get("items") or [])
+    scanned = int(state.get("scanned") or 0)
+    exhausted = bool(state.get("exhausted"))
+    need = page * PAGE_SIZE
+    while len(items) < need and not exhausted and scanned < SOURCE_CAP:
+        scanned += 1
+        batch, raw_count = await pull(scanned)
+        state = extend_wall(
+            {**state, "items": items, "scanned": scanned, "exhausted": exhausted},
+            batch,
+            src=scanned,
+            raw_count=raw_count,
+            full=JAVBUS_FULL,
+            id_key="code",
+        )
+        items = state["items"]
+        exhausted = state["exhausted"]
+    if not exhausted and len(items) >= need and scanned < SOURCE_CAP:
+        scanned += 1
+        batch, raw_count = await pull(scanned)
+        state = extend_wall(
+            {**state, "items": items, "scanned": scanned, "exhausted": exhausted},
+            batch,
+            src=scanned,
+            raw_count=raw_count,
+            full=JAVBUS_FULL,
+            id_key="code",
+        )
+        items = state["items"]
+        exhausted = state["exhausted"]
+    await _save_actress_cache(db, key, {"items": items, "scanned": scanned, "exhausted": exhausted})
+    last = last_page_of(len(items)) if exhausted else None
+    return slice_page(items, page), last
 
 
 @router.get("/api/jav/latest")
@@ -109,24 +154,27 @@ async def jav_latest(
     settings = request.app.state.settings
     db = request.app.state.db
     library = request.app.state.library
-    key = f"latest:javbus:{kind}:{page}:{fmt}"
-    cached = await db.get_metadata(key, settings.latest_ttl)
-    if isinstance(cached, dict) and isinstance(cached.get("items"), list):
-        items = cached["items"]
-    else:
-        try:
-            items = await fetch_latest(settings, kind, page, fmt)
-        except MetadataError as exc:
-            return {"kind": kind, "page": page, "items": [], "error": str(exc), "format": fmt}
-        await db.put_metadata(key, {"kind": kind, "page": page, "items": items})
-    items = [it for it in items if not is_excluded_orientation([], it.get("title") or "")]
-    if fmt == "flat":
-        items = _keep_format(items, "flat")
+    async def pull(src: int) -> tuple[list[dict], int]:
+        src_key = f"latest:javbus-src:v1:{kind}:{fmt}:{src}"
+        cached = await db.get_metadata(src_key, settings.latest_ttl)
+        if isinstance(cached, dict) and isinstance(cached.get("items"), list):
+            raw = cached["items"]
+        else:
+            raw = await fetch_latest(settings, kind, src, fmt)
+            await db.put_metadata(src_key, {"items": raw})
+        return _filter_jav_list(raw, fmt), len(raw)
+
+    try:
+        items, last_page = await _jav_wall(db, f"latest:javbus:v2:{kind}:{fmt}", settings.latest_ttl, page, pull)
+    except MetadataError as exc:
+        return {"kind": kind, "page": page, "items": [], "error": str(exc), "format": fmt, "last_page": page}
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {
         "kind": kind,
         "page": page,
+        "last_page": last_page,
+        "page_size": PAGE_SIZE,
         "items": attach_library(items, hits, marked),
         "error": None,
         "format": fmt,
@@ -150,19 +198,32 @@ async def jav_browse(
     try:
         if kind == "actress":
             items = await actress_works(settings, db, target, page)
+            last_page = None
         else:
-            html = await fetch_javbus_html(settings, javbus_page_url(target, page))
-            items = parse_search(html, settings.javbus_base)
+            async def pull(src: int) -> tuple[list[dict], int]:
+                try:
+                    html = await fetch_javbus_html(settings, javbus_page_url(target, src))
+                except MetadataError as exc:
+                    if src > 1 and exc.status == 404:
+                        return [], 0
+                    raise
+                raw = parse_search(html, settings.javbus_base)
+                return _keep_format(raw, fmt), len(raw)
+
+            items, last_page = await _jav_wall(
+                db, f"browse:javbus:v2:{target}:{fmt}", settings.latest_ttl, page, pull,
+            )
     except MetadataError as exc:
         if page > 1 and exc.status == 404:
-            return {"page": page, "items": [], "error": None}
+            return {"page": page, "items": [], "error": None, "last_page": page}
         raise HTTPException(exc.status or 400, str(exc)) from exc
-    items = _keep_format(items, fmt)
     library = request.app.state.library
     hits = await library.get_many([it["code"] for it in items if it.get("code")])
     marked = await db.suck_keys("jav", [item_code(it.get("code") or "") for it in items])
     return {
         "page": page,
+        "last_page": last_page,
+        "page_size": PAGE_SIZE,
         "items": attach_library(items, hits, marked),
         "error": None,
         "format": fmt,

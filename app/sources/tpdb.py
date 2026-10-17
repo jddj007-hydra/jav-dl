@@ -9,6 +9,7 @@ import httpx
 
 from app.config import Settings
 from app.httputil import describe_http_error, site_client
+from app.paging import PAGE_SIZE
 from app.studios import compact_site as _compact_site
 from app.studios import is_vr_work, pick_site
 from app.western_magnets import parse_release_date, release_text, split_release_name, words
@@ -26,8 +27,8 @@ def is_excluded_orientation(tags: list[str] | None = None, title: str = "") -> b
     return bool(_EXCLUDED_ORIENTATION.search(blob))
 
 
-# 42 tiles the desktop wall: 7 columns × 6 rows, or 6 columns × 7.
-PER_PAGE = 42
+# 24 tiles the desktop wall: 4×6 (疏) or 6×4 (密).
+PER_PAGE = PAGE_SIZE
 ORDER_LATEST = "recently_released"
 ORDER_SEARCH = "recently_released"
 # Trailers, BTS, and clip-site shorts sit under this. On /scenes, unset duration

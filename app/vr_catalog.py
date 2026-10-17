@@ -21,6 +21,7 @@ import httpx
 from app.config import Settings
 from app.db import Database
 from app.httputil import site_client
+from app.paging import PAGE_SIZE
 from app.ranking import is_pack
 from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail as fetch_tpdb_detail
 from app.sources.clm import (
@@ -39,7 +40,7 @@ CLM_PAGE = 12
 FEED_PAGES = 5
 OLDEST_YEAR = 2024
 PAGE_CAP = 300
-LIST_PAGE = 20
+LIST_PAGE = PAGE_SIZE
 TICK_PAGES = 2
 # 后台每一轮补几部还没查过的文件名。
 MATCH_BATCH = 3

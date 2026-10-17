@@ -54,7 +54,7 @@ def test_jav_browse_reads_the_star_page(monkeypatch):
             assert ok.status_code == 200
             body = ok.json()
             assert body["items"][0]["code"] == "SSIS-001"
-            genre = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/genre/3n/4", "page": 2})
+            genre = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/genre/3n/4", "page": 1})
             assert genre.status_code == 200
             assert genre.json()["items"][0]["code"] == "SSIS-001"
             bad = await client.get("/api/jav/browse", params={"url": "https://www.javbus.com/SSIS-001"})
@@ -64,7 +64,7 @@ def test_jav_browse_reads_the_star_page(monkeypatch):
     assert seen == [
         "https://www.javbus.com/star/2xi",
         "https://www.javbus.com/star/2xi/2",
-        "https://www.javbus.com/genre/3n/2",
+        "https://www.javbus.com/genre/3n",
     ]
 
 
@@ -216,6 +216,105 @@ def test_jav_latest_and_search_split_vr(monkeypatch):
     asyncio.run(run())
     assert seen[0][2] == "flat"
     assert seen[1][2] == "vr"
+
+
+def test_jav_latest_fills_a_24_tile_wall(monkeypatch):
+    def pack(page):
+        if page == 1:
+            codes = [f"AAA-{i:03d}" for i in range(1, 21)] + ["GAY-001"]
+            return [
+                {
+                    "code": code,
+                    "title": "男同作品" if code.startswith("GAY") else f"作品 {code}",
+                    "cover": "",
+                    "release_date": "2026-01-01",
+                    "url": "",
+                    "source": "javbus",
+                }
+                for code in codes
+            ]
+        if page == 2:
+            return [
+                {
+                    "code": f"BBB-{i:03d}",
+                    "title": f"作品 BBB-{i:03d}",
+                    "cover": "",
+                    "release_date": "2026-01-02",
+                    "url": "",
+                    "source": "javbus",
+                }
+                for i in range(1, 10)
+            ]
+        return []
+
+    async def fake_latest(settings, kind, page=1, fmt="flat"):
+        return pack(page)
+
+    monkeypatch.setattr("app.routers.search.fetch_latest", fake_latest)
+    app = FastAPI()
+    app.include_router(search.router)
+    app.state.settings = Settings()
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.get("/api/jav/latest", params={"format": "flat"})
+            body = first.json()
+            codes = [item["code"] for item in body["items"]]
+            assert len(codes) == 24
+            assert "GAY-001" not in codes
+            assert codes[:20] == [f"AAA-{i:03d}" for i in range(1, 21)]
+            assert codes[20:] == [f"BBB-{i:03d}" for i in range(1, 5)]
+            assert body["page_size"] == 24
+            second = await client.get("/api/jav/latest", params={"format": "flat", "page": 2})
+            rest = [item["code"] for item in second.json()["items"]]
+            assert rest == [f"BBB-{i:03d}" for i in range(5, 10)]
+            assert second.json()["last_page"] == 2
+
+    asyncio.run(run())
+
+
+def test_western_latest_fills_a_24_tile_wall(monkeypatch):
+    def pack(page):
+        if page == 1:
+            rows = [{"id": f"ok-{i}", "duration": "40", "title": "Room", "tags": ["Anal"]} for i in range(22)]
+            rows.append({"id": "gay", "duration": "40", "title": "Room", "tags": ["Gay"]})
+            rows.append({"id": "short", "duration": "5", "title": "Clip", "tags": []})
+            return rows
+        if page == 2:
+            return [{"id": f"more-{i}", "duration": "40", "title": "Night", "tags": []} for i in range(8)]
+        return []
+
+    async def fake_list(settings, kind, page=1, query=None, theme=None, extra=None, fmt=None):
+        items = pack(page)
+        return {"items": items, "page": page, "last_page": 2 if page <= 2 else 2}
+
+    monkeypatch.setattr("app.routers.western.fetch_list", fake_list)
+    app = FastAPI()
+    app.include_router(western.router)
+    app.state.settings = Settings(tpdb_api_key="token")
+    app.state.library = _Library()
+    app.state.db = _DB()
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.get("/api/western/latest", params={"kind": "scene"})
+            body = first.json()
+            ids = [item["id"] for item in body["items"]]
+            assert len(ids) == 24
+            assert "gay" not in ids
+            assert "short" not in ids
+            assert ids[:22] == [f"ok-{i}" for i in range(22)]
+            assert ids[22:] == [f"more-{i}" for i in range(2)]
+            assert body["page_size"] == 24
+            second = await client.get("/api/western/latest", params={"kind": "scene", "page": 2})
+            rest = [item["id"] for item in second.json()["items"]]
+            assert rest == [f"more-{i}" for i in range(2, 8)]
+
+    asyncio.run(run())
 
 
 def test_western_search_drops_excluded_orientation_and_browse_keeps_it(monkeypatch):
@@ -378,12 +477,12 @@ def test_western_browse_uses_the_exact_performer(monkeypatch):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             ok = await client.get("/api/western/browse", params={
-                "facet": "performer", "name": "Jane Doe", "kind": "scene", "page": 2,
+                "facet": "performer", "name": "Jane Doe", "kind": "scene", "page": 1,
             })
             assert ok.status_code == 200
             body = ok.json()
             assert body["items"][0]["id"] == "abc"
-            assert body["last_page"] == 4
+            assert body["last_page"] == 1
             tagged = await client.get("/api/western/browse", params={
                 "facet": "tag", "name": "Massage", "tag_id": "135",
             })
@@ -397,7 +496,7 @@ def test_western_browse_uses_the_exact_performer(monkeypatch):
             assert "ThePornDB" in quiet.json()["error"]
 
     asyncio.run(run())
-    assert calls[0] == {"kind": "scene", "facet": "performer", "name": "Jane Doe", "page": 2, "tag_id": ""}
+    assert calls[0] == {"kind": "scene", "facet": "performer", "name": "Jane Doe", "page": 1, "tag_id": ""}
     assert calls[1] == {"kind": "scene", "facet": "tag", "name": "Massage", "page": 1, "tag_id": "135"}
 
 
@@ -409,7 +508,7 @@ def test_fetch_facet_asks_theporndb_by_id(monkeypatch):
 
     async def fake_json(settings, path, params=None):
         assert path == "/sites/site-1/movies"
-        assert params == {"page": 1, "per_page": 42}
+        assert params == {"page": 1, "per_page": 24}
         return {"data": [{"id": "m1", "title": "Movie", "duration": 2000}], "meta": {"last_page": 2}}
 
     monkeypatch.setattr("app.sources.tpdb._named_id", fake_named)

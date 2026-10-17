@@ -723,5 +723,15 @@ def test_library_card_offers_delete_without_removing_rescrape():
     assert "libraryPlayButton(lastLibrary, detailCode)" in script
     assert "libraryPlayButton(item.library, item.id || \"\")" in script
     html = (root / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=78" in html
-    assert "style.css?v=46" in html
+    assert "app.js?v=79" in html
+    assert "style.css?v=47" in html
+    assert 'id="jav-pager"' in html
+    assert 'id="western-pager"' in html
+    assert html.index('id="works-list"') < html.index('id="jav-pager"')
+    assert html.index('id="western-works"') < html.index('id="western-pager"')
+    assert html.index('id="western-ready"') < html.index('id="western-ready-pager"')
+    assert 'id="western-ready-pager-bottom"' not in html
+    jav_feed = html.split('id="jav-feed"', 1)[1].split('id="jav-genres"', 1)[0]
+    west_feed = html.split('id="western-feed"', 1)[1].split('id="western-themes"', 1)[0]
+    assert 'id="jav-pager"' not in jav_feed
+    assert 'id="western-pager"' not in west_feed

@@ -29,6 +29,7 @@ let sseFailures = 0;
 let javKind = "censored";
 let javFormat = "flat";
 let javPage = 1;
+let javLastPage = null;
 let javMode = "latest";
 let javBootstrapped = false;
 let javBrowse = null;
@@ -534,7 +535,7 @@ function skeletonCards(n, shape) {
 function showSkeleton(wrapId, listId) {
   $(wrapId).hidden = false;
   const shape = (listId === "works-list" || listId === "western-works") ? "cinema" : "";
-  $(listId).innerHTML = skeletonCards(12, shape);
+  $(listId).innerHTML = skeletonCards(24, shape);
 }
 
 const FALLBACK_COVER = "/static/placeholder.svg";
@@ -750,12 +751,11 @@ function magnetReason(item, western) {
 function renderWorks(items) {
   const wrap = $("works-wrap");
   const list = $("works-list");
+  wrap.hidden = false;
   if (!items || !items.length) {
-    wrap.hidden = true;
     list.innerHTML = "";
     return;
   }
-  wrap.hidden = false;
   list.innerHTML = items.map((it) => `
     <button type="button" class="work-card${it.library && it.library.present ? " in-library" : ""}${it.suck ? " is-suck" : ""}" data-code="${escapeHtml(it.code)}">
       <span class="work-cover"${coverVar(it.cover)}>
@@ -983,7 +983,7 @@ function showJavListSurface() {
 }
 
 function javPager(page, browse) {
-  renderPager($("jav-pager"), page, null, (next) => pushHash(javPageHash(next, browse)));
+  renderPager($("jav-pager"), page, javLastPage, (next) => pushHash(javPageHash(next, browse)));
 }
 
 function applyJav(query) {
@@ -1032,6 +1032,12 @@ function markSeg(id, kind) {
   });
 }
 
+function pageCap(raw) {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function renderPager(el, page, lastPage, onPick) {
   const prev = page > 1;
   const next = lastPage ? page < lastPage : true;
@@ -1059,6 +1065,7 @@ function javListFrame() {
     query: lastWorksQuery,
     mode: javMode,
     page: javPage,
+    lastPage: javLastPage,
     browse: javBrowse ? { ...javBrowse } : null,
     kind: javKind,
     format: javFormat,
@@ -1105,6 +1112,7 @@ function restoreJavFrame(frame) {
   lastWorksQuery = frame.query || "";
   javMode = frame.mode || "latest";
   javPage = frame.page || 1;
+  javLastPage = frame.lastPage || null;
   javBrowse = frame.browse || null;
   javKind = frame.kind || javKind;
   javFormat = frame.format || javFormat;
@@ -1119,12 +1127,12 @@ function restoreJavFrame(frame) {
   renderWorks(lastWorks);
   if (javMode === "browse" && javBrowse) {
     const target = javBrowse;
-    renderPager($("jav-pager"), javPage, null, (next) => loadJavBrowse(target.url, target.name, next));
+    renderPager($("jav-pager"), javPage, javLastPage, (next) => loadJavBrowse(target.url, target.name, next));
     setStatus($("search-status"), `${target.name} 的作品`, "good");
     return;
   }
   if (javMode === "latest") {
-    renderPager($("jav-pager"), javPage, null, (next) => loadJavFeed(next));
+    renderPager($("jav-pager"), javPage, javLastPage, (next) => loadJavFeed(next));
   } else {
     $("jav-pager").innerHTML = "";
   }
@@ -1156,6 +1164,7 @@ async function loadJavBrowse(url, name, page) {
     if (view !== javView) return;
     const items = data.items || [];
     rememberWorks(name, items);
+    javLastPage = pageCap(data.last_page);
     renderWorks(items);
     javLoadedKey = javListKey();
     syncJavGenres();
@@ -1216,6 +1225,7 @@ async function loadJavGenre(page) {
     if (view !== javView) return;
     const items = data.items || [];
     rememberWorks("", items);
+    javLastPage = pageCap(data.last_page);
     renderWorks(items);
     javLoadedKey = javListKey();
     javPager(page, "");
@@ -1258,6 +1268,7 @@ async function loadJavFeed(page) {
     if (view !== javView) return;
     const items = data.items || [];
     rememberWorks("", items);
+    javLastPage = pageCap(data.last_page);
     renderWorks(items);
     javLoadedKey = javListKey();
     syncJavGenres();
@@ -2438,12 +2449,11 @@ function renderWesternWorks(items) {
   const wrap = $("western-works-wrap");
   const list = $("western-works");
   westernItems = items || [];
+  wrap.hidden = false;
   if (!westernItems.length) {
-    wrap.hidden = true;
     list.innerHTML = "";
     return;
   }
-  wrap.hidden = false;
   list.innerHTML = westernItems.map((it) => {
     const when = [it.date, it.duration ? `${it.duration} 分钟` : ""].filter(Boolean).join(" · ");
     const art = sceneArt(it);
@@ -2685,7 +2695,7 @@ async function loadWesternBrowse(facet, name, page, tagId) {
     const data = await api("/api/western/browse?" + params.toString());
     if (view !== westernView) return;
     westernItems = data.items || [];
-    westernLastPage = data.last_page || page;
+    westernLastPage = pageCap(data.last_page);
     renderWesternWorks(westernItems);
     westernLoadedKey = westernListKey();
     westernPager(data.page || page, westernLastPage, facet, name);
@@ -2736,11 +2746,7 @@ function scheduleReady() {
 
 function paintReadyPagers() {
   const pick = (next) => pushHash(westernPageHash(next, "", ""));
-  renderPager($("western-pager"), westernPage, westernLastPage, pick);
   renderPager($("western-ready-pager"), westernPage, westernLastPage, pick);
-  renderPager($("western-ready-pager-bottom"), westernPage, westernLastPage, pick);
-  const bottom = $("western-ready-pager-bottom").parentElement;
-  if (bottom) bottom.hidden = !(westernLastPage > 1);
 }
 
 function hideReadyList() {
@@ -3071,7 +3077,7 @@ async function loadWesternFeed(page) {
     const data = await api(`/api/western/latest?${westernParams(page)}`);
     if (view !== westernView) return;
     westernItems = data.items || [];
-    westernLastPage = data.last_page || page;
+    westernLastPage = pageCap(data.last_page);
     renderWesternWorks(westernItems);
     westernLoadedKey = westernListKey();
     westernPager(data.page || page, westernLastPage, "", "");
@@ -3203,7 +3209,7 @@ async function loadWesternSearch(q, page) {
   const data = await api(`/api/western/search?${westernParams(page, q)}`);
   if (view !== westernView) return;
   westernItems = data.items || [];
-  westernLastPage = data.last_page || page;
+  westernLastPage = pageCap(data.last_page);
   westernLoadedKey = "";
   renderWesternWorks(westernItems);
   renderPager(

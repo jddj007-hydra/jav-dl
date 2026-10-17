@@ -6,8 +6,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.library import attach_western, library_info
 from app.models import WesternConfirm
+from app.paging import PAGE_SIZE, SOURCE_CAP, extend_wall, last_page_of, slice_page
 from app.scrape import ScrapeError
 from app.sources.tpdb import (
+    PER_PAGE,
     TpdbError,
     fetch_detail,
     fetch_facet,
@@ -66,6 +68,97 @@ def _visible(
     return kept
 
 
+async def _wall_list(
+    request: Request,
+    kind: str,
+    page: int,
+    cache_key: str | None,
+    pull,
+    *,
+    extra: dict | None = None,
+):
+    db = request.app.state.db
+    settings = request.app.state.settings
+    state = None
+    if cache_key:
+        cached = await db.get_metadata(cache_key, settings.latest_ttl)
+        if isinstance(cached, dict) and isinstance(cached.get("items"), list):
+            state = cached
+    items = list((state or {}).get("items") or [])
+    scanned = int((state or {}).get("scanned") or 0)
+    exhausted = bool((state or {}).get("exhausted"))
+    meta = dict(extra or {})
+    if state:
+        for key in ("matched_site", "matched_performer"):
+            if state.get(key) and not meta.get(key):
+                meta[key] = state[key]
+    need = page * PAGE_SIZE
+    try:
+        while len(items) < need and not exhausted and scanned < SOURCE_CAP:
+            scanned += 1
+            batch, raw_count, source_last, more = await pull(scanned)
+            if more:
+                meta.update({key: value for key, value in more.items() if value})
+            state = extend_wall(
+                {**(state or {}), "items": items, "scanned": scanned, "exhausted": exhausted, **meta},
+                batch,
+                src=scanned,
+                raw_count=raw_count,
+                source_last=source_last,
+                full=PER_PAGE,
+                id_key="id",
+            )
+            items = state["items"]
+            exhausted = state["exhausted"]
+            meta.update({key: state.get(key) or "" for key in ("matched_site", "matched_performer")})
+        if not exhausted and len(items) >= need and scanned < SOURCE_CAP:
+            scanned += 1
+            batch, raw_count, source_last, more = await pull(scanned)
+            if more:
+                meta.update({key: value for key, value in more.items() if value})
+            state = extend_wall(
+                {**(state or {}), "items": items, "scanned": scanned, "exhausted": exhausted, **meta},
+                batch,
+                src=scanned,
+                raw_count=raw_count,
+                source_last=source_last,
+                full=PER_PAGE,
+                id_key="id",
+            )
+            items = state["items"]
+            exhausted = state["exhausted"]
+    except TpdbError as exc:
+        return {
+            "kind": kind,
+            "page": page,
+            "last_page": page,
+            "items": [],
+            "error": str(exc),
+            "format": meta.get("format") or "flat",
+        }
+    if cache_key:
+        await db.put_metadata(cache_key, {
+            "items": items,
+            "scanned": scanned,
+            "exhausted": exhausted,
+            "matched_site": meta.get("matched_site") or "",
+            "matched_performer": meta.get("matched_performer") or "",
+        })
+    chunk = slice_page(items, page)
+    last = last_page_of(len(items)) if exhausted else None
+    return {
+        "kind": kind,
+        "page": page,
+        "last_page": last,
+        "page_size": PAGE_SIZE,
+        "items": await _mark_library(request, chunk),
+        "matched_site": meta.get("matched_site") or "",
+        "matched_performer": meta.get("matched_performer") or "",
+        "error": None,
+        "format": meta.get("format") or "flat",
+    }
+
+
 async def _cached_list(
     request: Request,
     kind: str,
@@ -85,52 +178,41 @@ async def _cached_list(
             "items": [],
             "error": "请先在设置里填写 ThePornDB token",
         }
-    db = request.app.state.db
-    cache_key = None if query else f"latest:tpdb:{kind}:{page}:{theme or '-'}:{fmt}"
     allow_unknown = fmt == "vr"
-    if cache_key:
-        cached = await db.get_metadata(cache_key, settings.latest_ttl)
-        if isinstance(cached, dict) and isinstance(cached.get("items"), list):
-            visible = _visible(
-                cached["items"],
-                exclude_orientation=exclude_orientation,
-                allow_unknown_duration=allow_unknown
-                or bool(cached.get("matched_site") or cached.get("matched_performer")),
-                fmt=fmt,
-            )
-            return {**cached, "items": await _mark_library(request, visible), "error": None, "format": fmt}
-    try:
-        if query:
-            payload = await search_catalog(settings, kind, query, page, theme, fmt=fmt)
-        else:
-            payload = await fetch_list(settings, kind, page, query, theme, fmt=fmt)
-    except TpdbError as exc:
-        return {
-            "kind": kind,
-            "page": page,
-            "last_page": page,
-            "items": [],
-            "error": str(exc),
-        }
-    body = {
-        "kind": kind,
-        "page": payload["page"],
-        "last_page": payload["last_page"],
-        "items": payload["items"],
-        "matched_site": payload.get("matched_site") or "",
-        "matched_performer": payload.get("matched_performer") or "",
-        "format": fmt,
-    }
-    if cache_key:
-        await db.put_metadata(cache_key, body)
-    visible = _visible(
-        body["items"],
-        exclude_orientation=exclude_orientation,
-        allow_unknown_duration=allow_unknown
-        or bool(body.get("matched_site") or body.get("matched_performer")),
-        fmt=fmt,
+    cache_key = (
+        None
+        if query
+        else f"latest:tpdb:v2:{kind}:{theme or '-'}:{fmt}"
     )
-    return {**body, "items": await _mark_library(request, visible), "error": None}
+    if query:
+        cache_key = f"search:tpdb:v2:{kind}:{query}:{theme or '-'}:{fmt}"
+
+    async def pull(src: int):
+        if query:
+            payload = await search_catalog(settings, kind, query, src, theme, fmt=fmt)
+        else:
+            payload = await fetch_list(settings, kind, src, query, theme, fmt=fmt)
+        allow = allow_unknown or bool(payload.get("matched_site") or payload.get("matched_performer"))
+        visible = _visible(
+            payload["items"],
+            exclude_orientation=exclude_orientation,
+            allow_unknown_duration=allow,
+            fmt=fmt,
+        )
+        return (
+            visible,
+            len(payload.get("items") or []),
+            payload.get("last_page"),
+            {
+                "matched_site": payload.get("matched_site") or "",
+                "matched_performer": payload.get("matched_performer") or "",
+                "format": fmt,
+            },
+        )
+
+    return await _wall_list(
+        request, kind, page, cache_key, pull, extra={"format": fmt},
+    )
 
 
 async def _mark_library(request: Request, items: list[dict]) -> list[dict]:
@@ -206,30 +288,21 @@ async def western_browse(
             "items": [],
             "error": "请先在设置里填写 ThePornDB token",
         }
-    try:
-        payload = await fetch_facet(settings, kind, facet, name, page, tag_id=tag_id)
-    except TpdbError as exc:
-        return {
-            "kind": kind,
-            "page": page,
-            "last_page": page,
-            "items": [],
-            "error": str(exc),
-        }
-    visible = _visible(
-        payload["items"],
-        exclude_orientation=False,
-        allow_unknown_duration=fmt == "vr" or facet in ("site", "performer"),
-        fmt=fmt,
-    )
-    return {
-        "kind": kind,
-        "page": payload["page"],
-        "last_page": payload["last_page"],
-        "items": await _mark_library(request, visible),
-        "error": None,
-        "format": fmt,
-    }
+    ident = tag_id.strip()
+    cache_key = f"browse:tpdb:v2:{kind}:{facet}:{name}:{fmt}:{ident}"
+
+    async def pull(src: int):
+        payload = await fetch_facet(settings, kind, facet, name, src, tag_id=ident)
+        visible = _visible(
+            payload["items"],
+            exclude_orientation=False,
+            allow_unknown_duration=fmt == "vr" or facet in ("site", "performer"),
+            fmt=fmt,
+        )
+        return visible, len(payload.get("items") or []), payload.get("last_page"), {"format": fmt}
+
+    body = await _wall_list(request, kind, page, cache_key, pull, extra={"format": fmt})
+    return body
 
 
 @router.get("/api/western/search")
