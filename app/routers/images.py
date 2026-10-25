@@ -4,11 +4,12 @@ import hashlib
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from app.config import site_origin
-from app.httputil import image_client
+from app.httputil import describe_http_error, image_client
 from app.imgcache import trim_img_cache
 
 router = APIRouter()
@@ -101,7 +102,10 @@ async def fetch_image(settings, url: str, referer: str, javbus_base: str, *extra
     for _ in range(MAX_REDIRECTS + 1):
         if not _allowed(current, javbus_base, *extra_bases):
             raise HTTPException(400, "不允许的图片地址")
-        response = await client.get(current, headers={"Referer": referer})
+        try:
+            response = await client.get(current, headers={"Referer": referer})
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"封面下载失败: {describe_http_error(exc)}") from exc
         if response.status_code in {301, 302, 303, 307, 308}:
             location = response.headers.get("location") or ""
             if not location:

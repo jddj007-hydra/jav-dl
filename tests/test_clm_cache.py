@@ -209,6 +209,20 @@ def test_home_covers_a_dead_primary_and_errors_are_not_cached(monkeypatch):
     assert second > first
 
 
+def test_magnet_connect_error_message_is_readable(monkeypatch):
+    async def fail(client, url, hops=0):
+        raise httpx.ConnectError("")
+
+    _patch_fetch(monkeypatch, fail)
+
+    async def run():
+        with pytest.raises(MagnetSearchError) as caught:
+            await search_magnets(_settings(), "MISS-001", pages=1)
+        return str(caught.value)
+
+    assert asyncio.run(run()) == "磁力猫请求失败: 连接失败"
+
+
 def test_empty_results_stay_cached_until_they_expire(monkeypatch):
     calls: list[str] = []
     clock = {"now": 1000.0}

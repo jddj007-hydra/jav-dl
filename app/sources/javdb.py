@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import normalize_code
 from app.config import Settings, site_origin
-from app.httputil import site_client
+from app.httputil import describe_http_error, site_client
 from app.sources.javbus import MetadataError, detect_blocker
 
 _GENDER = re.compile(r"[♀♂]")
@@ -337,7 +337,7 @@ async def fetch_javdb_metadata(settings: Settings, code: str) -> dict:
         try:
             response = await client.get(search_url, headers=headers)
         except httpx.HTTPError as exc:
-            raise MetadataError(f"JavDB 请求失败: {exc}") from exc
+            raise MetadataError(f"JavDB 请求失败: {describe_http_error(exc)}") from exc
         _raise_for_response(response)
         detail_url = parse_javdb_search(response.text, base, code)
         if not detail_url:
@@ -345,6 +345,6 @@ async def fetch_javdb_metadata(settings: Settings, code: str) -> dict:
         try:
             detail = await client.get(detail_url, headers=headers)
         except httpx.HTTPError as exc:
-            raise MetadataError(f"JavDB 请求失败: {exc}") from exc
+            raise MetadataError(f"JavDB 请求失败: {describe_http_error(exc)}") from exc
     _raise_for_response(detail)
     return parse_javdb_detail(detail.text, base, code, page_url=str(detail_url))

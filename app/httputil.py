@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
 
 import httpx
 
@@ -11,34 +11,103 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-# Recycle the shared client so half-closed proxy CONNECTs cannot sit in
-# CLOSE-WAIT and starve JavBus / ThePornDB / 磁力猫 list fetches.
-CLIENT_MAX_AGE = 60.0
+log = logging.getLogger("app.http")
+
+# Proxy CONNECT + origin TLS is not covered by httpcore's connect retries.
+# One extra attempt on a fresh tunnel recovers most empty ConnectError flakes.
+TRANSIENT_HTTP = (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError)
+CONNECT_TIMEOUT = 8.0
+PROXY_KEEPALIVE = 8
+PROXY_MAX_CONNECTIONS = 16
+PROXY_KEEPALIVE_EXPIRY = 4.0
+
+
+class RetryTransport(httpx.AsyncBaseTransport):
+    """Retry the whole request once when the proxy tunnel or TLS handshake dies."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, retries: int = 1):
+        self._inner = inner
+        self._retries = retries
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        last: BaseException | None = None
+        for attempt in range(self._retries + 1):
+            try:
+                return await self._inner.handle_async_request(request)
+            except TRANSIENT_HTTP as exc:
+                last = exc
+                if attempt >= self._retries:
+                    raise
+                log.info(
+                    "HTTP 重试 %s %s: %s",
+                    request.method,
+                    request.url.host,
+                    describe_http_error(exc),
+                )
+        raise last or RuntimeError("HTTP 重试失败")
+
+    async def aclose(self) -> None:
+        close = getattr(self._inner, "aclose", None)
+        if close is not None:
+            await close()
 
 
 def describe_http_error(exc: BaseException) -> str:
-    """httpx timeouts often stringify to empty; keep a usable message."""
-    text = str(exc).strip()
-    if text:
-        return text
+    """httpx timeouts and proxy ConnectError often stringify to empty."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).strip()
+        if text:
+            return text
+        current = current.__cause__ or current.__context__
     if isinstance(exc, httpx.TimeoutException):
         return "连接超时"
+    if isinstance(exc, httpx.ConnectError):
+        return "连接失败"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "连接被断开"
     return type(exc).__name__
 
 
-def client_kwargs(settings: Settings, *, use_proxy: bool) -> dict:
-    kwargs: dict = {
-        "follow_redirects": True,
-        "timeout": settings.http_timeout,
-        "headers": {"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
-        "verify": settings.verify_tls,
-    }
+def proxy_url(settings: Settings, *, use_proxy: bool) -> str | None:
     if use_proxy and settings.proxy_enabled and settings.proxy_url:
-        kwargs["proxy"] = settings.proxy_url
-        # Keepalive reuse of HTTP CONNECT sockets that the proxy already FINed
-        # leaves CLOSE-WAIT fds; later list requests then wait out http_timeout.
-        kwargs["limits"] = httpx.Limits(max_keepalive_connections=0, max_connections=40)
-    return kwargs
+        return settings.proxy_url
+    return None
+
+
+def client_timeout(settings: Settings) -> httpx.Timeout:
+    total = float(settings.http_timeout)
+    return httpx.Timeout(total, connect=min(CONNECT_TIMEOUT, total))
+
+
+def client_limits(*, proxy: str | None) -> httpx.Limits:
+    if proxy:
+        # Short expiry drops half-closed CONNECT tunnels; a few keepalive
+        # sockets let a list of covers reuse one tunnel instead of 24 new TLS
+        # handshakes. Cap concurrency so sing-box is not flooded.
+        return httpx.Limits(
+            max_keepalive_connections=PROXY_KEEPALIVE,
+            max_connections=PROXY_MAX_CONNECTIONS,
+            keepalive_expiry=PROXY_KEEPALIVE_EXPIRY,
+        )
+    return httpx.Limits(max_keepalive_connections=20, max_connections=40, keepalive_expiry=5.0)
+
+
+def client_kwargs(settings: Settings, *, use_proxy: bool) -> dict:
+    proxy = proxy_url(settings, use_proxy=use_proxy)
+    limits = client_limits(proxy=proxy)
+    transport = RetryTransport(
+        httpx.AsyncHTTPTransport(proxy=proxy, verify=settings.verify_tls, limits=limits)
+    )
+    return {
+        "follow_redirects": True,
+        "timeout": client_timeout(settings),
+        "headers": {"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+        "limits": limits,
+        "transport": transport,
+    }
 
 
 class _Held:
@@ -58,12 +127,19 @@ class ClientPool:
     def __init__(self) -> None:
         self._clients: dict[str, httpx.AsyncClient | None] = {"site": None, "image": None}
         self._keys: dict[str, tuple | None] = {"site": None, "image": None}
-        self._born: dict[str, float] = {"site": 0.0, "image": 0.0}
 
     def _signature(self, settings: Settings, follow: bool) -> tuple:
-        proxy = settings.proxy_url if settings.proxy_enabled and settings.proxy_url else ""
-        keepalive = 0 if proxy else None
-        return (proxy, bool(settings.verify_tls), float(settings.http_timeout), follow, keepalive)
+        proxy = proxy_url(settings, use_proxy=True) or ""
+        limits = client_limits(proxy=proxy or None)
+        return (
+            proxy,
+            bool(settings.verify_tls),
+            float(settings.http_timeout),
+            follow,
+            limits.max_keepalive_connections,
+            limits.max_connections,
+            limits.keepalive_expiry,
+        )
 
     def _open(self, kind: str, settings: Settings, follow: bool) -> httpx.AsyncClient:
         key = self._signature(settings, follow)
@@ -74,7 +150,6 @@ class ClientPool:
             and not getattr(current, "is_closed", False)
             and self._keys[kind] == key
             and type(current) is maker
-            and (time.monotonic() - self._born[kind]) < CLIENT_MAX_AGE
         ):
             return current
         kwargs = client_kwargs(settings, use_proxy=True)
@@ -83,7 +158,6 @@ class ClientPool:
         self._drop(current)
         self._clients[kind] = client
         self._keys[kind] = key
-        self._born[kind] = time.monotonic()
         return client
 
     def site(self, settings: Settings) -> httpx.AsyncClient:
@@ -108,7 +182,6 @@ class ClientPool:
         for kind, client in list(self._clients.items()):
             self._clients[kind] = None
             self._keys[kind] = None
-            self._born[kind] = 0.0
             if client is not None and hasattr(client, "aclose"):
                 await client.aclose()
 

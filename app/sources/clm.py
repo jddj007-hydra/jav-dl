@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import title_mentions_code
 from app.config import Settings
-from app.httputil import site_client
+from app.httputil import describe_http_error, site_client
 from app.ranking import detect_tags, is_pack
 from app.textutil import parse_size, strip_em
 from app.trackers import magnet_for
@@ -294,6 +294,6 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2, sort: st
         if not collected and last_err:
             if isinstance(last_err, MagnetSearchError):
                 raise last_err
-            raise MagnetSearchError(f"磁力猫请求失败: {last_err}")
+            raise MagnetSearchError(f"磁力猫请求失败: {describe_http_error(last_err)}")
         _cache_put(key, collected, time.monotonic())
         return _copy_items(collected)

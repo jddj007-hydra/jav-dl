@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import fc2_number, normalize_code
 from app.config import Settings
-from app.httputil import site_client
+from app.httputil import describe_http_error, site_client
 from app.sources.javbus import MetadataError
 
 FC2_BASE = "https://adult.contents.fc2.com"
@@ -210,7 +210,7 @@ async def fetch_fc2_metadata(settings: Settings, code: str) -> dict:
         try:
             response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
-            raise MetadataError(f"FC2 请求失败: {exc}") from exc
+            raise MetadataError(f"FC2 请求失败: {describe_http_error(exc)}") from exc
     if response.status_code == 404:
         raise MetadataError("未找到该番号", 404)
     if response.status_code >= 400:
