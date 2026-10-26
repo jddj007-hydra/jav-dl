@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 from fastapi import APIRouter, Request
 
 from app import __version__
-from app.httputil import site_client
+from app.httputil import client_kwargs
 
 router = APIRouter()
 PROBE_TIMEOUT = 3.0
@@ -19,12 +20,10 @@ async def _bounded(coro, default):
 
 
 async def _site_ok(settings, url: str) -> bool:
+    """Probe with a throwaway client so a 3s cancel cannot wedge the list pool."""
     try:
-        async with site_client(settings) as client:
-            response = await asyncio.wait_for(
-                client.get(url, timeout=PROBE_TIMEOUT),
-                PROBE_TIMEOUT,
-            )
+        async with httpx.AsyncClient(**client_kwargs(settings, use_proxy=True)) as client:
+            response = await client.get(url, timeout=PROBE_TIMEOUT)
             return response.status_code < 500
     except Exception:
         return False

@@ -15,8 +15,12 @@ log = logging.getLogger("app.http")
 
 # Proxy CONNECT + origin TLS is not covered by httpcore's connect retries.
 # One extra attempt on a fresh tunnel recovers most empty ConnectError flakes.
-TRANSIENT_HTTP = (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError)
+# Timeouts are not retried: a second wait holds a pool slot and the next list
+# request then sits until http_timeout.
+TRANSIENT_HTTP = (httpx.ConnectError, httpx.RemoteProtocolError)
+DEAD_HTTP = (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)
 CONNECT_TIMEOUT = 8.0
+POOL_TIMEOUT = 5.0
 PROXY_KEEPALIVE = 8
 PROXY_MAX_CONNECTIONS = 16
 PROXY_KEEPALIVE_EXPIRY = 4.0
@@ -52,6 +56,11 @@ class RetryTransport(httpx.AsyncBaseTransport):
             await close()
 
 
+def _looks_like_deadline(text: str) -> bool:
+    low = text.lower()
+    return "deadline exceeded" in low or "cancelled via cancel scope" in low
+
+
 def describe_http_error(exc: BaseException) -> str:
     """httpx timeouts and proxy ConnectError often stringify to empty."""
     seen: set[int] = set()
@@ -60,7 +69,7 @@ def describe_http_error(exc: BaseException) -> str:
         seen.add(id(current))
         text = str(current).strip()
         if text:
-            return text
+            return "连接超时" if _looks_like_deadline(text) else text
         current = current.__cause__ or current.__context__
     if isinstance(exc, httpx.TimeoutException):
         return "连接超时"
@@ -79,7 +88,11 @@ def proxy_url(settings: Settings, *, use_proxy: bool) -> str | None:
 
 def client_timeout(settings: Settings) -> httpx.Timeout:
     total = float(settings.http_timeout)
-    return httpx.Timeout(total, connect=min(CONNECT_TIMEOUT, total))
+    return httpx.Timeout(
+        total,
+        connect=min(CONNECT_TIMEOUT, total),
+        pool=min(POOL_TIMEOUT, total),
+    )
 
 
 def client_limits(*, proxy: str | None) -> httpx.Limits:
@@ -155,6 +168,7 @@ class ClientPool:
         kwargs = client_kwargs(settings, use_proxy=True)
         kwargs["follow_redirects"] = follow
         client = httpx.AsyncClient(**kwargs)
+        self._guard(kind, client)
         self._drop(current)
         self._clients[kind] = client
         self._keys[kind] = key
@@ -165,6 +179,31 @@ class ClientPool:
 
     def image(self, settings: Settings) -> httpx.AsyncClient:
         return self._open("image", settings, False)
+
+    def invalidate(self, kind: str, client: httpx.AsyncClient | None = None) -> None:
+        current = self._clients.get(kind)
+        if current is None:
+            return
+        if client is not None and current is not client:
+            return
+        self._clients[kind] = None
+        self._keys[kind] = None
+        log.warning("HTTP 丢弃 %s 客户端: 代理隧道失效", kind)
+        self._drop(current)
+
+    def _guard(self, kind: str, client: httpx.AsyncClient) -> None:
+        bound = getattr(client, "send", None)
+        if bound is None:
+            return
+
+        async def send(request, *args, **kwargs):
+            try:
+                return await bound(request, *args, **kwargs)
+            except DEAD_HTTP:
+                self.invalidate(kind, client)
+                raise
+
+        client.send = send  # type: ignore[method-assign]
 
     def _drop(self, client: httpx.AsyncClient | None) -> None:
         if client is None:

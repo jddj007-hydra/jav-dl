@@ -9,11 +9,13 @@ from app.config import Settings
 from app.httputil import (
     RetryTransport,
     client_kwargs,
+    client_timeout,
     close_clients,
     describe_http_error,
     pool,
     site_client,
 )
+from app.routers import health as health_mod
 from app.imgcache import trim_img_cache
 from app.routers.images import fetch_image
 
@@ -110,10 +112,100 @@ def test_retry_transport_gives_up_after_one_retry():
     asyncio.run(run())
 
 
+def test_retry_transport_does_not_retry_timeout():
+    class Once(httpx.AsyncBaseTransport):
+        def __init__(self):
+            self.calls = 0
+
+        async def handle_async_request(self, request):
+            self.calls += 1
+            raise httpx.ConnectTimeout("Cancelled via cancel scope x; reason: deadline exceeded")
+
+    inner = Once()
+
+    async def run():
+        with pytest.raises(httpx.ConnectTimeout):
+            await RetryTransport(inner).handle_async_request(
+                httpx.Request("GET", "https://www.javbus.com/")
+            )
+        assert inner.calls == 1
+
+    asyncio.run(run())
+
+
 def test_describe_http_error_timeout_without_message():
     assert describe_http_error(httpx.ConnectTimeout("")) == "连接超时"
     assert describe_http_error(httpx.ReadTimeout("timed out")) == "timed out"
     assert describe_http_error(httpx.ConnectError("")) == "连接失败"
+    assert (
+        describe_http_error(
+            httpx.ReadTimeout("Cancelled via cancel scope 77d16028c910; reason: deadline exceeded")
+        )
+        == "连接超时"
+    )
+
+
+def test_client_timeout_caps_pool_wait():
+    timeout = client_timeout(Settings(http_timeout=20))
+    assert timeout.connect == 8.0
+    assert timeout.pool == 5.0
+
+
+def test_timeout_invalidates_shared_client(monkeypatch):
+    class Boom(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise httpx.ReadTimeout("Cancelled via cancel scope x; reason: deadline exceeded")
+
+    real_kwargs = client_kwargs
+
+    def fake_kwargs(settings, *, use_proxy):
+        kwargs = real_kwargs(settings, use_proxy=use_proxy)
+        kwargs["transport"] = Boom()
+        return kwargs
+
+    monkeypatch.setattr("app.httputil.client_kwargs", fake_kwargs)
+
+    async def run():
+        await close_clients()
+        settings = Settings(proxy_enabled=False, verify_tls=False, http_timeout=5)
+        first = pool.site(settings)
+        with pytest.raises(httpx.ReadTimeout):
+            await first.get("https://www.javbus.com/")
+        second = pool.site(settings)
+        assert first is not second
+        await close_clients()
+
+    asyncio.run(run())
+
+
+def test_health_probe_does_not_use_shared_pool(monkeypatch):
+    used = {"own": 0}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            used["own"] += 1
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            return httpx.Response(200, request=httpx.Request("GET", url))
+
+    def boom(*args, **kwargs):
+        raise AssertionError("health probe used the shared pool")
+
+    monkeypatch.setattr(health_mod.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(pool, "site", boom)
+
+    async def run():
+        ok = await health_mod._site_ok(Settings(proxy_enabled=False), "https://www.javbus.com/")
+        assert ok is True
+        assert used["own"] == 1
+
+    asyncio.run(run())
 
 
 def test_image_connect_error_is_502(monkeypatch):
