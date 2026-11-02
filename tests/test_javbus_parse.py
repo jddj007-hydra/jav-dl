@@ -131,6 +131,14 @@ def test_normal_detail_page_is_not_a_blocker():
     assert meta["studio"] == "Studio A"
 
 
+def test_age_verification_title_is_a_verify_page_not_a_missing_code():
+    html = "<html><head><title>Age Verification JavBus - JavBus</title></head><body></body></html>"
+    with pytest.raises(MetadataError) as exc:
+        parse_javbus(html, "https://www.javbus.com", "PF-1897")
+    assert str(exc.value) == VERIFY
+    assert exc.value.status == 503
+
+
 def _patch_site(monkeypatch, handler):
     class _Client:
         async def get(self, url, *args, **kwargs):

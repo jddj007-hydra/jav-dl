@@ -301,6 +301,35 @@ def test_proxy_on_falls_back_when_direct_ssl_fails(monkeypatch):
     assert "fetch" in used
 
 
+def test_empty_direct_does_not_fall_through_to_proxy_or_home(monkeypatch):
+    used: list[str] = []
+
+    class _Proxy:
+        async def __aenter__(self):
+            raise AssertionError("empty direct must not use the proxy pool")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fetch(client, url, hops=0):
+        used.append(url)
+        return "<html></html>"
+
+    monkeypatch.setattr("app.sources.clm.direct_site", lambda settings: _Hold())
+    monkeypatch.setattr("app.sources.clm.site_client", lambda settings: _Proxy())
+    monkeypatch.setattr("app.sources.clm.fetch_search_page", fetch)
+    settings = _settings(proxy_enabled=True, proxy_url="http://127.0.0.1:7890")
+
+    async def run():
+        return await search_magnets(settings, "PF-1897", pages=2)
+
+    found = asyncio.run(run())
+    assert found == []
+    assert used
+    assert all("primary.test" in url for url in used)
+    assert not any("home.test" in url for url in used)
+
+
 def test_closed_client_falls_through_to_home(monkeypatch):
     calls: list[str] = []
 

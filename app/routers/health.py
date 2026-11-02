@@ -21,12 +21,18 @@ async def _bounded(coro, default):
 
 async def _site_ok(settings, url: str) -> bool:
     """Probe with a throwaway client so a 3s cancel cannot wedge the list pool."""
-    try:
-        async with httpx.AsyncClient(**client_kwargs(settings, use_proxy=True)) as client:
-            response = await client.get(url, timeout=PROBE_TIMEOUT)
-            return response.status_code < 500
-    except Exception:
-        return False
+    tries = [client_kwargs(settings, use_proxy=True)]
+    if settings.proxy_enabled and settings.proxy_url:
+        tries.append(client_kwargs(settings, use_proxy=False))
+    for kwargs in tries:
+        try:
+            async with httpx.AsyncClient(**kwargs) as client:
+                response = await client.get(url, timeout=PROBE_TIMEOUT)
+                if response.status_code < 500:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 @router.get("/api/health")

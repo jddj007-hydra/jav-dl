@@ -307,6 +307,7 @@ async def _search_with_client(
     home: str,
 ) -> tuple[list[dict], Exception | None]:
     last_err: Exception | None = None
+    answered = False
     if home:
         try:
             await client.get(home + "/")
@@ -319,10 +320,15 @@ async def _search_with_client(
         items, err = await _collect_pages(client, base, word, query, pages, sort)
         if items:
             return items, None
-        last_err = err or last_err
+        if err is None:
+            answered = True
+        else:
+            last_err = err or last_err
         if index == 0 and len(origins) > 1:
             log.info("磁力猫主域没有结果，改用备用搜索域")
     tried = {base.lower() for base in origins}
+    if answered:
+        return [], None
     if home and home.lower() not in tried:
         items, err = await _collect_pages(client, home, word, query, pages, sort)
         if items:
@@ -351,7 +357,10 @@ async def _search_live(
                 if label == "direct":
                     log.info("磁力猫走直连搜到了")
                 return items
-            last_err = err or last_err
+            if err is None:
+                return []
+            last_err = err
+            log.info("磁力猫%s失败，换一条路: %s", label, describe_http_error(err))
         except MagnetSearchError as exc:
             last_err = exc
     if last_err:

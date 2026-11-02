@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.codes import jav_vr_maker, normalize_code
+from app.codes import fc2_number, jav_vr_maker, normalize_code
 from app.follow import javbus_list_url, javbus_page_kind, javbus_page_url
 from app.library import attach_library, item_code
 from app.paging import JAVBUS_FULL, PAGE_SIZE, SOURCE_CAP, extend_wall, last_page_of, slice_page
@@ -16,6 +16,7 @@ from app.sources.javbus import (
     parse_search,
     search_works,
 )
+from app.sources.javdb import fetch_javdb_metadata
 from app.sources.tpdb import is_excluded_orientation
 
 router = APIRouter()
@@ -279,15 +280,26 @@ async def search(
     try:
         meta = await fetch_metadata(settings, normalized)
     except MetadataError as e:
-        return {
-            "mode": "code",
-            "code": normalized,
-            "metadata": None,
-            "error": str(e),
-            "cached": False,
-            "library": lib,
-            "suck": suck,
-        }
+        meta = None
+        if (
+            e.status == 404
+            and (getattr(settings, "javdb_base", "") or "").strip()
+            and not fc2_number(normalized)
+        ):
+            try:
+                meta = await fetch_javdb_metadata(settings, normalized)
+            except MetadataError:
+                meta = None
+        if meta is None:
+            return {
+                "mode": "code",
+                "code": normalized,
+                "metadata": None,
+                "error": str(e),
+                "cached": False,
+                "library": lib,
+                "suck": suck,
+            }
     await db.put_metadata(cache_key, meta)
     return {
         "mode": "code",

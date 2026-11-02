@@ -100,7 +100,9 @@ def parse_javbus(html: str, base: str, code: str) -> dict:
     page_title = (h3.get_text(strip=True) if h3 else "") or (
         soup.title.get_text(strip=True) if soup.title else ""
     )
-    if not page_title or "Age Verification" in page_title or "所在地區年齡檢測" in page_title:
+    if detect_blocker("", html) or "Age Verification" in page_title or "所在地區年齡檢測" in page_title:
+        raise MetadataError(_VERIFY_MESSAGE, 503)
+    if not page_title:
         raise MetadataError("未找到该番号")
 
     title = page_title
