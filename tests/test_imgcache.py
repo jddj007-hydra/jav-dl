@@ -154,6 +154,14 @@ def test_describe_http_error_timeout_without_message():
         describe_http_error(RuntimeError("Cannot send a request, as the client has been closed."))
         == "连接被断开"
     )
+    assert (
+        describe_http_error(
+            httpx.ConnectError(
+                "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)"
+            )
+        )
+        == "连接被断开"
+    )
 
 
 def test_client_timeout_caps_pool_wait():

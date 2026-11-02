@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import title_mentions_code
 from app.config import Settings
-from app.httputil import _client_closed, describe_http_error, pool, site_client
+from app.httputil import _client_closed, describe_http_error, direct_site, pool, site_client
 from app.ranking import detect_tags, is_pack
 from app.textutil import parse_size, strip_em
 from app.trackers import magnet_for
@@ -165,6 +165,13 @@ def _search_origins(settings: Settings) -> list[str]:
     return origins
 
 
+def magnet_sessions(settings: Settings):
+    """Direct first when a proxy is on: clm64.top SSL-EOFs through the proxy."""
+    if settings.proxy_enabled and settings.proxy_url:
+        yield "direct", direct_site(settings)
+    yield "proxy", site_client(settings)
+
+
 def _copy_items(items: list[dict]) -> list[dict]:
     copied: list[dict] = []
     for item in items:
@@ -290,6 +297,40 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2, sort: st
     return _copy_items(collected)
 
 
+async def _search_with_client(
+    client: httpx.AsyncClient,
+    word: str,
+    query: str,
+    pages: int,
+    sort: str,
+    origins: list[str],
+    home: str,
+) -> tuple[list[dict], Exception | None]:
+    last_err: Exception | None = None
+    if home:
+        try:
+            await client.get(home + "/")
+        except httpx.HTTPError:
+            pass
+        except RuntimeError as exc:
+            if not _client_closed(exc):
+                raise
+    for index, base in enumerate(origins):
+        items, err = await _collect_pages(client, base, word, query, pages, sort)
+        if items:
+            return items, None
+        last_err = err or last_err
+        if index == 0 and len(origins) > 1:
+            log.info("磁力猫主域没有结果，改用备用搜索域")
+    tried = {base.lower() for base in origins}
+    if home and home.lower() not in tried:
+        items, err = await _collect_pages(client, home, word, query, pages, sort)
+        if items:
+            return items, None
+        last_err = err or last_err
+    return [], last_err
+
+
 async def _search_live(
     settings: Settings,
     word: str,
@@ -299,32 +340,22 @@ async def _search_live(
     origins: list[str],
     home: str,
 ) -> list[dict]:
-    collected: list[dict] = []
     last_err: Exception | None = None
-    async with site_client(settings) as client:
-        if home:
-            try:
-                await client.get(home + "/")
-            except httpx.HTTPError:
-                pass
-            except RuntimeError as exc:
-                if not _client_closed(exc):
-                    raise
-        for index, base in enumerate(origins):
-            items, err = await _collect_pages(client, base, word, query, pages, sort)
+    for label, session in magnet_sessions(settings):
+        try:
+            async with session as client:
+                items, err = await _search_with_client(
+                    client, word, query, pages, sort, origins, home,
+                )
             if items:
+                if label == "direct":
+                    log.info("磁力猫走直连搜到了")
                 return items
             last_err = err or last_err
-            if index == 0 and len(origins) > 1:
-                log.info("磁力猫主域没有结果，改用备用搜索域")
-        tried = {base.lower() for base in origins}
-        if not collected and home and home.lower() not in tried:
-            items, err = await _collect_pages(client, home, word, query, pages, sort)
-            if items:
-                return items
-            last_err = err or last_err
+        except MagnetSearchError as exc:
+            last_err = exc
     if last_err:
         if isinstance(last_err, MagnetSearchError):
             raise last_err
         raise MagnetSearchError(f"磁力猫请求失败: {describe_http_error(last_err)}")
-    return collected
+    return []

@@ -20,7 +20,7 @@ import httpx
 
 from app.config import Settings
 from app.db import Database
-from app.httputil import site_client
+from app.httputil import describe_http_error
 from app.paging import PAGE_SIZE
 from app.ranking import is_pack
 from app.sources.tpdb import TpdbError, fetch_by_filename, fetch_detail as fetch_tpdb_detail
@@ -30,6 +30,7 @@ from app.sources.clm import (
     _origin,
     _search_origins,
     fetch_search_page,
+    magnet_sessions,
     parse_search_html,
     unwrap_search_html,
 )
@@ -161,27 +162,28 @@ async def fetch_magnet_page(
     if not origins:
         return [], None, "没有配置磁力猫搜索地址"
     last_error = "磁力猫没有结果"
-    async with site_client(settings) as client:
-        if home:
-            try:
-                await client.get(home + "/")
-            except httpx.HTTPError:
-                pass
-        for base in origins:
-            url = f"{base}/search?word={word}&sort=time"
-            if page > 1:
-                url += f"&p={page}"
-            try:
-                raw = await fetch_search_page(client, url)
-            except MagnetSearchError as exc:
-                last_error = str(exc)
-                continue
-            except httpx.HTTPError as exc:
-                last_error = f"磁力猫请求失败: {exc}"
-                continue
-            html, _redirect = unwrap_search_html(raw)
-            total = _tip_total(html, raw)
-            return parse_search_html(html, query), total, None
+    for _label, session in magnet_sessions(settings):
+        async with session as client:
+            if home:
+                try:
+                    await client.get(home + "/")
+                except httpx.HTTPError:
+                    pass
+            for base in origins:
+                url = f"{base}/search?word={word}&sort=time"
+                if page > 1:
+                    url += f"&p={page}"
+                try:
+                    raw = await fetch_search_page(client, url)
+                except MagnetSearchError as exc:
+                    last_error = str(exc)
+                    continue
+                except httpx.HTTPError as exc:
+                    last_error = f"磁力猫请求失败: {describe_http_error(exc)}"
+                    continue
+                html, _redirect = unwrap_search_html(raw)
+                total = _tip_total(html, raw)
+                return parse_search_html(html, query), total, None
     return [], None, last_error
 
 

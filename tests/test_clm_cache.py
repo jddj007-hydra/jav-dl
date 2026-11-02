@@ -209,6 +209,98 @@ def test_home_covers_a_dead_primary_and_errors_are_not_cached(monkeypatch):
     assert second > first
 
 
+def test_proxy_on_uses_direct_before_shared_pool(monkeypatch):
+    used: list[str] = []
+
+    class _Marked:
+        def __init__(self, name):
+            self.name = name
+
+        async def get(self, url, *args, **kwargs):
+            used.append(self.name + ":get")
+            return httpx.Response(200, text="ok")
+
+    class _Direct:
+        async def __aenter__(self):
+            used.append("direct")
+            return _Marked("direct")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Proxy:
+        async def __aenter__(self):
+            used.append("proxy")
+            raise AssertionError("direct already returned magnets")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fetch(client, url, hops=0):
+        used.append("fetch:" + getattr(client, "name", "?"))
+        return FIXTURE
+
+    monkeypatch.setattr("app.sources.clm.direct_site", lambda settings: _Direct())
+    monkeypatch.setattr("app.sources.clm.site_client", lambda settings: _Proxy())
+    monkeypatch.setattr("app.sources.clm.fetch_search_page", fetch)
+    settings = _settings(proxy_enabled=True, proxy_url="http://127.0.0.1:7890")
+
+    async def run():
+        return await search_magnets(settings, "SSIS-001", pages=1)
+
+    found = asyncio.run(run())
+    assert found
+    assert "direct" in used
+    assert "fetch:direct" in used
+    assert "proxy" not in used
+
+
+def test_proxy_on_falls_back_when_direct_ssl_fails(monkeypatch):
+    used: list[str] = []
+
+    class _Boom:
+        async def get(self, url, *args, **kwargs):
+            raise httpx.ConnectError(
+                "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)"
+            )
+
+    class _Direct:
+        async def __aenter__(self):
+            used.append("direct")
+            return _Boom()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Proxy:
+        async def __aenter__(self):
+            used.append("proxy")
+            return _Client()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def fetch(client, url, hops=0):
+        used.append("fetch")
+        if isinstance(client, _Boom):
+            raise httpx.ConnectError("ssl eof")
+        return FIXTURE
+
+    monkeypatch.setattr("app.sources.clm.direct_site", lambda settings: _Direct())
+    monkeypatch.setattr("app.sources.clm.site_client", lambda settings: _Proxy())
+    monkeypatch.setattr("app.sources.clm.fetch_search_page", fetch)
+    settings = _settings(proxy_enabled=True, proxy_url="http://127.0.0.1:7890")
+
+    async def run():
+        return await search_magnets(settings, "SSIS-001", pages=1)
+
+    found = asyncio.run(run())
+    assert found
+    assert used[0] == "direct"
+    assert "proxy" in used
+    assert "fetch" in used
+
+
 def test_closed_client_falls_through_to_home(monkeypatch):
     calls: list[str] = []
 

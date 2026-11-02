@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+from contextlib import asynccontextmanager
 
 import httpx
 
@@ -68,6 +69,15 @@ def _looks_like_deadline(text: str) -> bool:
     return "deadline exceeded" in low or "cancelled via cancel scope" in low
 
 
+def _looks_like_tls_eof(text: str) -> bool:
+    low = text.lower()
+    return (
+        "unexpected_eof" in low
+        or "eof occurred in violation of protocol" in low
+        or "connection reset" in low
+    )
+
+
 def _client_closed(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and "has been closed" in str(exc).lower()
 
@@ -86,7 +96,11 @@ def describe_http_error(exc: BaseException) -> str:
         seen.add(id(current))
         text = str(current).strip()
         if text:
-            return "连接超时" if _looks_like_deadline(text) else text
+            if _looks_like_deadline(text):
+                return "连接超时"
+            if _looks_like_tls_eof(text):
+                return "连接被断开"
+            return text
         current = current.__cause__ or current.__context__
     if isinstance(exc, httpx.TimeoutException):
         return "连接超时"
@@ -338,3 +352,13 @@ async def close_clients() -> None:
 
 def direct_client(settings: Settings) -> httpx.AsyncClient:
     return httpx.AsyncClient(**client_kwargs(settings, use_proxy=False))
+
+
+@asynccontextmanager
+async def direct_site(settings: Settings):
+    """Throwaway client that skips the HTTP proxy. 磁力猫 often SSL-EOFs through it."""
+    client = httpx.AsyncClient(**client_kwargs(settings, use_proxy=False))
+    try:
+        yield client
+    finally:
+        await client.aclose()
