@@ -723,7 +723,7 @@ def test_library_card_offers_delete_without_removing_rescrape():
     assert "libraryPlayButton(lastLibrary, detailCode)" in script
     assert "libraryPlayButton(item.library, item.id || \"\")" in script
     html = (root / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=79" in html
+    assert "app.js?v=80" in html
     assert "style.css?v=47" in html
     assert 'id="jav-pager"' in html
     assert 'id="western-pager"' in html

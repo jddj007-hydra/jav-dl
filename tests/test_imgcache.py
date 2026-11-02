@@ -41,9 +41,12 @@ def test_site_client_is_reused_and_left_open():
 
     async def run():
         async with site_client(settings) as first:
+            shared = pool.site(settings)
             async with site_client(settings) as second:
-                assert first is second
-            assert first.is_closed is False
+                assert pool.site(settings) is shared
+                assert first.is_closed is False
+                assert second.is_closed is False
+            assert shared.is_closed is False
         await close_clients()
 
     asyncio.run(run())
@@ -54,9 +57,13 @@ def test_site_client_rebuilds_when_proxy_changes():
 
     async def run():
         async with site_client(settings) as first:
+            original = pool.site(settings)
             updated = settings.model_copy(update={"proxy_enabled": True, "proxy_url": "http://127.0.0.1:7890"})
             async with site_client(updated) as second:
-                assert first is not second
+                rebuilt = pool.site(updated)
+                assert rebuilt is not original
+                assert first.is_closed is False
+                assert second.is_closed is False
         await close_clients()
 
     asyncio.run(run())
@@ -143,12 +150,49 @@ def test_describe_http_error_timeout_without_message():
         )
         == "连接超时"
     )
+    assert (
+        describe_http_error(RuntimeError("Cannot send a request, as the client has been closed."))
+        == "连接被断开"
+    )
 
 
 def test_client_timeout_caps_pool_wait():
     timeout = client_timeout(Settings(http_timeout=20))
     assert timeout.connect == 8.0
     assert timeout.pool == 5.0
+
+
+def test_dead_tunnel_retries_on_fresh_client_and_held_client_follows(monkeypatch):
+    calls = {"n": 0}
+
+    class Flaky(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("ssl eof")
+            return httpx.Response(200, request=request, content=b"ok")
+
+    real_kwargs = client_kwargs
+
+    def fake_kwargs(settings, *, use_proxy):
+        kwargs = real_kwargs(settings, use_proxy=use_proxy)
+        kwargs["transport"] = Flaky()
+        return kwargs
+
+    monkeypatch.setattr("app.httputil.client_kwargs", fake_kwargs)
+
+    async def run():
+        await close_clients()
+        settings = Settings(proxy_enabled=False, verify_tls=False, http_timeout=5)
+        async with site_client(settings) as client:
+            first = await client.get("https://clm64.top/")
+            second = await client.get("https://clm.cc/")
+            assert first.status_code == 200
+            assert second.status_code == 200
+        await close_clients()
+
+    asyncio.run(run())
+    assert calls["n"] >= 3
 
 
 def test_timeout_invalidates_shared_client(monkeypatch):

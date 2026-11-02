@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.codes import normalize_code
+from app.httputil import describe_http_error
 from app.ranking import sort_by_heat, sort_resources
 from app.sources.clm import MagnetSearchError, search_magnets
 from app.sources.tpdb import TpdbError, match_site
 from app.studios import site_names
 from app.western_magnets import collect_western_magnets
+
+log = logging.getLogger("app.resources")
 
 router = APIRouter()
 
@@ -39,9 +44,19 @@ async def resources(
                 found = None
             if found:
                 extras = site_names(found)
-        items, match, error = await collect_western_magnets(
-            settings, raw_site, raw_title, people, raw_date, extras, vr, raw_url,
-        )
+        try:
+            items, match, error = await collect_western_magnets(
+                settings, raw_site, raw_title, people, raw_date, extras, vr, raw_url,
+            )
+        except Exception as e:
+            log.warning("磁链搜索失败", exc_info=True)
+            return {
+                "site": raw_site,
+                "title": raw_title,
+                "items": [],
+                "matched": "none",
+                "error": f"磁力猫请求失败: {describe_http_error(e)}",
+            }
         return {
             "site": raw_site,
             "title": raw_title,
@@ -58,6 +73,13 @@ async def resources(
             items = await search_magnets(settings, normalized)
         except MagnetSearchError as e:
             return {"code": normalized, "items": [], "error": str(e)}
+        except Exception as e:
+            log.warning("磁链搜索失败", exc_info=True)
+            return {
+                "code": normalized,
+                "items": [],
+                "error": f"磁力猫请求失败: {describe_http_error(e)}",
+            }
         return {"code": normalized, "items": sort_resources(items, normalized), "error": None}
     query = (q or "").strip()
     if not query:
@@ -66,4 +88,11 @@ async def resources(
         items = await search_magnets(settings, query)
     except MagnetSearchError as e:
         return {"query": query, "items": [], "error": str(e)}
+    except Exception as e:
+        log.warning("磁链搜索失败", exc_info=True)
+        return {
+            "query": query,
+            "items": [],
+            "error": f"磁力猫请求失败: {describe_http_error(e)}",
+        }
     return {"query": query, "items": sort_by_heat(items), "error": None}

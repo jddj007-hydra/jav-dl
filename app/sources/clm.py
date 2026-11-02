@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 from app.codes import title_mentions_code
 from app.config import Settings
-from app.httputil import describe_http_error, site_client
+from app.httputil import _client_closed, describe_http_error, pool, site_client
 from app.ranking import detect_tags, is_pack
 from app.textutil import parse_size, strip_em
 from app.trackers import magnet_for
@@ -239,6 +239,11 @@ async def _collect_pages(
         except httpx.HTTPError as exc:
             last_err = exc
             break
+        except RuntimeError as exc:
+            if not _client_closed(exc):
+                raise
+            last_err = exc
+            break
         chunk = parse_search_html(html, code)
         if not chunk:
             break
@@ -266,20 +271,49 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2, sort: st
     home = _origin(settings.clm_home)
     if not origins and home:
         origins = [home]
+    try:
+        collected = await _search_live(settings, word, query, pages, sort, origins, home)
+    except MagnetSearchError:
+        raise
+    except Exception as exc:
+        log.warning("磁力猫客户端失效，换新连接再搜: %s", describe_http_error(exc))
+        pool.invalidate("site")
+        try:
+            collected = await _search_live(settings, word, query, pages, sort, origins, home)
+        except MagnetSearchError:
+            raise
+        except Exception as retry_exc:
+            raise MagnetSearchError(
+                f"磁力猫请求失败: {describe_http_error(retry_exc)}"
+            ) from retry_exc
+    _cache_put(key, collected, time.monotonic())
+    return _copy_items(collected)
+
+
+async def _search_live(
+    settings: Settings,
+    word: str,
+    query: str,
+    pages: int,
+    sort: str,
+    origins: list[str],
+    home: str,
+) -> list[dict]:
+    collected: list[dict] = []
+    last_err: Exception | None = None
     async with site_client(settings) as client:
         if home:
             try:
                 await client.get(home + "/")
             except httpx.HTTPError:
                 pass
-        collected: list[dict] = []
-        last_err: Exception | None = None
+            except RuntimeError as exc:
+                if not _client_closed(exc):
+                    raise
         for index, base in enumerate(origins):
             items, err = await _collect_pages(client, base, word, query, pages, sort)
             if items:
-                collected = items
-                last_err = None
-                break
+                return items
             last_err = err or last_err
             if index == 0 and len(origins) > 1:
                 log.info("磁力猫主域没有结果，改用备用搜索域")
@@ -287,13 +321,10 @@ async def search_magnets(settings: Settings, code: str, pages: int = 2, sort: st
         if not collected and home and home.lower() not in tried:
             items, err = await _collect_pages(client, home, word, query, pages, sort)
             if items:
-                collected = items
-                last_err = None
-            else:
-                last_err = err or last_err
-        if not collected and last_err:
-            if isinstance(last_err, MagnetSearchError):
-                raise last_err
-            raise MagnetSearchError(f"磁力猫请求失败: {describe_http_error(last_err)}")
-        _cache_put(key, collected, time.monotonic())
-        return _copy_items(collected)
+                return items
+            last_err = err or last_err
+    if last_err:
+        if isinstance(last_err, MagnetSearchError):
+            raise last_err
+        raise MagnetSearchError(f"磁力猫请求失败: {describe_http_error(last_err)}")
+    return collected

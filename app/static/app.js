@@ -457,6 +457,15 @@ async function api(path, opts = {}) {
   return data;
 }
 
+async function apiResources(qs) {
+  try {
+    return await api("/api/resources?" + qs);
+  } catch (err) {
+    if (!/internal server error/i.test(String(err && err.message || ""))) throw err;
+    return await api("/api/resources?" + qs);
+  }
+}
+
 let filePickResolve = null;
 
 function closeFilePicker(value) {
@@ -1310,7 +1319,7 @@ async function runCodeSearch(code, { fromList = false, skipMagnets = false } = {
   const jobs = [
     api("/api/search?q=" + encodeURIComponent(code) + "&format=" + encodeURIComponent(javFormat)),
   ];
-  if (!skipMagnets) jobs.push(api("/api/resources?code=" + encodeURIComponent(code)));
+  if (!skipMagnets) jobs.push(apiResources("code=" + encodeURIComponent(code)));
   const settled = await Promise.allSettled(jobs);
   if (view !== javView) return;
   detailFromLibrary = skipMagnets;
@@ -3129,7 +3138,7 @@ async function openWestern(id, kind, known = null, { skipMagnets = false } = {})
   const magnetPath = westernMagnetQuery(listed);
   const [detail, magnets] = await Promise.allSettled([
     api(`/api/western/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`),
-    !skipMagnets && magnetPath ? api("/api/resources?" + magnetPath) : Promise.resolve({ items: [] }),
+    !skipMagnets && magnetPath ? apiResources(magnetPath) : Promise.resolve({ items: [] }),
   ]);
   if (view !== westernView) return;
   detailFromLibrary = skipMagnets;
@@ -4021,7 +4030,7 @@ async function searchOtherVersions(btn) {
   const status = kind === "jav" ? $("search-status") : $("western-status");
   try {
     if (kind === "jav") {
-      const data = await api("/api/resources?code=" + encodeURIComponent(detailCode));
+      const data = await apiResources("code=" + encodeURIComponent(detailCode));
       const items = data.items || [];
       detailFromLibrary = false;
       renderResources(items);
@@ -4031,7 +4040,7 @@ async function searchOtherVersions(btn) {
     } else {
       const query = westernMagnetQuery(westernCurrent);
       if (!query) throw new Error("没有片名或片商，没法搜磁链");
-      const data = await api("/api/resources?" + query);
+      const data = await apiResources(query);
       const items = data.items || [];
       detailFromLibrary = false;
       renderWesternResources(items);

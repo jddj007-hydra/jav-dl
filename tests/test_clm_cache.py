@@ -209,6 +209,46 @@ def test_home_covers_a_dead_primary_and_errors_are_not_cached(monkeypatch):
     assert second > first
 
 
+def test_closed_client_falls_through_to_home(monkeypatch):
+    calls: list[str] = []
+
+    async def fetch(client, url, hops=0):
+        calls.append(url)
+        if "primary.test" in url:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
+        if "home.test" in url:
+            return FIXTURE
+        raise AssertionError(url)
+
+    _patch_fetch(monkeypatch, fetch)
+
+    async def run():
+        return await search_magnets(_settings(), "SSIS-001", pages=1)
+
+    found = asyncio.run(run())
+    assert found
+    assert any("home.test/search" in url for url in calls)
+
+
+def test_search_magnets_retries_after_unexpected_closed_client(monkeypatch):
+    calls = {"n": 0}
+
+    async def fetch(client, url, hops=0):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom closed")
+        return FIXTURE
+
+    _patch_fetch(monkeypatch, fetch)
+
+    async def run():
+        return await search_magnets(_settings(), "SSIS-001", pages=1)
+
+    found = asyncio.run(run())
+    assert found
+    assert calls["n"] >= 2
+
+
 def test_magnet_connect_error_message_is_readable(monkeypatch):
     async def fail(client, url, hops=0):
         raise httpx.ConnectError("")
